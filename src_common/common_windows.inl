@@ -5,7 +5,6 @@
 #include <shlobj.h>
 #include <iphlpapi.h>
 #include <shellapi.h>
-#include <tlhelp32.h>
 
 EnterApplicationNamespace
 
@@ -231,9 +230,6 @@ bool associate_handle_with_iocp(void* handle, IOCP_Callback* callback)
 ////////////////////////////////////////////////////////////////////////////////
 
 
-static String subsystem_files = "files"_s;
-
-
 bool check_if_file_exists(String path)
 {
     LPCWSTR path16 = make_windows_path(path);
@@ -251,23 +247,15 @@ bool check_if_directory_exists(String path)
 
 bool check_disk(String path, u64* out_available, u64* out_total)
 {
-    if (!check_if_directory_exists(path))
-    {
-        *out_available = 0;
-        *out_total     = 0;
-        return false;
-    }
+    *out_available = 0;
+    *out_total     = 0;
+    if (!check_if_directory_exists(path)) return false;
 
     LPCWSTR path16 = make_windows_path(path);
     ULARGE_INTEGER available = {};
     ULARGE_INTEGER total = {};
     BOOL success = GetDiskFreeSpaceExW(path16, &available, &total, NULL);
-    if (!success)
-    {
-        *out_available = 0;
-        *out_total     = 0;
-        return false;
-    }
+    if (!success) return false;
 
     *out_available = available.QuadPart;
     *out_total     = total    .QuadPart;
@@ -294,22 +282,8 @@ bool create_directory(String path)
     return true;
 }
 
-bool create_directory_recursive(String path)
-{
-    while (path)
-    {
-        if (check_if_directory_exists(path))
-            return true;
-        if (!create_directory_recursive(get_parent_directory_path(path)))
-            return false;
-        if (!create_directory(path))
-            return false;
-    }
-    return true;
-}
 
-
-static bool open_file_for_reading(String path, u64 offset, HANDLE* out_file, umm* out_remaining_file_length)
+static bool open_file_for_reading(String path, u64 offset, HANDLE* out_file, u64* out_remaining_file_length)
 {
     LPCWSTR path16 = make_windows_path(path);
     HANDLE file = CreateFileW(path16, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
@@ -349,16 +323,8 @@ static bool open_file_for_reading(String path, u64 offset, HANDLE* out_file, umm
         file_size.QuadPart -= offset;
     }
 
-    umm casted_file_size = (umm)file_size.QuadPart;
-    if (casted_file_size != file_size.QuadPart)
-    {
-        LogWarn(subsystem_files, "Failed to read file %, because the requested size doesn't fit in memory", path);
-        CloseHandle(file);
-        return false;
-    }
-
     *out_file = file;
-    *out_remaining_file_length = casted_file_size;
+    *out_remaining_file_length = file_size.QuadPart;
     return true;
 }
 
@@ -386,30 +352,30 @@ static bool read_file_into_preallocated_buffer(HANDLE file, u8* buffer, umm buff
     return true;
 }
 
-static bool read_file(String path, u64 offset, umm size, String* content, void* preallocated_destination, Region* memory)
+bool read_file(String* out_content,
+               String path, u64 offset,
+               umm min_size, umm max_size,
+               void* preallocated_destination, Region* memory)
 {
-    HANDLE file;
-    umm    length;
+    *out_content = {};
+    if (!max_size) return true;
+    assert(min_size <= max_size);
 
+    HANDLE file;
+    u64    length;
     if (!open_file_for_reading(path, offset, &file, &length))
-    {
-        *content = {};
         return false;
-    }
 
     Defer(CloseHandle(file));
 
-    if (size != UMM_MAX)
+    if (min_size > length)
     {
-        if (size > length)
-        {
-            LogWarn(subsystem_files, "Failed to read file %, because the requested size doesn't fit in memory", path);
-            *content = {};
-            return false;
-        }
-
-        length = size;
+        LogWarn(subsystem_files, "Failed to read file %, because the requested size doesn't fit in memory", path);
+        *out_content = {};
+        return false;
     }
+    if (length > max_size)
+        length = max_size;
 
     String string;
     string.length = length;
@@ -429,61 +395,19 @@ static bool read_file(String path, u64 offset, umm size, String* content, void* 
 
         if (!preallocated_destination && !memory)
             free(string.data);
-        *content = {};
         return false;
     }
 
-    *content = string;
+    *out_content = string;
     return true;
 }
 
-bool read_file(String path, u64 offset, umm size, void* destination)
-{
-    assert(size != UMM_MAX && destination != NULL);
-    String content_dont_care;
-    return read_file(path, offset, size, &content_dont_care, destination, NULL);
-}
-
-bool read_file(String path, u64 offset, umm size, String* content, Region* memory)
-{
-    return read_file(path, offset, size, content, NULL, memory);
-}
-
-bool read_entire_file(String path, String* content, Region* memory)
-{
-    return read_file(path, 0, UMM_MAX, content, NULL, memory);
-}
-
-bool read_file(String path, u64 offset, umm destination_size, void* destination, umm* bytes_read)
-{
-    HANDLE file;
-    umm    file_length_from_cursor;
-
-    if (!open_file_for_reading(path, offset, &file, &file_length_from_cursor))
-        return false;
-
-    Defer(CloseHandle(file));
-
-    umm amount_to_read = (destination_size < file_length_from_cursor) ? destination_size : file_length_from_cursor; // min
-
-    if (!read_file_into_preallocated_buffer(file, (u8*)destination, amount_to_read))
-    {
-        ReportLastWin32(subsystem_files, "While reading from file %", path);
-        return false;
-    }
-
-    *bytes_read = amount_to_read;
-    return true;
-}
-
-bool get_file_length(String path, umm* out_file_length)
+bool get_file_length(String path, u64* out_file_length)
 {
     HANDLE file;
     if (!open_file_for_reading(path, 0, &file, out_file_length))
         return false;
-
     CloseHandle(file);
-
     return true;
 }
 
@@ -506,12 +430,6 @@ static bool write_loop(HANDLE file, String content)
     }
 
     return true;
-}
-
-bool write_to_file(String path, u64 offset, umm size, void* content, bool must_exist)
-{
-    String string = { size, (u8*) content };
-    return write_to_file(path, offset, string, must_exist);
 }
 
 bool write_to_file(String path, u64 offset, String content, bool must_exist)
@@ -678,8 +596,9 @@ bool delete_directory_conditional(String path, bool delete_directory, Delete_Act
         String child = concatenate_path(temp, path, name);
         if (is_file)
         {
-            if (!DeleteFileW(make_windows_path(child)))
-                success = false;
+            if (action == DELETE_FILE_OR_DIRECTORY)
+                if (!DeleteFileW(make_windows_path(child)))
+                    success = false;
         }
         else
         {
@@ -697,70 +616,6 @@ bool delete_directory_conditional(String path, bool delete_directory, Delete_Act
     }
 
     return success;
-}
-
-bool delete_directory_with_contents(String path)
-{
-    return delete_directory_conditional(path, true, [](String, String, bool, void*) { return DELETE_FILE_OR_DIRECTORY; }, NULL);
-}
-
-
-bool delete_files_created_before_time(String path, File_Time threshold)
-{
-    String search = concatenate_path(temp, path, "*"_s);
-    LPCWSTR search16 = make_windows_path(search);
-
-    WIN32_FIND_DATAW find_data;
-    HANDLE find = FindFirstFileW(search16, &find_data);
-    if (find == INVALID_HANDLE_VALUE)
-        return {};
-
-    Defer(FindClose(find));
-
-    bool empty = true;
-    while (true)
-    {
-        if (find_data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
-        {
-            String name = make_utf8_path(find_data.cFileName);
-            if (name != "."_s && name != ".."_s)
-            {
-                String child = concatenate_path(temp, path, name);
-                bool child_empty = delete_files_created_before_time(child, threshold);
-                // if (child_empty)
-                //     if (!RemoveDirectoryW(make_windows_path(child)))
-                //         empty = false;
-                // if (!child_empty)
-                //     empty = false;
-                empty = false;
-            }
-        }
-        else
-        {
-            u64 time = (u64)(find_data.ftCreationTime.dwHighDateTime) << 32
-                     | (u64)(find_data.ftCreationTime.dwLowDateTime);
-
-            if (time > threshold)
-            {
-                empty = false;
-            }
-            else
-            {
-                String name = make_utf8_path(find_data.cFileName);
-                String child = concatenate_path(temp, path, name);
-                empty = false;
-
-                if (!DeleteFileW(make_windows_path(child)))
-                    empty = false;
-            }
-        }
-
-        bool has_next = FindNextFileW(find, &find_data);
-        if (!has_next)
-            break;
-    }
-
-    return empty;
 }
 
 
@@ -856,34 +711,23 @@ void close_memory_mapped_file(Memory_Mapped_String* file)
 ////////////////////////////////////////////////////////////////////////////////
 
 
-constexpr u32 BLOCK_SIZE = 512;
-
-static void flush(HANDLE file)
+void* Safe_Filesystem::open(bool* out_success, u64* out_size, String path, bool share_read, bool report_open_failures)
 {
-    u64 failures = 0;
+again:
+    if (out_success) *out_success = false;
+    if (out_size) *out_size = 0;
 
-    while (!FlushFileBuffers(file))
-        if (++failures == 100)
-            ReportLastWin32(subsystem_files, "FlushFileBuffers failed in flush()");
-}
-
-static void flush_and_close(HANDLE file)
-{
-    flush(file);
-    CloseHandle(file);
-}
-
-static bool create(String path, HANDLE* out_file, u64* out_size, bool share_read = true, bool report_open_failures = true)
-{
     LPCWSTR path16 = make_windows_path(path);
-    DWORD access = GENERIC_READ | GENERIC_WRITE;
-    DWORD share  = share_read ? FILE_SHARE_READ : 0;
-    HANDLE handle = CreateFileW(path16, access, share, NULL, OPEN_ALWAYS, 0, NULL);
+    DWORD disposition = (out_size ? OPEN_ALWAYS : CREATE_ALWAYS);
+    DWORD access      = GENERIC_READ | GENERIC_WRITE;
+    DWORD share       = share_read ? FILE_SHARE_READ : 0;
+    HANDLE handle = CreateFileW(path16, access, share, NULL, disposition, 0, NULL);
     if (handle == INVALID_HANDLE_VALUE)
     {
         if (report_open_failures)
-            ReportLastWin32(subsystem_files, "CreateFileW failed in create(), path = %", path);
-        return false;
+            ReportLastWin32(subsystem_files, "CreateFileW failed in Safe_Filesystem::open(), path = %", path);
+        if (out_success) return NULL;
+        goto again;
     }
 
     if (out_size)
@@ -892,37 +736,35 @@ static bool create(String path, HANDLE* out_file, u64* out_size, bool share_read
         if (!GetFileSizeEx(handle, &size))
         {
             if (report_open_failures)
-                ReportLastWin32(subsystem_files, "GetFileSizeEx failed in create(), path = %", path);
+                ReportLastWin32(subsystem_files, "GetFileSizeEx failed in Safe_Filesystem::open(), path = %", path);
             CloseHandle(handle);
-            return false;
+            if (out_success) return NULL;
+            goto again;
         }
 
         *out_size = size.QuadPart;
     }
 
-    if (out_file)
-        *out_file = handle;
-    else
-        flush_and_close(handle);
-
-    return true;
+    if (out_success) *out_success = true;
+    return handle;
 }
 
-static void seek(HANDLE file, u64 offset)
+void Safe_Filesystem::close(void* file)
+{
+    CloseHandle(file);
+}
+
+void Safe_Filesystem::flush(void* file)
 {
     u64 failures = 0;
-
-    LARGE_INTEGER offset_large_integer;
-    offset_large_integer.QuadPart = offset;
-    while (!SetFilePointerEx(file, offset_large_integer, NULL, FILE_BEGIN))
+    while (!FlushFileBuffers(file))
         if (++failures == 100)
-            ReportLastWin32(subsystem_files, "SetFilePointerEx failed in read()");
+            ReportLastWin32(subsystem_files, "FlushFileBuffers failed in Safe_Filesystem::flush()");
 }
 
-static void read(HANDLE file, umm size, void* data)
+void Safe_Filesystem::read(void* file, u64 size, void* data)
 {
     u64 failures = 0;
-
     TRACE_LINE("reading % % %", file, size, data);
     while (size)
     {
@@ -936,14 +778,14 @@ static void read(HANDLE file, umm size, void* data)
 
         if (!success)
             if (++failures == 100)
-                ReportLastWin32(subsystem_files, "ReadFile failed in read()");
+                ReportLastWin32(subsystem_files, "ReadFile failed in Safe_Filesystem::read()");
 
         size -= read;
         data = (byte*) data + read;
     }
 }
 
-static void write(HANDLE file, umm size, void const* data)
+void Safe_Filesystem::write(void* file, u64 size, void const* data)
 {
     u64 failures = 0;
     while (size)
@@ -958,530 +800,37 @@ static void write(HANDLE file, umm size, void const* data)
 
         if (!success)
             if (++failures == 100)
-                ReportLastWin32(subsystem_files, "WriteFile failed in write()");
+                ReportLastWin32(subsystem_files, "WriteFile failed in Safe_Filesystem::write()");
 
         size -= written;
         data = (byte const*) data + written;
     }
 }
 
-
-struct File
+void Safe_Filesystem::seek(void* file, u64 offset)
 {
-    Lock   lock;
-    HANDLE handle;
-    u64    size;
-    String journal_path;
-    String voucher_path;
-};
-
-struct Journal_Header
-{
-    u64    magic;
-    SHA256 hash;
-    u64    journal_size;
-    u64    file_size;
-};
-CompileTimeAssert(sizeof(Journal_Header) == 56);
-
-struct Journal_Content_Header
-{
-    u64 offset;
-    u64 end_offset;
-};
-CompileTimeAssert(sizeof(Journal_Content_Header) == 16);
-
-File* open_exclusive(String path, bool share_read, bool report_open_failures)
-{
-    HANDLE handle;
-    u64 size;
-    if (!create(path, &handle, &size, share_read, report_open_failures))
-        return NULL;
-
-    File* file = alloc<File>(NULL);
-    make_lock(&file->lock);
-    file->handle       = handle;
-    file->size         = size;
-    file->journal_path = concatenate(NULL, path, "-journal"_s);
-    file->voucher_path = concatenate(NULL, path, "-voucher"_s);
-
-    // @Reconsider - handle case of failure to check
-    if (check_if_file_exists(file->journal_path))
-    {
-        Journal_Header header;
-
-        u64 journal_size = 0;
-        HANDLE journal;
-        while (!create(file->journal_path, &journal, &journal_size))
-            ReportLastWin32(subsystem_files, "create() failed in open_exclusive() for journal %", file->journal_path);
-        Defer(CloseHandle(journal));
-
-        if (journal_size < sizeof(Journal_Header)) goto legacy_recover;
-        read(journal, sizeof(Journal_Header), &header);
-        if (header.magic != U64_MAX) goto legacy_recover;
-        if (header.journal_size != journal_size) goto bad_journal;
-
-        String original = allocate_uninitialized_string(NULL, journal_size - sizeof(Journal_Header));
-        Defer(free_heap_string(&original));
-        read(journal, original.length, original.data);
-
-        // validate hash and structure
-        SHA256_Context expected = {};
-        sha256_init(&expected);
-        sha256_data(&expected, &header.journal_size, sizeof(Journal_Header) - MemberOffset(Journal_Header, journal_size));
-        sha256_data(&expected, original.data, original.length);
-        sha256_done(&expected);
-        if (memcmp(&header.hash, &expected.result, sizeof(SHA256)) != 0)
-            goto bad_journal;
-
-        for (String cursor = original; cursor;)
-        {
-            if (cursor.length < sizeof(Journal_Content_Header)) goto bad_journal;
-            Journal_Content_Header* content_header = (Journal_Content_Header*) cursor.data;
-            consume(&cursor, sizeof(Journal_Content_Header));
-
-            u64 data_size = content_header->end_offset - content_header->offset;
-            if (cursor.length < data_size) goto bad_journal;
-            consume(&cursor, data_size);
-        }
-
-        // write again
-        for (String cursor = original; cursor;)
-        {
-            assert(cursor.length >= sizeof(Journal_Content_Header));
-            Journal_Content_Header* content_header = (Journal_Content_Header*) cursor.data;
-            consume(&cursor, sizeof(Journal_Content_Header));
-
-            u64 data_size = content_header->end_offset - content_header->offset;
-            assert(cursor.length >= data_size);
-            String content = take(&cursor, data_size);
-
-            seek(file->handle, content_header->offset);
-            write(file->handle, content.length, content.data);
-        }
-
-        umm failures = 0;
-        while (!SetEndOfFile(file->handle))
-            if (++failures == 100)
-                ReportLastWin32(subsystem_files, "SetEndOfFile() failed in open_exclusive()");
-
-        flush(file->handle);
-        file->size = header.file_size;
-    }
-
-    if (false)
-    {
-        // Legacy mode is never written again, but we need to be able to open
-        // files that were written at the moment we switched to the new version.
-        // With legacy files, there was an issue where a zero-sized journal would
-        // get written. This code treats that case as if there was no journal,
-        // and assumes the file is correct.
-
-legacy_recover:
-        // @Reconsider - handle case of failure to check
-        if (check_if_file_exists(file->voucher_path))
-        {
-            u64 journal_size = 0;
-            HANDLE journal;
-            while (!create(file->journal_path, &journal, &journal_size))
-                ReportLastWin32(subsystem_files, "create() failed in open_exclusive() for journal %", file->journal_path);
-            Defer(CloseHandle(journal));
-
-
-            if (journal_size > 0)
-            {
-                // read journal
-                struct
-                {
-                    u64 file_size;
-                    u64 offset;
-                    u64 end_offset;
-                } header;
-                read(journal, sizeof(header), &header);
-
-                String original = allocate_zero_string(NULL, header.end_offset - header.offset);
-                Defer(free(original.data));
-
-                read(journal, original.length, original.data);
-
-                // write again
-                seek(file->handle, header.offset);
-                write(file->handle, original.length, original.data);
-
-                seek(file->handle, header.file_size);
-
-                umm failures = 0;
-                while (!SetEndOfFile(file->handle))
-                    if (++failures == 100)
-                        ReportLastWin32(subsystem_files, "SetEndOfFile() failed in open_exclusive()");
-
-                flush(file->handle);
-                file->size = header.file_size;
-            }
-
-            // delete voucher
-            delete_file(file->voucher_path);  // @Reconsider - retry
-        }
-    }
-bad_journal:
-
-    delete_file(file->journal_path);  // @Reconsider - retry
-
-    return file;
-}
-
-void close(File* file)
-{
-    if (!file) return;
-    CloseHandle(file->handle);
-    free_lock(&file->lock);
-    free(file->journal_path.data);
-    free(file->voucher_path.data);
-    free(file);
-}
-
-u64 size(File* file)
-{
-    acquire(&file->lock);
-    Defer(release(&file->lock));
-
-    return file->size;
-}
-
-void resize(File* file, u64 new_size)
-{
-    acquire(&file->lock);
-    Defer(release(&file->lock));
-
-    file->size = new_size;
-    seek(file->handle, new_size);
-
     u64 failures = 0;
-    while (!SetEndOfFile(file->handle))
+    LARGE_INTEGER offset_large_integer;
+    offset_large_integer.QuadPart = offset;
+    while (!SetFilePointerEx(file, offset_large_integer, NULL, FILE_BEGIN))
         if (++failures == 100)
-            ReportLastWin32(subsystem_files, "SetEndOfFile() failed in resize()");
+            ReportLastWin32(subsystem_files, "SetFilePointerEx failed in Safe_Filesystem::seek()");
 }
 
-void read(File* file, u64 offset, umm size, void* data)
+void Safe_Filesystem::trim(void* file)
 {
-    acquire(&file->lock);
-    Defer(release(&file->lock));
-
-    if (offset >= file->size) return;
-    if (offset + size > file->size)
-        size = file->size - offset;
-
-    seek(file->handle, offset);
-    read(file->handle, size, data);
-}
-
-void write(File* file, u64 offset, umm size, void const* data, bool truncate_after_written_data)
-{
-    acquire(&file->lock);
-    Defer(release(&file->lock));
-
-    // read original
-    u64 copy_start = offset / BLOCK_SIZE * BLOCK_SIZE;
-    u64 copy_end = (offset + size + BLOCK_SIZE - 1) / BLOCK_SIZE * BLOCK_SIZE;
-    if (copy_start > file->size) copy_start = file->size;
-    if (copy_end   > file->size) copy_end   = file->size;
-    if (truncate_after_written_data)
-        copy_end = file->size;
-
-    u64 copy_size = copy_end - copy_start;
-    byte* copy = alloc<byte>(NULL, copy_size);
-    seek(file->handle, copy_start);
-    read(file->handle, copy_size, copy);
-
-    // write journal
-    struct
-    {
-        Journal_Header header;
-        Journal_Content_Header content_header;
-    } header_and_content_header;
-    CompileTimeAssert(sizeof(header_and_content_header) == 72);
-
-    header_and_content_header.header.magic        = U64_MAX;
-    header_and_content_header.header.journal_size = sizeof(header_and_content_header) + copy_size;
-    header_and_content_header.header.file_size    = file->size;
-
-    header_and_content_header.content_header.offset     = copy_start;
-    header_and_content_header.content_header.end_offset = copy_end;
-
-    SHA256_Context hash = {};
-    sha256_init(&hash);
-    sha256_data(&hash, &header_and_content_header.header.journal_size, sizeof(Journal_Header) - MemberOffset(Journal_Header, journal_size));
-    sha256_data(&hash, &header_and_content_header.content_header,      sizeof(Journal_Content_Header));
-    sha256_data(&hash, copy, copy_size);
-    sha256_done(&hash);
-    header_and_content_header.header.hash = hash.result;
-
-    umm failures = 0;
-    HANDLE journal;
-    while (!create(file->journal_path, &journal, NULL))
+    u64 failures = 0;
+    while (!SetEndOfFile(file))
         if (++failures == 100)
-            ReportLastWin32(subsystem_files, "create() failed in write() for journal %", file->journal_path);
+            ReportLastWin32(subsystem_files, "SetEndOfFile() failed in Safe_Filesystem::trim()");
+}
 
-    write(journal, sizeof(header_and_content_header), &header_and_content_header);
-    write(journal, copy_size, copy);
-    flush_and_close(journal);
-    free(copy);
-
-    // edit original
-    seek(file->handle, offset);
-    write(file->handle, size, (byte const*) data);
-
-    if (truncate_after_written_data)
-    {
-        u64 failures = 0;
-        while (!SetEndOfFile(file->handle))
-            if (++failures == 100)
-                ReportLastWin32(subsystem_files, "SetEndOfFile() failed in write()");
-        file->size = offset + size;
-    }
-
-    flush(file->handle);
-
-    if (offset + size > file->size)
-        file->size = offset + size;
-
-    // delete journal
-    failures = 0;
-    while (!delete_file(file->journal_path))
+void Safe_Filesystem::erase(String path)
+{
+    u64 failures = 0;
+    while (!delete_file(path))
         if (++failures == 100)
-            ReportLastWin32(subsystem_files, "delete_file() failed in write() for journal %", file->journal_path);
-}
-
-void write(File* file, Array<Data_To_Write> data)
-{
-    acquire(&file->lock);
-    Defer(release(&file->lock));
-
-
-    umm failures = 0;
-    HANDLE journal;
-    while (!create(file->journal_path, &journal, NULL))
-        if (++failures == 100)
-            ReportLastWin32(subsystem_files, "create() failed in write() for journal %", file->journal_path);
-
-
-    Journal_Header header;
-    header.magic        = U64_MAX;
-    header.journal_size = sizeof(Journal_Header);
-    header.file_size    = file->size;
-    For (data)
-    {
-        u64 copy_start = it->offset / BLOCK_SIZE * BLOCK_SIZE;
-        u64 copy_end = (it->offset + it->size + BLOCK_SIZE - 1) / BLOCK_SIZE * BLOCK_SIZE;
-        if (copy_start > file->size) copy_start = file->size;
-        if (copy_end   > file->size) copy_end   = file->size;
-        header.journal_size += sizeof(Journal_Content_Header) + (copy_end - copy_start);
-    }
-
-
-    SHA256_Context hash = {};
-    sha256_init(&hash);
-    sha256_data(&hash, &header.journal_size, sizeof(Journal_Header) - MemberOffset(Journal_Header, journal_size));
-
-    seek(journal, sizeof(Journal_Header));
-    For (data)
-    {
-        // read original
-        u64 copy_start = it->offset / BLOCK_SIZE * BLOCK_SIZE;
-        u64 copy_end = (it->offset + it->size + BLOCK_SIZE - 1) / BLOCK_SIZE * BLOCK_SIZE;
-        if (copy_start > file->size) copy_start = file->size;
-        if (copy_end   > file->size) copy_end   = file->size;
-
-        u64 copy_size = copy_end - copy_start;
-        byte* copy = alloc<byte>(NULL, copy_size);
-        seek(file->handle, copy_start);
-        read(file->handle, copy_size, copy);
-
-        // write journal
-        Journal_Content_Header content_header;
-        content_header.offset     = copy_start;
-        content_header.end_offset = copy_end;
-
-        sha256_data(&hash, &content_header, sizeof(content_header));
-        sha256_data(&hash, copy, copy_size);
-
-        write(journal, sizeof(content_header), &content_header);
-        write(journal, copy_size, copy);
-        free(copy);
-    }
-
-    // write header
-    sha256_done(&hash);
-    header.hash = hash.result;
-    seek(journal, 0);
-    write(journal, sizeof(header), &header);
-
-    flush_and_close(journal);
-
-    // edit original
-    For (data)
-    {
-        seek(file->handle, it->offset);
-        write(file->handle, it->size, (byte const*) it->data);
-
-        if (it->offset + it->size > file->size)
-            file->size = it->offset + it->size;
-    }
-
-    flush(file->handle);
-
-    // delete journal
-    failures = 0;
-    while (!delete_file(file->journal_path))
-        if (++failures == 100)
-            ReportLastWin32(subsystem_files, "delete_file() failed in write() for journal %", file->journal_path);
-}
-
-
-bool safe_read_file(String path, String* content, Region* memory)
-{
-    File* file = open_exclusive(path);
-    if (!file)
-        return false;
-
-    *content = read(file, 0, size(file), memory);
-    close(file);
-    return true;
-}
-
-void safe_write_file(String path, String content)
-{
-    File* file;
-    while (!(file = open_exclusive(path)))
-        continue;
-
-    write(file, 0, content.length, content.data, /* truncate_after_written_data */ true);
-    close(file);
-}
-
-
-
-////////////////////////////////////////////////////////////////////////////////
-// Log files
-////////////////////////////////////////////////////////////////////////////////
-
-
-
-struct Log_File
-{
-    Lock   lock;
-    HANDLE handle;
-
-    String    base_path;
-    File_Time next_day;
-
-    umm days_to_keep;
-
-    QPC flush_qpc;
-};
-
-static void flush_under_lock(Log_File* file)
-{
-    if (!file->handle) return;
-    FlushFileBuffers(file->handle);
-    file->flush_qpc = current_qpc();
-}
-
-static void check_time(Log_File* file)
-{
-    File_Time now = current_filetime();
-    if (now < file->next_day)
-        return;
-
-    constexpr File_Time DAY = 864000000000ull;
-    File_Time current_day = now / DAY * DAY;
-    file->next_day = current_day + DAY;
-
-    SYSTEMTIME system_time;
-    {
-        FILETIME file_time;
-        file_time.dwLowDateTime  = (u32) now;
-        file_time.dwHighDateTime = (u32)(now >> 32);
-        FileTimeToSystemTime(&file_time, &system_time);
-    }
-
-    u32 year  = system_time.wYear;
-    u32 month = system_time.wMonth;
-    u32 day   = system_time.wDay;
-    String path = Format(temp, "%-%~%~%.txt", file->base_path, u64_format(year % 100, 2), u64_format(month, 2), u64_format(day, 2));
-
-    // delete older files
-    String directory = get_parent_directory_path(path);
-    For (list_files(directory, "txt"_s))
-    {
-        if (!prefix_equals(*it, get_file_name(file->base_path))) continue;
-        String path = concatenate_path(temp, directory, *it);
-
-        File_Time write_time;
-        if (!get_file_time(path, NULL, &write_time)) continue;
-        if (write_time > current_day - file->days_to_keep * DAY) continue;
-        delete_file(path);
-    }
-
-    flush_under_lock(file);
-    if (file->handle)
-        CloseHandle(file->handle);
-    create(path, &file->handle, NULL);
-
-    if (file->handle)
-    {
-        SetFilePointer(file->handle, 0, NULL, FILE_END);
-    }
-}
-
-Log_File* open_log_file(String path, umm days_to_keep)
-{
-    Log_File* file = alloc<Log_File>(NULL);
-    make_lock(&file->lock);
-    file->base_path = allocate_string_on_heap(path);
-    file->days_to_keep = days_to_keep;
-    file->flush_qpc = current_qpc();
-
-    check_time(file);
-    return file;
-}
-
-void close(Log_File* file)
-{
-    if (!file) return;
-    flush_log(file);
-    if (file->handle)
-        CloseHandle(file->handle);
-    free(file->base_path.data);
-    free_lock(&file->lock);
-    free(file);
-}
-
-void append(Log_File* file, String data, bool flush)
-{
-    if (!file) return;
-    if (!file->handle) return;
-
-    acquire(&file->lock);
-    Defer(release(&file->lock));
-
-    check_time(file);
-    if (!file->handle) return;
-
-    DWORD written;
-    WriteFile(file->handle, data.data, data.length, &written, NULL);
-
-    if (flush || seconds_from_qpc(current_qpc() - file->flush_qpc) > 5)
-        flush_under_lock(file);
-}
-
-void flush_log(Log_File* file)
-{
-    if (!file) return;
-    if (!file->handle) return;
-    acquire(&file->lock);
-    Defer(release(&file->lock));
-    flush_under_lock(file);
+            ReportLastWin32(subsystem_files, "delete_file() failed in Safe_Filesystem::erase() for %", path);
 }
 
 
@@ -1794,15 +1143,6 @@ File_Time current_filetime()
     return result;
 }
 
-s32 get_current_timezone_bias()
-{
-    TIME_ZONE_INFORMATION info = {};
-    DWORD id = GetTimeZoneInformation(&info);
-    if (id == TIME_ZONE_ID_INVALID)
-        return 0;
-    return info.Bias * 60;
-}
-
 s64 get_utc_offset()
 {
     SYSTEMTIME utc;
@@ -1934,13 +1274,6 @@ void free_pipe(Pipe* pipe)
     ZeroStruct(pipe);
 }
 
-u32 available(Pipe* pipe)
-{
-    DWORD available = 0;
-    PeekNamedPipe(pipe->handle, NULL, 0, NULL, &available, NULL);
-    return available;
-}
-
 bool seek(Pipe* pipe, u32 size)
 {
     static u8 buffer[1024];
@@ -1954,14 +1287,6 @@ bool seek(Pipe* pipe, u32 size)
     }
 
     return true;
-}
-
-bool peek(Pipe* pipe, void* data, u32 size)
-{
-    DWORD read;
-    if (!PeekNamedPipe(pipe->handle, data, size, &read, NULL, NULL))
-        return false;
-    return read == size;
 }
 
 bool read(Pipe* pipe, void* data, u32 size)
@@ -1985,6 +1310,22 @@ bool read(Pipe* pipe, void* data, u32 size)
     return true;
 }
 
+static u32 available(Pipe* pipe)
+{
+    DWORD available = 0;
+    PeekNamedPipe(pipe->handle, NULL, 0, NULL, &available, NULL);
+    return available;
+}
+
+bool try_read(Pipe* pipe, void* data, u32 size, bool* out_error)
+{
+    if (out_error) *out_error = false;
+    if (available(pipe) < size) return false;
+    bool ok = read(pipe, data, size);
+    if (!ok && out_error) *out_error = true;
+    return ok;
+}
+
 bool write(Pipe* pipe, void* data, u32 size)
 {
     while (size)
@@ -2006,98 +1347,17 @@ bool write(Pipe* pipe, void* data, u32 size)
     return true;
 }
 
-bool write(Pipe* pipe, String data)
-{
-    return write(pipe, data.data, data.length);
-}
-
-
-umm wait_available(Pipe* pipes, umm count)
-{
-    Scope_Region_Cursor temp_cursor(temp);
-    assert(count <= MAXIMUM_WAIT_OBJECTS);
-
-    HANDLE* events = alloc<HANDLE>(temp, count);
-    OVERLAPPED* overlapped = alloc<OVERLAPPED>(temp, count);
-
-    Defer
-    ({
-        for (umm i = 0; i < count; i++)
-        {
-            if (!events[i]) break;
-
-            CancelIo(pipes[i].handle);
-            // @Reconsider :SupportXP
-            // CancelIoEx(pipes[i].handle, &overlapped[i]);
-
-            DWORD transferred;
-            GetOverlappedResult(pipes[i].handle, &overlapped[i], &transferred, true);
-
-            CloseHandle(events[i]);
-        }
-    });
-
-    for (umm i = 0; i < count; i++)
-    {
-        HANDLE event = CreateEventW(NULL, false, false, NULL);
-        if (!event)
-        {
-            // :Report
-            assert(false);
-            return UMM_MAX;
-        }
-
-        overlapped[i].hEvent = event;
-        BOOL status = ReadFile(pipes[i].handle, NULL, 0, NULL, &overlapped[i]);
-        if (status)
-        {
-            CloseHandle(event);
-            return i;
-        }
-
-        if (GetLastError() == ERROR_PIPE_LISTENING)
-        {
-            overlapped[i] = {};
-            overlapped[i].hEvent = event;
-            BOOL status = ConnectNamedPipe(pipes[i].handle, &overlapped[i]);
-            if (status || GetLastError() == ERROR_PIPE_CONNECTED)
-            {
-                // @Reconsider
-                CloseHandle(event);
-                return i;
-            }
-        }
-
-        if (GetLastError() != ERROR_IO_PENDING)
-        {
-            ReportLastWin32(subsystem_pipe, "ReadFile() failed in wait_available()");
-            CloseHandle(event);
-            return UMM_MAX;
-        }
-
-        events[i] = event;
-    }
-
-    DWORD status = WaitForMultipleObjects(count, events, false, INFINITE);
-    if (status < WAIT_OBJECT_0 || status >= WAIT_OBJECT_0 + count)
-    {
-        // :Report
-        assert(false);
-    }
-
-    return status - WAIT_OBJECT_0;
-}
-
-String read_available(Pipe* pipe, Region* memory)
-{
-    umm length = available(pipe);
-    String data = allocate_zero_string(memory, length);
-    read(pipe, data.data, data.length);
-    return data;
-}
 
 Array<String> read_lines(Pipe* pipe, Region* memory)
 {
+    auto peek = [](Pipe* pipe, void* data, u32 size) -> bool
+    {
+        DWORD read;
+        if (!PeekNamedPipe(pipe->handle, data, size, &read, NULL, NULL))
+            return false;
+        return read == size;
+    };
+
     u32 amount = available(pipe);
     if (!amount)
         return {};
@@ -2119,48 +1379,6 @@ Array<String> read_lines(Pipe* pipe, Region* memory)
 
     seek(pipe, data.data - base);
     return lines;
-}
-
-
-
-void make_event(Event* event)
-{
-    event->handle = CreateEventW(NULL, FALSE, FALSE, NULL);
-    assert(event->handle);
-}
-
-void free_event(Event* event)
-{
-    CloseHandle(event->handle);
-}
-
-void signal(Event* event)
-{
-    BOOL success = SetEvent(event->handle);
-    assert(success);
-}
-
-void wait(Event* event)
-{
-    DWORD result = WaitForSingleObject(event->handle, INFINITE);
-    assert(result == WAIT_OBJECT_0);
-}
-
-bool wait(Event* event, double timeout_seconds)
-{
-    double milliseconds = timeout_seconds * 1000.0;
-
-    DWORD dw_milliseconds;
-    if (milliseconds <= 0.0)
-        dw_milliseconds = 0;
-    else if (milliseconds < S32_MAX)
-        dw_milliseconds = (DWORD)(milliseconds + 0.5);
-    else
-        dw_milliseconds = INFINITE;
-
-    DWORD result = WaitForSingleObject(event->handle, dw_milliseconds);
-    assert(result == WAIT_OBJECT_0 || result == WAIT_TIMEOUT);
-    return result == WAIT_OBJECT_0;
 }
 
 
@@ -2374,6 +1592,48 @@ bool wait(Condition_Variable* variable, Lock* lock, double timeout_seconds)
 
 
 
+void make_event(Event* event)
+{
+    event->handle = CreateEventW(NULL, FALSE, FALSE, NULL);
+    assert(event->handle);
+}
+
+void free_event(Event* event)
+{
+    CloseHandle(event->handle);
+}
+
+void signal(Event* event)
+{
+    BOOL success = SetEvent(event->handle);
+    assert(success);
+}
+
+void wait(Event* event)
+{
+    DWORD result = WaitForSingleObject(event->handle, INFINITE);
+    assert(result == WAIT_OBJECT_0);
+}
+
+bool wait(Event* event, double timeout_seconds)
+{
+    double milliseconds = timeout_seconds * 1000.0;
+
+    DWORD dw_milliseconds;
+    if (milliseconds <= 0.0)
+        dw_milliseconds = 0;
+    else if (milliseconds < S32_MAX)
+        dw_milliseconds = (DWORD)(milliseconds + 0.5);
+    else
+        dw_milliseconds = INFINITE;
+
+    DWORD result = WaitForSingleObject(event->handle, dw_milliseconds);
+    assert(result == WAIT_OBJECT_0 || result == WAIT_TIMEOUT);
+    return result == WAIT_OBJECT_0;
+}
+
+
+
 static void set_thread_name(const char* name)
 {
     //
@@ -2531,15 +1791,15 @@ void prevent_sleep_mode()
 
 void get_cpu_and_memory_usage(double* out_cpu_usage, u64* out_physical_use, u64* out_physical_max)
 {
-    static File_Time last_query_time;
+    static QPC last_query_time;
     static MEMORYSTATUSEX last_mem_info;
     static u64 last_idle;
     static u64 last_kernel;
     static u64 last_user;
     static double last_cpu_use;
 
-    File_Time now = current_filetime();
-    if (now - last_query_time > filetime_from_seconds(1))
+    QPC now = current_qpc();
+    if (now - last_query_time > qpc_from_seconds(1))
     {
         last_query_time = now;
 
@@ -2695,11 +1955,11 @@ u32 current_process_id()
     return GetCurrentProcessId();
 }
 
-void exit_process()
+void terminate_current_process(u32 exit_code)
 {
-    ExitProcess(0);
+    TerminateProcess(GetCurrentProcess(), exit_code);
+    Unreachable;
 }
-
 
 static WCHAR* get_module_directory()
 {
@@ -2726,16 +1986,6 @@ String get_executable_path()
     String path = make_utf8_path(path16);
     LocalFree(path16);
     return path;
-}
-
-String get_executable_name()
-{
-    return get_file_name(get_executable_path());
-}
-
-String get_executable_directory()
-{
-    return get_parent_directory_path(get_executable_path());
 }
 
 
@@ -2825,7 +2075,8 @@ bool run_process(Process* process)
 
     STARTUPINFOW startup_info = {};
     startup_info.cb         = sizeof(STARTUPINFOW);
-    startup_info.dwFlags    = STARTF_USESTDHANDLES;
+    startup_info.dwFlags    = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
+    startup_info.wShowWindow = process->start_minimized ? SW_MINIMIZE : SW_RESTORE;
 
     auto set_pipe = [&](String path, HANDLE* out_pipe, bool output) -> bool
     {
@@ -2876,6 +2127,8 @@ bool run_process(Process* process)
         creation_flags |= CREATE_NO_WINDOW;
     if (process->new_console_window)
         creation_flags |= CREATE_NEW_CONSOLE;
+    else if (process->detached)
+        creation_flags |= DETACHED_PROCESS;
 
     bool ok = CreateProcessW(NULL, command_line16, NULL, NULL, inherit_handles,
                              creation_flags, NULL, directory,
@@ -3014,47 +2267,6 @@ bool terminate_and_wait_for_process(u32 id)
 }
 
 
-void terminate_current_process(u32 exit_code)
-{
-    while (true)
-    {
-        TerminateProcess(GetCurrentProcess(), exit_code);
-        assert(false);
-    }
-}
-
-void terminate_and_wait_for_all_processes_with_executable_name(String executable_name)
-{
-    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-    if (!snapshot) return;
-
-    Defer(CloseHandle(snapshot));
-
-    PROCESSENTRY32W entry = {};
-    entry.dwSize = sizeof(entry);
-    if (Process32FirstW(snapshot, &entry)) do
-    {
-        if (entry.dwSize > offsetof(PROCESSENTRY32W, szExeFile) &&
-            entry.th32ProcessID != GetCurrentProcessId())
-        {
-            String name = convert_utf16_to_utf8(wrap_string16((u16*) entry.szExeFile), temp);
-            if (name == executable_name)
-                terminate_and_wait_for_process(entry.th32ProcessID);
-        }
-
-        entry = {};
-        entry.dwSize = sizeof(entry);
-    }
-    while(Process32NextW(snapshot, &entry));
-}
-
-
-
-String command_line()
-{
-    LPWSTR command_line = GetCommandLineW();
-    return convert_utf16_to_utf8(wrap_string16((u16*) command_line), temp);
-}
 
 Array<String> command_line_arguments()
 {
@@ -3077,29 +2289,6 @@ Array<String> command_line_arguments()
         }
     }
     return cached;
-}
-
-
-bool get_command_line_bool(String name)
-{
-    String prefix = concatenate("-"_s, name);
-    For (command_line_arguments())
-        if (*it == prefix)
-            return true;
-    return false;
-}
-
-String get_command_line_string(String name)
-{
-    String prefix = concatenate("-"_s, name, ":"_s);
-    For (command_line_arguments())
-    {
-        String arg = *it;
-        if (!prefix_equals(arg, prefix)) continue;
-        consume(&arg, prefix.length);
-        return arg;
-    }
-    return {};
 }
 
 
@@ -3135,18 +2324,6 @@ bool run_process_through_shell(String exe, String arguments, void** out_handle, 
     else if (info.hProcess)
         CloseHandle(info.hProcess);
     return true;
-}
-
-void terminate_process_without_waiting_by_handle(void* handle)
-{
-    TerminateProcess(handle, 1);
-    CloseHandle(handle);
-}
-
-bool is_process_running_by_handle(void* handle)
-{
-    if (!handle) return false;
-    return WaitForSingleObject((HANDLE) handle, 0) != WAIT_OBJECT_0;
 }
 
 

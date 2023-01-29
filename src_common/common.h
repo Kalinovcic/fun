@@ -65,7 +65,7 @@
 #include <cpuid.h>
 #include <wmmintrin.h>
   #endif
-extern "C" long syscall(long, ...);
+extern "C" long syscall(long, ...) __THROW;
 #endif
 
 #ifndef LEAKCHECK
@@ -98,9 +98,15 @@ EnterApplicationNamespace
 #define ZeroStruct(address) memset(address, 0, sizeof(*(address)));
 #define ZeroStaticArray(array) memset(array, 0, sizeof(array));
 
+#if defined(COMPILER_GCC) || defined(COMPILER_CLANG)
+#define Unreachable    { assert(false && "unreachable code"); __builtin_unreachable(); }
+#define NotImplemented { assert(false && "not implemented");  __builtin_unreachable(); }
+#define IllegalDefaultCase default: { assert(false && "illegal default case - unreachable code"); __builtin_unreachable(); break; }
+#else
 #define Unreachable assert(false && "unreachable code");
 #define NotImplemented assert(false && "not implemented");
 #define IllegalDefaultCase default: { assert(false && "illegal default case - unreachable code"); break; }
+#endif
 
 #define MemberSize(Type, member) sizeof(((Type*) NULL)->member)
 #define MemberOffset(Type, member) ((umm) &((Type*) NULL)->member)
@@ -668,9 +674,9 @@ inline void decrement                    (Atomic16* atomic) {        __sync_fetc
 inline u16  decrement_and_return_previous(Atomic16* atomic) { return __sync_fetch_and_sub(&atomic->v, 1); }
 inline u16  decrement_and_return_new     (Atomic16* atomic) { return __sync_sub_and_fetch(&atomic->v, 1); }
 
-inline void add                    (Atomic16* atomic, u16 value) {        __sync_fetch_and_sub(&atomic->v, value); }
-inline u16  add_and_return_previous(Atomic16* atomic, u16 value) { return __sync_fetch_and_sub(&atomic->v, value); }
-inline u16  add_and_return_new     (Atomic16* atomic, u16 value) { return __sync_sub_and_fetch(&atomic->v, value); }
+inline void add                    (Atomic16* atomic, u16 value) {        __sync_fetch_and_add(&atomic->v, value); }
+inline u16  add_and_return_previous(Atomic16* atomic, u16 value) { return __sync_fetch_and_add(&atomic->v, value); }
+inline u16  add_and_return_new     (Atomic16* atomic, u16 value) { return __sync_add_and_fetch(&atomic->v, value); }
 
 // Atomic32
 inline u32 load(Atomic32* atomic)
@@ -717,9 +723,9 @@ inline void decrement                    (Atomic32* atomic) {        __sync_fetc
 inline u32  decrement_and_return_previous(Atomic32* atomic) { return __sync_fetch_and_sub(&atomic->v, 1); }
 inline u32  decrement_and_return_new     (Atomic32* atomic) { return __sync_sub_and_fetch(&atomic->v, 1); }
 
-inline void add                    (Atomic32* atomic, u32 value) {        __sync_fetch_and_sub(&atomic->v, value); }
-inline u32  add_and_return_previous(Atomic32* atomic, u32 value) { return __sync_fetch_and_sub(&atomic->v, value); }
-inline u32  add_and_return_new     (Atomic32* atomic, u32 value) { return __sync_sub_and_fetch(&atomic->v, value); }
+inline void add                    (Atomic32* atomic, u32 value) {        __sync_fetch_and_add(&atomic->v, value); }
+inline u32  add_and_return_previous(Atomic32* atomic, u32 value) { return __sync_fetch_and_add(&atomic->v, value); }
+inline u32  add_and_return_new     (Atomic32* atomic, u32 value) { return __sync_add_and_fetch(&atomic->v, value); }
 
 
 // Atomic64
@@ -769,9 +775,9 @@ inline void decrement                    (Atomic64* atomic) {        __sync_fetc
 inline u64  decrement_and_return_previous(Atomic64* atomic) { return __sync_fetch_and_sub(&atomic->v, 1); }
 inline u64  decrement_and_return_new     (Atomic64* atomic) { return __sync_sub_and_fetch(&atomic->v, 1); }
 
-inline void add                    (Atomic64* atomic, u64 value) {        __sync_fetch_and_sub(&atomic->v, value); }
-inline u64  add_and_return_previous(Atomic64* atomic, u64 value) { return __sync_fetch_and_sub(&atomic->v, value); }
-inline u64  add_and_return_new     (Atomic64* atomic, u64 value) { return __sync_sub_and_fetch(&atomic->v, value); }
+inline void add                    (Atomic64* atomic, u64 value) {        __sync_fetch_and_add(&atomic->v, value); }
+inline u64  add_and_return_previous(Atomic64* atomic, u64 value) { return __sync_fetch_and_add(&atomic->v, value); }
+inline u64  add_and_return_new     (Atomic64* atomic, u64 value) { return __sync_add_and_fetch(&atomic->v, value); }
 
 #endif
 
@@ -3474,13 +3480,27 @@ void report_last_win32_error(String subsystem, String while_doing_what);
 
 #elif defined(OS_LINUX)
 
-void report_errno(String subsystem, int error_code, String while_doing_what);
-void report_last_errno(String subsystem, String while_doing_what);
+bool report_errno(String subsystem, int error_code, String while_doing_what); // returns false
+bool report_last_errno(String subsystem, String while_doing_what);            // returns false
 
 #define ReportErrno(subsystem, error_code, string, ...) \
     report_errno(subsystem, error_code, Format(temp, string, ##__VA_ARGS__))
 #define ReportLastErrno(subsystem, string, ...) \
     report_last_errno(subsystem, Format(temp, string, ##__VA_ARGS__))
+
+#define CheckFatalErrno(subsystem, error_code, string, ...)                 \
+    while (error_code)                                                      \
+    {                                                                       \
+        ReportErrno((subsystem), (error_code), (string), ##__VA_ARGS__);    \
+        assert(false && "fatal error");                                     \
+    }
+
+#define CheckFatalLastErrno(subsystem, string, ...)                         \
+    while (errno)                                                           \
+    {                                                                       \
+        ReportLastErrno((subsystem), (string), ##__VA_ARGS__);              \
+        assert(false && "fatal error");                                     \
+    }
 
 #endif
 
@@ -3488,8 +3508,8 @@ void report_last_errno(String subsystem, String while_doing_what);
 #define TRACING 0
 
 #if TRACING
-#define TRACE_FUNCTION       Debug("Enter % (thread %)", __FUNCTION__, current_thread_id()); Defer(Debug("Exit % (thread %)", __FUNCTION__, current_thread_id()));
-#define TRACE_LINE(msg, ...) Debug("Line % (thread %): " msg, __LINE__, current_thread_id(), ##__VA_ARGS__);
+#define TRACE_FUNCTION       Debug("Enter % (thread %)", __FUNCTION__, current_thread_name); Defer(Debug("Exit % (thread %)", __FUNCTION__, current_thread_name));
+#define TRACE_LINE(msg, ...) Debug("Line % (thread %): " msg, __LINE__, current_thread_name, ##__VA_ARGS__);
 #else
 #define TRACE_FUNCTION
 #define TRACE_LINE(msg, ...)
@@ -3590,11 +3610,27 @@ bool check_disk(String path, u64* out_available, u64* out_total);
 bool create_directory(String path);
 bool create_directory_recursive(String path);
 
+// General file reading function.
+// Succeeds if it reads anywhere between min_size and max_size bytes from the file.
+// If 'preallocated_destination' is not NULL, the buffer is expected to be able to
+// hold up to 'max_size' bytes. Otherwise, the exact amount of memory required
+// is allocated from 'memory', along with a trailing null byte (not included in length).
+//
+// On Linux: If 'min_size' and 'max_size' are set to UMM_MAX, the function will not query
+// the file size, and instead read until EOF and append to concatenator.
+// In this case, 'offset' and 'preallocated_destination' are unused.
+bool read_file(String* out_content,
+               String path, u64 offset,
+               umm min_size, umm max_size,
+               void* preallocated_destination, Region* memory);
+
 bool read_file(String path, u64 offset, umm size, void* destination);
 bool read_file(String path, u64 offset, umm size, String* content, Region* memory);
 bool read_file(String path, u64 offset, umm destination_size, void* destination, umm* bytes_read);
 bool read_entire_file(String path, String* content, Region* memory);
-bool get_file_length(String path, umm* out_file_length);
+String read_entire_file(String path, Region* memory = temp);
+
+bool get_file_length(String path, u64* out_file_length);
 
 bool write_to_file(String path, u64 offset, umm size, void* content, bool must_exist);  // Modifies, the rest of the file stays the same. Setting offset to U64_MAX appends content to the end of the file.
 bool write_to_file(String path, u64 offset, String content, bool must_exist);           // Modifies, the rest of the file stays the same. Setting offset to U64_MAX appends content to the end of the file.
@@ -3618,9 +3654,6 @@ enum Delete_Action
 
 bool delete_directory_conditional(String path, bool delete_directory, Delete_Action(*should_delete)(String parent, String name, bool is_file, void* userdata), void* userdata);
 
-// Returns true if the directory is empty after deleting contents.
-bool delete_files_created_before_time(String path, File_Time threshold);
-
 bool get_file_time(String path, File_Time* out_creation, File_Time* out_write);
 
 bool copy_file(String from, String to, bool error_on_overwrite, bool write_through = false);
@@ -3632,6 +3665,7 @@ int close_file_descriptor(int fd);
 #endif
 
 
+#if defined(OS_WINDOWS)
 struct Memory_Mapped_String: String
 {
     void* os_handle;
@@ -3639,12 +3673,28 @@ struct Memory_Mapped_String: String
 
 Memory_Mapped_String open_memory_mapped_file_readonly(String path);
 void close_memory_mapped_file(Memory_Mapped_String* file);
+#endif
 
 
 
 ////////////////////////////////////////////////////////////////////////////////
 // Transactional file utilities
 ////////////////////////////////////////////////////////////////////////////////
+
+
+struct Safe_Filesystem
+{
+    void* open (bool* out_success, u64* out_size, String path, bool share_read = true, bool report_open_failures = true);
+    void  close(void* handle);
+    void  flush(void* handle);
+    void  read (void* handle, u64 size, void* destination);
+    void  write(void* handle, u64 size, void const* source);
+    void  seek (void* handle, u64 offset);
+    void  trim (void* handle);
+    void  erase(String path);
+};
+
+extern Safe_Filesystem the_sfs;
 
 
 struct File;  // operations on File are transactional
@@ -3695,6 +3745,8 @@ void flush_log(Log_File* file);
 ////////////////////////////////////////////////////////////////////////////////
 
 
+#if defined(OS_WINDOWS)
+
 enum
 {
     FILE_DIALOG_OPEN           = 0x0000,
@@ -3724,6 +3776,8 @@ String        open_file_dialog       (String extensions = {}, String initial_dir
 Array<String> open_files_dialog      (String extensions = {}, String initial_directory = {}, void* parent_window = NULL);
 String        open_directory_dialog  (String initial_directory = {}, void* parent_window = NULL);
 Array<String> open_directories_dialog(String initial_directory = {}, void* parent_window = NULL);
+
+#endif
 
 
 
@@ -3763,10 +3817,6 @@ inline int compare_filetimes(File_Time a, File_Time b)
     return (int)(delta > 0) - (int)(delta < 0);
 }
 
-// utc time = local time + bias
-s32 get_current_timezone_bias();  // in seconds
-
-// @Reconsider - we have two basically identical functions, implemented differently
 // utc = local - offset
 s64 get_utc_offset();  // in minutes
 
@@ -3793,7 +3843,7 @@ struct Date
 void       utc_date_from_filetime(File_Time filetime, Date* out_date);
 bool maybe_filetime_from_utc_date(Date* date, File_Time* out_filetime);
 File_Time  filetime_from_utc_date(Date* date);
-File_Time filetime_from_utc_date_parts(u32 year, u32 month, u32 day, u32 hour = 0, u32 minute = 0, u32 second = 0, u32 nanosecond = 0);
+File_Time  filetime_from_utc_date_parts(u32 year, u32 month, u32 day, u32 hour = 0, u32 minute = 0, u32 second = 0, u32 nanosecond = 0);
 
 // Format string:
 //
@@ -3959,40 +4009,41 @@ String profile_statistics(Profile_Statistics* prof, String title,
 struct Pipe
 {
     String name;
+#if defined(OS_WINDOWS)
     void* handle;
+#else
+    int fd;
+#endif
 };
 
 void make_local_pipe(Pipe* in, Pipe* out, u32 buffer_size);
-void make_pipe_in       (Pipe* pipe, u32 buffer_size, String suffix = {});
-void make_pipe_out      (Pipe* pipe, u32 buffer_size, String suffix = {});
+void make_pipe_in   (Pipe* pipe, u32 buffer_size, String suffix = {});
+void make_pipe_out  (Pipe* pipe, u32 buffer_size, String suffix = {});
+
+#if defined(OS_WINDOWS)
 void make_pipe_duplex   (Pipe* pipe, u32 buffer_size, String suffix = {});
 bool connect_pipe_duplex(Pipe* pipe, String name);
-void free_pipe          (Pipe* pipe);
+#elif defined(OS_LINUX)
+void set_pipe(Pipe* pipe, int fd, String name);
+#endif
 
-u32  available(Pipe* pipe);
-bool seek (Pipe* pipe, u32 size);
-bool peek (Pipe* pipe, void* data, u32 size);
-bool read (Pipe* pipe, void* data, u32 size);
-bool write(Pipe* pipe, void* data, u32 size);
-bool write(Pipe* pipe, String data);
+void free_pipe(Pipe* pipe);
 
-umm wait_available(Pipe* pipes, umm count);  // count <= 64
+bool seek    (Pipe* pipe, u32 size);
+bool read    (Pipe* pipe, void* data, u32 size);
+bool try_read(Pipe* pipe, void* data, u32 size, bool* out_error);  // reads all or nothing
+bool write   (Pipe* pipe, void* data, u32 size);
 
-String read_available(Pipe* pipe, Region* memory);
-Array<String> read_lines(Pipe* pipe, Region* memory);
-
-
-
-struct Event
+inline bool write(Pipe* pipe, String data)
 {
-    void* handle;
-};
+    return write(pipe, data.data, data.length);
+}
 
-void make_event(Event* event);
-void free_event(Event* event);
-void signal(Event* event);
-void wait(Event* event);
-bool wait(Event* event, double timeout_seconds);
+#if defined(OS_WINDOWS)
+// @Deprecated - Seriously, do not use this function. It is slow, and abuses a lot of the
+// pipe features which are only available on Windows, and will never be ported anywhere else.
+Array<String> read_lines(Pipe* pipe, Region* memory);
+#endif
 
 
 
@@ -4030,6 +4081,8 @@ void release_read(Lock* lock);
     acquire_read(lock_ptr);       \
     Defer(release_read(lock_ptr))
 
+
+#if defined(OS_WINDOWS)
 struct IPC_Lock
 {
     void* handle;
@@ -4039,11 +4092,19 @@ void make_ipc_lock(IPC_Lock* ipc_lock, String name);
 void free_ipc_lock(IPC_Lock* ipc_lock);
 void ipc_acquire(IPC_Lock* ipc_lock);
 void ipc_release(IPC_Lock* ipc_lock);
+#endif
 
 
 struct Semaphore
 {
+#if defined(OS_WINDOWS)
     void* handle;
+#elif defined(OS_LINUX)
+    // @Incomplete - probably not the same on 32-bit
+    umm data[32 / sizeof(umm)];
+#else
+#error "Unsupported"
+#endif
 };
 
 void make_semaphore(Semaphore* sem, u32 initial = 0);
@@ -4079,6 +4140,27 @@ void wait(Condition_Variable* variable, Lock* lock);
 bool wait(Condition_Variable* variable, Lock* lock, double timeout_seconds);
 
 #endif
+
+
+
+struct Event
+{
+#if defined(OS_WINDOWS)
+    void* handle;
+#elif defined(OS_LINUX)
+    Lock               lock;
+    Condition_Variable cv;
+    bool               signal;
+#else
+#error "Unsupported"
+#endif
+};
+
+void make_event(Event* event);
+void free_event(Event* event);
+void signal(Event* event);
+void wait(Event* event);
+bool wait(Event* event, double timeout_seconds);
 
 
 
@@ -4124,9 +4206,12 @@ umm get_hardware_parallelism();
 ////////////////////////////////////////////////////////////////////////////////
 
 
-void prevent_sleep_mode();
-
 void get_cpu_and_memory_usage(double* out_cpu_usage, u64* out_physical_use, u64* out_physical_max);
+
+#if defined(OS_WINDOWS)
+void prevent_sleep_mode();
+#endif
+
 void get_network_performance(double* out_read_bps, double* out_write_bps);
 
 struct System_Information
@@ -4141,8 +4226,7 @@ void get_system_information(System_Information* info);
 
 
 u32 current_process_id();
-void exit_process();
-
+void terminate_current_process(u32 exit_code = 0);
 String get_executable_path();
 String get_executable_name();
 String get_executable_directory();
@@ -4162,50 +4246,54 @@ struct Process
     bool prohibit_console_window;
     bool new_console_window;
     bool do_not_escape_arguments;
+    bool start_minimized;
+
+#if defined(OS_WINDOWS)
     void* handle;
+#else
+    u32 pid;
+#endif
 };
 
 bool run_process(Process* process);
 bool get_process_id(Process* process, u32* out_process_id);
+void terminate_process_without_waiting(Process* process);
 
+#if defined(OS_WINDOWS)
 constexpr double WAIT_FOR_PROCESS_FOREVER = -1234567890;
 u32 wait_for_process(Process* process, double seconds = WAIT_FOR_PROCESS_FOREVER);
 bool wait_for_process(Process* process, double seconds, u32* out_exit_code);
 u32 terminate_and_wait_for_process(Process* process);
-void terminate_process_without_waiting(Process* process);
 bool is_process_running(Process* process);
+#endif
 
 bool wait_for_process_by_id(u32 id);
 bool terminate_and_wait_for_process(u32 id);
 
-void terminate_current_process(u32 exit_code = 0);
-
-void terminate_and_wait_for_all_processes_with_executable_name(String executable);
-
-String command_line();
 Array<String> command_line_arguments();
+bool   get_command_line_bool   (String name);   // -name
+s64    get_command_line_integer(String name);   // -name:return
+String get_command_line_string (String name);   // -name:return
 
-bool get_command_line_bool(String name);       // -name
-String get_command_line_string(String name);   // -name:return
 
+String get_os_name();
 
 void error_box(String message, String title = {}, void* window = NULL);
 
+#if defined(OS_WINDOWS)
 bool run_process_through_shell(String exe, String arguments, void** out_handle = NULL, bool minimized = false);
-void terminate_process_without_waiting_by_handle(void* handle);
-bool is_process_running_by_handle(void* handle);
 
 bool add_app_to_run_at_startup(String name);
 bool prevent_app_running_at_startup(String name);
 bool set_should_app_run_at_startup(String name, bool should_run);
 
-String get_os_name();
 bool is_wow64();
 
 String get_windows_directory();
 void restart_windows_explorer();
 
 void copy_text_to_clipboard(String text);
+#endif
 
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -4275,7 +4363,7 @@ void shuffle_array(Random* rng, Array<T> a)
 {
     for (umm i = 0; i < a.count - 1; i++)
     {
-        umm j = next_u64(rng, i + 1, a.count);
+        umm j = next_u64(rng, i, a.count);
         T temp = a[j];
         a[j] = a[i];
         a[i] = temp;

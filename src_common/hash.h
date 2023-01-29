@@ -129,7 +129,7 @@ V* get_address(Table* table, const K* key)
     typedef typename Table::Item Item;
 
     if (!table->count)
-        return false;
+        return NULL;
 
     umm bucket_index = (umm)(Hash::hash(key) & (table->capacity - 1));
     Item** it = &table->buckets[bucket_index];

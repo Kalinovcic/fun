@@ -1902,6 +1902,7 @@ void skip(Input_Buffer* source, umm size)
             break;
         }
         size -= remaining;
+        source->cursor = source->end;
         refill(source);
     }
 }
@@ -3258,6 +3259,557 @@ void radix_sort(void* address, umm count, umm size, umm key_offset, umm key_size
 
 
 
+
+////////////////////////////////////////////////////////////////////////////////
+// File system
+////////////////////////////////////////////////////////////////////////////////
+
+
+static String subsystem_files = "files"_s;
+
+
+bool create_directory_recursive(String path)
+{
+    while (path)
+    {
+        if (check_if_directory_exists(path))
+            return true;
+        if (!create_directory_recursive(get_parent_directory_path(path)))
+            return false;
+        if (!create_directory(path))
+            return false;
+    }
+    return true;
+}
+
+
+bool read_file(String path, u64 offset, umm size, void* destination)
+{
+    assert(size != UMM_MAX && destination != NULL);
+    String unused;
+    return read_file(&unused,               // output string
+                     path, offset,          // path and offset
+                     size, size,            // min and max size
+                     destination, NULL);    // buffer and allocator
+}
+
+bool read_file(String path, u64 offset, umm size, String* content, Region* memory)
+{
+    return read_file(content,               // output string
+                     path, offset,          // path and offset
+                     size, size,            // min and max size
+                     NULL, memory);         // buffer and allocator
+}
+
+bool read_file(String path, u64 offset, umm destination_size, void* destination, umm* bytes_read)
+{
+    if (!destination_size) return true;
+    assert(destination);
+    String content = {};
+    bool ok = read_file(&content,              // output string
+                        path, offset,          // path and offset
+                        0, destination_size,   // min and max size
+                        destination, NULL);    // buffer and allocator
+    *bytes_read = content.length;
+    return ok;
+}
+
+bool read_entire_file(String path, String* content, Region* memory)
+{
+    return read_file(content,               // output string
+                     path, 0,               // path and offset
+                     0, UMM_MAX,            // min and max size
+                     NULL, memory);         // buffer and allocator
+}
+
+String read_entire_file(String path, Region* memory)
+{
+    String content = {};
+    if (read_entire_file(path, &content, memory))
+        return content;
+    return {};
+}
+
+bool write_to_file(String path, u64 offset, umm size, void* content, bool must_exist)
+{
+    String string = { size, (u8*) content };
+    return write_to_file(path, offset, string, must_exist);
+}
+
+bool delete_directory_with_contents(String path)
+{
+    return delete_directory_conditional(path, true, [](String, String, bool, void*) { return DELETE_FILE_OR_DIRECTORY; }, NULL);
+}
+
+
+
+////////////////////////////////////////////////////////////////////////////////
+// Transactional file utilities
+////////////////////////////////////////////////////////////////////////////////
+
+
+Safe_Filesystem the_sfs;
+
+struct File
+{
+    Lock   lock;
+    void*  handle;
+    u64    size;
+    String journal_path;
+    String voucher_path;
+};
+
+struct Journal_Header
+{
+    u64    magic;
+    SHA256 hash;
+    u64    journal_size;
+    u64    file_size;
+};
+CompileTimeAssert(sizeof(Journal_Header) == 56);
+
+struct Journal_Content_Header
+{
+    u64 offset;
+    u64 end_offset;
+};
+CompileTimeAssert(sizeof(Journal_Content_Header) == 16);
+
+static constexpr u32 BLOCK_SIZE = 512;
+
+File* open_exclusive(String path, bool share_read, bool report_open_failures)
+{
+    u64 size;
+    bool success = false;
+    void* handle = the_sfs.open(&success, &size, path, share_read, report_open_failures);
+    if (!success) return NULL;
+
+    File* file = alloc<File>(NULL);
+    make_lock(&file->lock);
+    file->handle       = handle;
+    file->size         = size;
+    file->journal_path = concatenate(NULL, path, "-journal"_s);
+    file->voucher_path = concatenate(NULL, path, "-voucher"_s);
+
+    // @Reconsider - handle case of failure to check
+    if (check_if_file_exists(file->journal_path))
+    {
+        Journal_Header header;
+
+        u64 journal_size = 0;
+        void* journal = the_sfs.open(NULL, &journal_size, file->journal_path);
+        Defer(the_sfs.close(journal));
+
+        if (journal_size < sizeof(Journal_Header)) goto legacy_recover;
+        the_sfs.read(journal, sizeof(Journal_Header), &header);
+        if (header.magic != U64_MAX) goto legacy_recover;
+        if (header.journal_size != journal_size) goto bad_journal;
+
+        String original = allocate_uninitialized_string(NULL, journal_size - sizeof(Journal_Header));
+        Defer(free_heap_string(&original));
+        the_sfs.read(journal, original.length, original.data);
+
+        // validate hash and structure
+        SHA256_Context expected = {};
+        sha256_init(&expected);
+        sha256_data(&expected, &header.journal_size, sizeof(Journal_Header) - MemberOffset(Journal_Header, journal_size));
+        sha256_data(&expected, original.data, original.length);
+        sha256_done(&expected);
+        if (memcmp(&header.hash, &expected.result, sizeof(SHA256)) != 0)
+            goto bad_journal;
+
+        for (String cursor = original; cursor;)
+        {
+            if (cursor.length < sizeof(Journal_Content_Header)) goto bad_journal;
+            Journal_Content_Header* content_header = (Journal_Content_Header*) cursor.data;
+            consume(&cursor, sizeof(Journal_Content_Header));
+
+            u64 data_size = content_header->end_offset - content_header->offset;
+            if (cursor.length < data_size) goto bad_journal;
+            consume(&cursor, data_size);
+        }
+
+        // write again
+        for (String cursor = original; cursor;)
+        {
+            assert(cursor.length >= sizeof(Journal_Content_Header));
+            Journal_Content_Header* content_header = (Journal_Content_Header*) cursor.data;
+            consume(&cursor, sizeof(Journal_Content_Header));
+
+            u64 data_size = content_header->end_offset - content_header->offset;
+            assert(cursor.length >= data_size);
+            String content = take(&cursor, data_size);
+
+            the_sfs.seek(file->handle, content_header->offset);
+            the_sfs.write(file->handle, content.length, content.data);
+        }
+
+        the_sfs.trim(file->handle);
+        the_sfs.flush(file->handle);
+        file->size = header.file_size;
+        the_sfs.erase(file->journal_path);
+    }
+
+    if (false)
+    {
+        // Legacy mode is never written again, but we need to be able to open
+        // files that were written at the moment we switched to the new version.
+        // With legacy files, there was an issue where a zero-sized journal would
+        // get written. This code treats that case as if there was no journal,
+        // and assumes the file is correct.
+
+legacy_recover:
+        // @Reconsider - handle case of failure to check
+        if (check_if_file_exists(file->voucher_path))
+        {
+            u64 journal_size = 0;
+            void* journal = the_sfs.open(NULL, &journal_size, file->journal_path);
+            Defer(the_sfs.close(journal));
+
+
+            if (journal_size > 0)
+            {
+                // read journal
+                struct
+                {
+                    u64 file_size;
+                    u64 offset;
+                    u64 end_offset;
+                } header;
+                the_sfs.read(journal, sizeof(header), &header);
+
+                String original = allocate_zero_string(NULL, header.end_offset - header.offset);
+                Defer(free(original.data));
+
+                the_sfs.read(journal, original.length, original.data);
+
+                // write again
+                the_sfs.seek(file->handle, header.offset);
+                the_sfs.write(file->handle, original.length, original.data);
+                the_sfs.seek(file->handle, header.file_size);
+                the_sfs.trim(file->handle);
+                the_sfs.flush(file->handle);
+                file->size = header.file_size;
+            }
+
+            // delete voucher
+            the_sfs.erase(file->voucher_path);
+        }
+        the_sfs.erase(file->journal_path);
+    }
+bad_journal:
+
+    return file;
+}
+
+void close(File* file)
+{
+    if (!file) return;
+    the_sfs.close(file->handle);
+    free_lock(&file->lock);
+    free(file->journal_path.data);
+    free(file->voucher_path.data);
+    free(file);
+}
+
+u64 size(File* file)
+{
+    LockedScope(&file->lock);
+    return file->size;
+}
+
+void resize(File* file, u64 new_size)
+{
+    LockedScope(&file->lock);
+    file->size = new_size;
+    the_sfs.seek(file->handle, new_size);
+    the_sfs.trim(file->handle);
+}
+
+void read(File* file, u64 offset, umm size, void* data)
+{
+    LockedScope(&file->lock);
+    if (offset >= file->size) return;
+    if (offset + size > file->size)
+        size = file->size - offset;
+    the_sfs.seek(file->handle, offset);
+    the_sfs.read(file->handle, size, data);
+}
+
+void write(File* file, u64 offset, umm size, void const* data, bool truncate_after_written_data)
+{
+    LockedScope(&file->lock);
+
+    // read original
+    u64 copy_start = offset / BLOCK_SIZE * BLOCK_SIZE;
+    u64 copy_end = (offset + size + BLOCK_SIZE - 1) / BLOCK_SIZE * BLOCK_SIZE;
+    if (copy_start > file->size) copy_start = file->size;
+    if (copy_end   > file->size) copy_end   = file->size;
+    if (truncate_after_written_data)
+        copy_end = file->size;
+
+    u64 copy_size = copy_end - copy_start;
+    byte* copy = alloc<byte>(NULL, copy_size);
+    the_sfs.seek(file->handle, copy_start);
+    the_sfs.read(file->handle, copy_size, copy);
+
+    // write journal
+    struct
+    {
+        Journal_Header header;
+        Journal_Content_Header content_header;
+    } header_and_content_header;
+    CompileTimeAssert(sizeof(header_and_content_header) == 72);
+
+    header_and_content_header.header.magic        = U64_MAX;
+    header_and_content_header.header.journal_size = sizeof(header_and_content_header) + copy_size;
+    header_and_content_header.header.file_size    = file->size;
+
+    header_and_content_header.content_header.offset     = copy_start;
+    header_and_content_header.content_header.end_offset = copy_end;
+
+    SHA256_Context hash = {};
+    sha256_init(&hash);
+    sha256_data(&hash, &header_and_content_header.header.journal_size, sizeof(Journal_Header) - MemberOffset(Journal_Header, journal_size));
+    sha256_data(&hash, &header_and_content_header.content_header,      sizeof(Journal_Content_Header));
+    sha256_data(&hash, copy, copy_size);
+    sha256_done(&hash);
+    header_and_content_header.header.hash = hash.result;
+
+    void* journal = the_sfs.open(NULL, NULL, file->journal_path);
+    the_sfs.write(journal, sizeof(header_and_content_header), &header_and_content_header);
+    the_sfs.write(journal, copy_size, copy);
+    the_sfs.flush(journal);
+    the_sfs.close(journal);
+    free(copy);
+
+    // edit original
+    the_sfs.seek(file->handle, offset);
+    the_sfs.write(file->handle, size, (byte const*) data);
+
+    if (truncate_after_written_data)
+    {
+        the_sfs.trim(file->handle);
+        file->size = offset + size;
+    }
+
+    the_sfs.flush(file->handle);
+
+    if (offset + size > file->size)
+        file->size = offset + size;
+
+    // delete journal
+    the_sfs.erase(file->journal_path);
+}
+
+void write(File* file, Array<Data_To_Write> data)
+{
+    LockedScope(&file->lock);
+
+    void* journal = the_sfs.open(NULL, NULL, file->journal_path);
+
+    Journal_Header header;
+    header.magic        = U64_MAX;
+    header.journal_size = sizeof(Journal_Header);
+    header.file_size    = file->size;
+    For (data)
+    {
+        u64 copy_start = it->offset / BLOCK_SIZE * BLOCK_SIZE;
+        u64 copy_end = (it->offset + it->size + BLOCK_SIZE - 1) / BLOCK_SIZE * BLOCK_SIZE;
+        if (copy_start > file->size) copy_start = file->size;
+        if (copy_end   > file->size) copy_end   = file->size;
+        header.journal_size += sizeof(Journal_Content_Header) + (copy_end - copy_start);
+    }
+
+
+    SHA256_Context hash = {};
+    sha256_init(&hash);
+    sha256_data(&hash, &header.journal_size, sizeof(Journal_Header) - MemberOffset(Journal_Header, journal_size));
+
+    the_sfs.seek(journal, sizeof(Journal_Header));
+    For (data)
+    {
+        // read original
+        u64 copy_start = it->offset / BLOCK_SIZE * BLOCK_SIZE;
+        u64 copy_end = (it->offset + it->size + BLOCK_SIZE - 1) / BLOCK_SIZE * BLOCK_SIZE;
+        if (copy_start > file->size) copy_start = file->size;
+        if (copy_end   > file->size) copy_end   = file->size;
+
+        u64 copy_size = copy_end - copy_start;
+        byte* copy = alloc<byte>(NULL, copy_size);
+        the_sfs.seek(file->handle, copy_start);
+        the_sfs.read(file->handle, copy_size, copy);
+
+        // write journal
+        Journal_Content_Header content_header;
+        content_header.offset     = copy_start;
+        content_header.end_offset = copy_end;
+
+        sha256_data(&hash, &content_header, sizeof(content_header));
+        sha256_data(&hash, copy, copy_size);
+
+        the_sfs.write(journal, sizeof(content_header), &content_header);
+        the_sfs.write(journal, copy_size, copy);
+        free(copy);
+    }
+
+    // write header
+    sha256_done(&hash);
+    header.hash = hash.result;
+    the_sfs.seek(journal, 0);
+    the_sfs.write(journal, sizeof(header), &header);
+    the_sfs.flush(journal);
+    the_sfs.close(journal);
+
+    // edit original
+    For (data)
+    {
+        the_sfs.seek(file->handle, it->offset);
+        the_sfs.write(file->handle, it->size, (byte const*) it->data);
+
+        if (it->offset + it->size > file->size)
+            file->size = it->offset + it->size;
+    }
+
+    the_sfs.flush(file->handle);
+
+    // delete journal
+    the_sfs.erase(file->journal_path);
+}
+
+bool safe_read_file(String path, String* content, Region* memory)
+{
+    File* file = open_exclusive(path);
+    if (!file)
+        return false;
+
+    *content = read(file, 0, size(file), memory);
+    close(file);
+    return true;
+}
+
+void safe_write_file(String path, String content)
+{
+    File* file;
+    while (!(file = open_exclusive(path)))
+        continue;
+
+    write(file, 0, content.length, content.data, /* truncate_after_written_data */ true);
+    close(file);
+}
+
+
+
+////////////////////////////////////////////////////////////////////////////////
+// Log files
+////////////////////////////////////////////////////////////////////////////////
+
+
+
+struct Log_File
+{
+    Lock   lock;
+    void*  handle;
+
+    String    base_path;
+    File_Time next_day;
+
+    umm days_to_keep;
+
+    QPC flush_qpc;
+};
+
+static void flush_under_lock(Log_File* file)
+{
+    if (!file->handle) return;
+    the_sfs.flush(file->handle);
+    file->flush_qpc = current_qpc();
+}
+
+static void check_time(Log_File* file)
+{
+    File_Time now = current_filetime();
+    if (now < file->next_day)
+        return;
+
+    constexpr File_Time DAY = 864000000000ull;
+    File_Time current_day = now / DAY * DAY;
+    file->next_day = current_day + DAY;
+
+    String path = Format(temp, "%-%.txt", file->base_path, format_timestamp(temp, "YYMMDD"_s, now));
+
+    // delete older files
+    String directory = get_parent_directory_path(path);
+    For (list_files(directory, "txt"_s))
+    {
+        if (!prefix_equals(*it, get_file_name(file->base_path))) continue;
+        String path = concatenate_path(temp, directory, *it);
+
+        File_Time write_time;
+        if (!get_file_time(path, NULL, &write_time)) continue;
+        if (write_time > current_day - file->days_to_keep * DAY) continue;
+        delete_file(path);
+    }
+
+    flush_under_lock(file);
+    if (file->handle)
+        the_sfs.close(file->handle);
+
+    bool success;
+    u64 size;
+    file->handle = the_sfs.open(&success, &size, path);
+    if (success)
+        the_sfs.seek(file->handle, size);
+}
+
+Log_File* open_log_file(String path, umm days_to_keep)
+{
+    Log_File* file = alloc<Log_File>(NULL);
+    make_lock(&file->lock);
+    file->base_path = allocate_string_on_heap(path);
+    file->days_to_keep = days_to_keep;
+    file->flush_qpc = current_qpc();
+
+    check_time(file);
+    return file;
+}
+
+void close(Log_File* file)
+{
+    if (!file) return;
+    flush_log(file);
+    if (file->handle)
+        the_sfs.close(file->handle);
+    free(file->base_path.data);
+    free_lock(&file->lock);
+    free(file);
+}
+
+void append(Log_File* file, String data, bool flush)
+{
+    if (!file) return;
+    if (!file->handle) return;
+
+    LockedScope(&file->lock);
+
+    check_time(file);
+    if (!file->handle) return;
+
+    the_sfs.write(file->handle, data.length, data.data);
+    if (flush || seconds_from_qpc(current_qpc() - file->flush_qpc) > 5)
+        flush_under_lock(file);
+}
+
+void flush_log(Log_File* file)
+{
+    if (!file) return;
+    if (!file->handle) return;
+    LockedScope(&file->lock);
+    flush_under_lock(file);
+}
+
+
+
 ////////////////////////////////////////////////////////////////////////////////
 // Time
 ////////////////////////////////////////////////////////////////////////////////
@@ -3789,6 +4341,60 @@ String profile_statistics(Profile_Statistics* prof, String title, double scale, 
     Debug("%", result);
     return result;
 }
+
+
+
+////////////////////////////////////////////////////////////////////////////////
+// Process utilities
+////////////////////////////////////////////////////////////////////////////////
+
+
+String get_executable_name()
+{
+    return get_file_name(get_executable_path());
+}
+
+String get_executable_directory()
+{
+    return get_parent_directory_path(get_executable_path());
+}
+
+
+bool get_command_line_bool(String name)
+{
+    String prefix = concatenate("-"_s, name);
+    For (command_line_arguments())
+        if (*it == prefix)
+            return true;
+    return false;
+}
+
+s64 get_command_line_integer(String name)
+{
+    String prefix = concatenate("-"_s, name, ":"_s);
+    For (command_line_arguments())
+    {
+        String arg = *it;
+        if (!prefix_equals(arg, prefix)) continue;
+        consume(&arg, prefix.length);
+        return s64_from_string(arg);
+    }
+    return 0;
+}
+
+String get_command_line_string(String name)
+{
+    String prefix = concatenate("-"_s, name, ":"_s);
+    For (command_line_arguments())
+    {
+        String arg = *it;
+        if (!prefix_equals(arg, prefix)) continue;
+        consume(&arg, prefix.length);
+        return arg;
+    }
+    return {};
+}
+
 
 
 ////////////////////////////////////////////////////////////////////////////////
