@@ -1044,63 +1044,6 @@ inline Atomic_Stack_Iterator<T, M> end(Atomic_Stack_<T, M>& stack) { return { &s
 
 
 ////////////////////////////////////////////////////////////////////////////////
-// Atomic tree
-////////////////////////////////////////////////////////////////////////////////
-
-
-template <typename T, umm Indirection, umm BitsPerLayer = 10>
-struct Atomic_Tree
-{
-    using Next = Atomic_Tree<T, Indirection - 1, BitsPerLayer>;
-
-    union
-    {
-        Atomic_Pointer<Next> link[1 << BitsPerLayer];
-        T data[sizeof(link) / sizeof(T)];
-        CompileTimeAssert(ArrayCount(data) > 0);
-    };
-
-    inline T* at(umm index)
-    {
-        if constexpr (Indirection == 0)
-        {
-            assert(index < ArrayCount(data));
-            return &data[index];
-        }
-        else
-        {
-            umm slot = (index / ArrayCount(data)) >> (BitsPerLayer * (Indirection - 1));
-            assert(slot < ArrayCount(link));
-            index -= (slot << (BitsPerLayer * (Indirection - 1))) * ArrayCount(data);
-
-            Next* next = load(&link[slot]);
-            if (!next)
-            {
-                next = alloc<Atomic_Tree<T, Indirection - 1, BitsPerLayer>>(NULL);
-                if (Next* old = compare_exchange_and_return_previous(&link[slot], (Next*) NULL, next))
-                {
-                    free(next);
-                    next = old;
-                }
-            }
-            return next->at(index);
-        }
-    }
-
-    inline void clear()
-    {
-        if constexpr (Indirection > 0)
-            for (umm i = 0; i < ArrayCount(link); i++)
-                if (Next* next = exchange(&link[i], (Next*) NULL))
-                {
-                    next->clear();
-                    free(next);
-                }
-    }
-};
-
-
-////////////////////////////////////////////////////////////////////////////////
 // Memory allocation
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -1165,6 +1108,63 @@ inline T* alloc(Region* memory, umm count = 1)
 
 void* allocate_virtual_memory(umm size, bool high_address_range);  // May return NULL on failure!
 void release_virtual_memory(void* base, umm size);
+
+
+////////////////////////////////////////////////////////////////////////////////
+// Atomic tree
+////////////////////////////////////////////////////////////////////////////////
+
+
+template <typename T, umm Indirection, umm BitsPerLayer = 10>
+struct Atomic_Tree
+{
+    using Next = Atomic_Tree<T, Indirection - 1, BitsPerLayer>;
+
+    union
+    {
+        Atomic_Pointer<Next> link[1 << BitsPerLayer];
+        T data[sizeof(link) / sizeof(T)];
+        CompileTimeAssert(ArrayCount(data) > 0);
+    };
+
+    inline T* at(umm index)
+    {
+        if constexpr (Indirection == 0)
+        {
+            assert(index < ArrayCount(data));
+            return &data[index];
+        }
+        else
+        {
+            umm slot = (index / ArrayCount(data)) >> (BitsPerLayer * (Indirection - 1));
+            assert(slot < ArrayCount(link));
+            index -= (slot << (BitsPerLayer * (Indirection - 1))) * ArrayCount(data);
+
+            Next* next = load(&link[slot]);
+            if (!next)
+            {
+                next = alloc<Atomic_Tree<T, Indirection - 1, BitsPerLayer>>(NULL);
+                if (Next* old = compare_exchange_and_return_previous(&link[slot], (Next*) NULL, next))
+                {
+                    free(next);
+                    next = old;
+                }
+            }
+            return next->at(index);
+        }
+    }
+
+    inline void clear()
+    {
+        if constexpr (Indirection > 0)
+            for (umm i = 0; i < ArrayCount(link); i++)
+                if (Next* next = exchange(&link[i], (Next*) NULL))
+                {
+                    next->clear();
+                    free(next);
+                }
+    }
+};
 
 
 ////////////////////////////////////////////////////////////////////////////////
