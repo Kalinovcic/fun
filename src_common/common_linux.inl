@@ -913,8 +913,8 @@ void wait(Semaphore* sem)
 bool wait(Semaphore* sem, double timeout_seconds)
 {
     timespec time;
-    set_timespec_absolute_timeout(&time, CLOCK_MONOTONIC, timeout_seconds);
-    sem_clockwait((sem_t*) sem, CLOCK_MONOTONIC, &time);
+    set_timespec_absolute_timeout(&time, CLOCK_REALTIME, timeout_seconds);
+    sem_timedwait((sem_t*) sem, &time);
     if (errno == ETIMEDOUT) return false;
     CheckFatalLastErrno(subsystem_thread, "sem_timedwait() failed!");
     return true;
@@ -1278,6 +1278,10 @@ void terminate_process_without_waiting(Process* process)
     kill(process->pid, SIGKILL);
 }
 
+
+#if !defined(SYS_pidfd_open) && defined(__x86_64__) // just to be sure.
+#define SYS_pidfd_open 434
+#endif
 
 bool wait_for_process_by_id(u32 id)
 {
