@@ -1772,7 +1772,8 @@ inline u64 endian_swap64(u64 value)
 #endif
 
 
-#if defined(BIG_ENDIAN)
+// @Incomplete - BIG_ENDIAN is defined on Linux for weird reasons
+#if 0  // defined(BIG_ENDIAN)
 #define IS_LITTLE_ENDIAN 0
 #define IS_BIG_ENDIAN 1
 
