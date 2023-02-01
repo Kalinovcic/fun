@@ -1709,6 +1709,8 @@ String trim_front(String string);
 String trim_back(String string);
 String trim_null_back(String string);
 
+String collapse_whitespace(String string, Region* memory);
+
 u32 consume_u32(String* string, u32 base = 10);
 u64 consume_u64(String* string, u32 base = 10);
 s32 consume_s32(String* string, u32 base = 10);

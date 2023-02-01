@@ -895,6 +895,27 @@ String trim_null_back(String string)
 }
 
 
+String collapse_whitespace(String string, Region* memory)
+{
+    string = trim(string);
+    String_Concatenator cat = {};
+    bool last_white = false;
+    for (umm i = 0; i < string.length; i++)
+    {
+        u8 c = string.data[i];
+        bool white = IsSpaceByte(c);
+        if (white)
+        {
+            if (last_white) continue;
+            c = ' ';
+        }
+        last_white = white;
+        add(&cat, &c, 1);
+    }
+    return resolve_to_string_and_free(&cat, temp);
+}
+
+
 struct Integer_From_String
 {
     bool is_negative;
