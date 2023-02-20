@@ -3048,6 +3048,28 @@ void format_item(Output_Buffer* buffer, String_Format v)
 }
 
 
+umm format_item_length(Size_Format v)
+{
+    return f64_format_item_length(v.value, (s32) v.precision)
+         + (v.space ? 1 : 0)
+         + (v.unit == SIZE_UNIT_BYTE ? 1 : 2);
+}
+
+void format_item(Output_Buffer* buffer, Size_Format v)
+{
+    f64_format_item(buffer, v.value, (u32) v.precision);
+    if (v.space) write(buffer, " "_s);
+    switch (v.unit)
+    {
+    case SIZE_UNIT_BYTE:     write(buffer, "B"_s);  break;
+    case SIZE_UNIT_KILOBYTE: write(buffer, "kB"_s); break;
+    case SIZE_UNIT_MEGABYTE: write(buffer, "MB"_s); break;
+    case SIZE_UNIT_GIGABYTE: write(buffer, "GB"_s); break;
+    default:                 write(buffer, "?B"_s); break;
+    }
+}
+
+
 umm format_item_length(Plural_Format v)
 {
     if (!v.is_plural)

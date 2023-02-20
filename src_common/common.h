@@ -3254,6 +3254,37 @@ inline String_Format string_format(String value, umm desired_length)
 }
 
 
+enum Size_Unit
+{
+    SIZE_UNIT_AUTO,
+    SIZE_UNIT_BYTE,
+    SIZE_UNIT_KILOBYTE,
+    SIZE_UNIT_MEGABYTE,
+    SIZE_UNIT_GIGABYTE,
+};
+
+struct Size_Format
+{
+    f64 value;
+    Size_Unit unit;
+    umm precision;
+    bool space;
+};
+
+inline Size_Format size_format(u64 size, Size_Unit unit = SIZE_UNIT_AUTO, umm precision = 2, bool space = true)
+{
+    f64 value = size;
+    if (unit == SIZE_UNIT_AUTO)
+    {
+             if (size < 1024              ) unit = SIZE_UNIT_BYTE, precision = 0;
+        else if (size < 1024 * 1024       ) unit = SIZE_UNIT_KILOBYTE, value /= 1024.0;
+        else if (size < 1024 * 1024 * 1024) unit = SIZE_UNIT_MEGABYTE, value /= 1024.0 * 1024.0;
+        else                                unit = SIZE_UNIT_GIGABYTE, value /= 1024.0 * 1024.0 * 1024.0;
+    }
+    return { value, unit, precision, space };
+}
+
+
 struct Plural_Format
 {
     bool   is_plural;
@@ -3298,6 +3329,7 @@ FormatItemFunctionDeclarations(U64_Format)
 FormatItemFunctionDeclarations(S64_Format)
 FormatItemFunctionDeclarations(F64_Format)
 FormatItemFunctionDeclarations(String_Format)
+FormatItemFunctionDeclarations(Size_Format)
 FormatItemFunctionDeclarations(Plural_Format)
 
 #undef FormatItemFunctionDeclarations
