@@ -523,7 +523,7 @@ String replace_all_occurances(String string, String what, String with_what, Regi
     while (string)
     {
         umm remaining = string.length;
-        String copy = consume_until(&string, what);
+        String copy = consume_until_preserve_whitespace(&string, what);
         append(&result, memory, copy);
         if (copy.length < remaining)
             append(&result, memory, with_what);
@@ -537,7 +537,7 @@ String replace_all_occurances_or_return_input(String string, String what, String
     while (string)
     {
         umm remaining = string.length;
-        String copy = consume_until(&string, what);
+        String copy = consume_until_preserve_whitespace(&string, what);
         if (copy.length == string.length)
             return string;  // 'what' doesn't appear in source, so don't copy
 
