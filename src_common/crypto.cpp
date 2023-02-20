@@ -179,6 +179,106 @@ bool decode_base64(String string, String* out_decoded, Region* memory)
 }
 
 
+
+////////////////////////////////////////////////////////////////////////////////
+// MD5
+////////////////////////////////////////////////////////////////////////////////
+
+
+MD5 md5(String string)
+{
+    MD5_Context context;
+    md5_init(&context);
+    md5_data(&context, string);
+    md5_done(&context);
+    return context.result;
+}
+
+
+
+static void md5_block(MD5_Context* ctx)
+{
+    static constexpr u32 S[64] = {
+        7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22,
+        5,  9, 14, 20, 5,  9, 14, 20, 5,  9, 14, 20, 5,  9, 14, 20,
+        4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23,
+        6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21
+    };
+
+    static constexpr u32 K[64] = {
+        0xd76aa478, 0xe8c7b756, 0x242070db, 0xc1bdceee, 0xf57c0faf, 0x4787c62a, 0xa8304613, 0xfd469501,
+        0x698098d8, 0x8b44f7af, 0xffff5bb1, 0x895cd7be, 0x6b901122, 0xfd987193, 0xa679438e, 0x49b40821,
+        0xf61e2562, 0xc040b340, 0x265e5a51, 0xe9b6c7aa, 0xd62f105d, 0x02441453, 0xd8a1e681, 0xe7d3fbc8,
+        0x21e1cde6, 0xc33707d6, 0xf4d50d87, 0x455a14ed, 0xa9e3e905, 0xfcefa3f8, 0x676f02d9, 0x8d2a4c8a,
+        0xfffa3942, 0x8771f681, 0x6d9d6122, 0xfde5380c, 0xa4beea44, 0x4bdecfa9, 0xf6bb4b60, 0xbebfbc70,
+        0x289b7ec6, 0xeaa127fa, 0xd4ef3085, 0x04881d05, 0xd9d4d039, 0xe6db99e5, 0x1fa27cf8, 0xc4ac5665,
+        0xf4292244, 0x432aff97, 0xab9423a7, 0xfc93a039, 0x655b59c3, 0x8f0ccc92, 0xffeff47d, 0x85845dd1,
+        0x6fa87e4f, 0xfe2ce6e0, 0xa3014314, 0x4e0811a1, 0xf7537e82, 0xbd3af235, 0x2ad7d2bb, 0xeb86d391
+    };
+
+    u32 a = ctx->digest[0];
+    u32 b = ctx->digest[1];
+    u32 c = ctx->digest[2];
+    u32 d = ctx->digest[3];
+#define MD5Loop(i_from, i_to, e_expr, j_expr)                                     \
+        for (u32 i = i_from; i < i_to; i++)                                       \
+        {                                                                         \
+            u32 e = (e_expr), j = (j_expr), temp = d;                             \
+            d = c;                                                                \
+            c = b;                                                                \
+            b = b + rotl32(a + e + K[i] + load_u32le(&ctx->block[j * 4]), S[i]);  \
+            a = temp;                                                             \
+        }
+    MD5Loop(0,  16, ((b & c) | (~b & d)), i);
+    MD5Loop(16, 32, ((b & d) | (c & ~d)), ((i * 5) + 1) & 15);
+    MD5Loop(32, 48, (b ^ c ^ d),          ((i * 3) + 5) & 15);
+    MD5Loop(48, 64, (c ^ (b | ~d)),       (i * 7) & 15);
+#undef MD5Loop
+    ctx->digest[0] += a;
+    ctx->digest[1] += b;
+    ctx->digest[2] += c;
+    ctx->digest[3] += d;
+}
+
+void md5_init(MD5_Context* ctx)
+{
+    ctx->byte_count = 0;
+    ctx->digest[0] = 0x67452301ull;
+    ctx->digest[1] = 0xefcdab89ull;
+    ctx->digest[2] = 0x98badcfeull;
+    ctx->digest[3] = 0x10325476ull;
+}
+
+void md5_data(MD5_Context* ctx, String data)
+{
+    umm offset = ctx->byte_count & 63;
+    ctx->byte_count += data.length;
+    for (umm i = 0; i < data.length; i++)
+    {
+        ctx->block[offset++] = data.data[i];
+        if (offset == 64)
+        {
+            md5_block(ctx);
+            offset = 0;
+        }
+    }
+}
+
+void md5_done(MD5_Context* ctx)
+{
+    umm offset = ctx->byte_count & 63;
+    umm padding_length = offset < 56 ? 56 - offset : (56 + 64) - offset;
+    u8  padding[64] = { 0x80 };
+    md5_data(ctx, { padding_length, padding });
+    ctx->byte_count -= padding_length;
+    store_u32le(&ctx->block[14 * 4],  ctx->byte_count * 8);
+    store_u32le(&ctx->block[15 * 4], (ctx->byte_count * 8) >> 32);
+    md5_block(ctx);
+    for (umm i = 0; i < 4; i++)
+        ctx->digest[i] = u32le(ctx->digest[i]);
+}
+
+
 ////////////////////////////////////////////////////////////////////////////////
 // SHA1
 ////////////////////////////////////////////////////////////////////////////////
