@@ -1295,6 +1295,12 @@ void free_heap_array(Array<T>* array)
     array->count = 0;
 }
 
+template <typename T>
+Array<T const> const_array(Array<T> array)
+{
+    return { array.count, (T const*) array.address };
+}
+
 template<typename T>
 void unordered_remove_item(Array<T>* array, umm index)
 {

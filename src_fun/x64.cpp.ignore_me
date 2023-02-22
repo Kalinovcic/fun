@@ -1,0 +1,866 @@
+#include "../src_common/common.h"
+
+#include <stdio.h>
+
+#include "pecoff.h"
+
+EnterApplicationNamespace
+
+
+
+enum X64_Register: u8
+{
+    REG_NONE    = 0,
+    REG_FS      = 1,
+    REG_GS      = 2,
+
+    REG_RFLAGS  = 3,
+    REG_RIP     = 4,
+
+    REG_GP0     = 16,  // Base GP register index: 8 available on x86, 16 on x64
+    REG_GP1     = 17,
+    REG_GP2     = 18,
+    REG_GP3     = 19,
+    REG_GP4     = 20,
+    REG_GP5     = 21,
+    REG_GP6     = 22,
+    REG_GP7     = 23,
+    REG_GP8     = 24,
+    REG_GP9     = 25,
+    REG_GP10    = 26,
+    REG_GP11    = 27,
+    REG_GP12    = 28,
+    REG_GP13    = 29,
+    REG_GP14    = 30,
+    REG_GP15    = 31,
+
+    // Named constants for GP registers
+    REG_RAX     = 16,
+    REG_RCX     = 17,
+    REG_RDX     = 18,
+    REG_RBX     = 19,
+    REG_RSP     = 20,
+    REG_RBP     = 21,
+    REG_RSI     = 22,
+    REG_RDI     = 23,
+    REG_R8      = 24,
+    REG_R9      = 25,
+    REG_R10     = 26,
+    REG_R11     = 27,
+    REG_R12     = 28,
+    REG_R13     = 29,
+    REG_R14     = 30,
+    REG_R15     = 31,
+    // Named constants for high-byte AX CX DX BX registers, overlapping RSP RBP RSI RDI
+    // Codegen assumes these are never used
+    REG_AH      = 20,
+    REG_CH      = 21,
+    REG_DH      = 22,
+    REG_BH      = 23,
+
+    REG_MM0     = 32,  // Base MM register index: 8 on x86, 16 on x64, 32 on x64 with AVX512
+    REG_MM1     = 33,
+    REG_MM2     = 34,
+    REG_MM3     = 35,
+    REG_MM4     = 36,
+    REG_MM5     = 37,
+    REG_MM6     = 38,
+    REG_MM7     = 39,
+    REG_MM8     = 40,
+    REG_MM9     = 41,
+    REG_MM10    = 42,
+    REG_MM11    = 43,
+    REG_MM12    = 44,
+    REG_MM13    = 45,
+    REG_MM14    = 46,
+    REG_MM15    = 47,
+    REG_MM16    = 48,
+    REG_MM17    = 49,
+    REG_MM18    = 50,
+    REG_MM19    = 51,
+    REG_MM20    = 52,
+    REG_MM21    = 53,
+    REG_MM22    = 54,
+    REG_MM23    = 55,
+    REG_MM24    = 56,
+    REG_MM25    = 57,
+    REG_MM26    = 58,
+    REG_MM27    = 59,
+    REG_MM28    = 60,
+    REG_MM29    = 61,
+    REG_MM30    = 62,
+    REG_MM31    = 63,
+};
+
+enum X64_Rex: u8
+{
+    REX_0       = 0b01000000,
+    REX_W       = 0b01001000,
+    REX_R       = 0b01000100,
+    REX_X       = 0b01000010,
+    REX_B       = 0b01000001,
+};
+
+enum X64_Size: u8
+{
+    SIZE_1B     = 0,
+    SIZE_2B     = 1,
+    SIZE_4B     = 2,
+    SIZE_8B     = 3,
+    SIZE_16B    = 4,
+    SIZE_32B    = 5,
+    SIZE_64B    = 6,
+};
+
+
+enum X64_Addressing: u8
+{
+    ADDR_IMMEDIATE, // immediate
+    ADDR_REGISTER,  // reg
+    ADDR_INDIRECT,  // [reg + index*scale + displacement]
+};
+
+struct X64_Operand
+{
+    X64_Addressing mode;
+    X64_Register   reg;
+    X64_Register   index;
+    union
+    {
+        bool8    is_signed;     // used for ADDR_IMMEDIATE
+        X64_Size scale;         // used for ADDR_INDIRECT
+    };
+    s32 displacement_s32;
+    union
+    {
+        s64 immediate_s64;
+        u64 immediate_u64;
+    };
+};
+
+
+static inline X64_Operand x64_immediate_s64(s64 immediate, bool8 is_signed = true)
+{
+    X64_Operand result = {};
+    result.mode = ADDR_IMMEDIATE;
+    result.immediate_s64 = immediate;
+    result.is_signed = is_signed;
+    return result;
+}
+
+static inline X64_Operand x64_immediate_u64(u64 immediate, bool8 is_signed = false)
+{
+    X64_Operand result = {};
+    result.mode = ADDR_IMMEDIATE;
+    result.immediate_u64 = immediate;
+    result.is_signed = is_signed;
+    return result;
+}
+
+static inline X64_Operand x64_register(X64_Register reg)
+{
+    X64_Operand result = {};
+    result.mode = ADDR_REGISTER;
+    result.reg = reg;
+    return result;
+}
+
+static inline X64_Operand x64_indirect(X64_Register reg, s32 displacement = 0)
+{
+    X64_Operand result = {};
+    result.mode             = ADDR_INDIRECT;
+    result.reg              = reg;
+    result.displacement_s32 = displacement;
+    return result;
+}
+
+static inline X64_Operand x64_indirect(X64_Register reg, X64_Register index, X64_Size scale, s32 displacement = 0)
+{
+    X64_Operand result = {};
+    result.mode             = ADDR_INDIRECT;
+    result.reg              = reg;
+    result.index            = index;
+    result.scale            = scale;
+    result.displacement_s32 = displacement;
+    return result;
+}
+
+
+
+struct X64_Concatenator
+{
+    byte* page_start;
+    byte* page_end;
+    byte* cursor;
+
+    Dynamic_Array<String> pages;
+    umm page_position;
+
+    __forceinline umm position() { return page_position + (cursor - page_start); }
+};
+
+void fre_x64_concatenator(X64_Concatenator* cat)
+{
+    For (cat->pages) free_heap_string(it);
+    free_heap_array(&cat->pages);
+}
+
+void flush_x64_concatenator(X64_Concatenator* cat)
+{
+    if (cat->page_start)
+    {
+        String* page = reserve_item(&cat->pages);
+        page->length = cat->cursor - cat->page_start;
+        page->data   = cat->page_start;
+        cat->page_position += cat->page_end - cat->page_start;
+    }
+    cat->page_start = cat->page_end = cat->cursor = NULL;
+}
+
+#define EnsureInstructionSpaceScoped(cat)                                               \
+{                                                                                       \
+    /* x64 instructions are 1..15 bytes, but we ensure 32 just to be safe I guess */    \
+    if (cat->cursor + 32 > cat->page_end)                                               \
+    {                                                                                   \
+        flush_x64_concatenator(cat);                                                    \
+        umm size = Megabyte(1);                                                         \
+        cat->page_start = alloc<byte, false>(NULL, size);                               \
+        cat->page_end   = cat->page_start + size;                                       \
+        cat->cursor     = cat->page_start;                                              \
+    }                                                                                   \
+}
+
+// Fast binary writing functions that don't check remaining capacity!
+static __forceinline void emit_s8 (X64_Concatenator* cat, s8  value) { *(u8 *) cat->cursor =                 ((u8)  value); cat->cursor += sizeof(u8);  }
+static __forceinline void emit_u8 (X64_Concatenator* cat, u8  value) { *(u8 *) cat->cursor =                 ((u8)  value); cat->cursor += sizeof(u8);  }
+static __forceinline void emit_s16(X64_Concatenator* cat, s16 value) { *(u16*) cat->cursor = endian_swap16_le((u16) value); cat->cursor += sizeof(u16); }
+static __forceinline void emit_u16(X64_Concatenator* cat, u16 value) { *(u16*) cat->cursor = endian_swap16_le((u16) value); cat->cursor += sizeof(u16); }
+static __forceinline void emit_s32(X64_Concatenator* cat, s32 value) { *(u32*) cat->cursor = endian_swap32_le((u32) value); cat->cursor += sizeof(u32); }
+static __forceinline void emit_u32(X64_Concatenator* cat, u32 value) { *(u32*) cat->cursor = endian_swap32_le((u32) value); cat->cursor += sizeof(u32); }
+static __forceinline void emit_s64(X64_Concatenator* cat, s64 value) { *(u64*) cat->cursor = endian_swap64_le((u64) value); cat->cursor += sizeof(u64); }
+static __forceinline void emit_u64(X64_Concatenator* cat, u64 value) { *(u64*) cat->cursor = endian_swap64_le((u64) value); cat->cursor += sizeof(u64); }
+
+
+static inline void emit_immediate(X64_Concatenator* cat, X64_Size size, u64 immediate)
+{
+    switch (size)
+    {
+    case SIZE_1B: emit_u8 (cat, (u8)  immediate); break;
+    case SIZE_2B: emit_u16(cat, (u16) immediate); break;
+    case SIZE_4B: emit_u32(cat, (u32) immediate); break;
+    case SIZE_8B: emit_u64(cat, (u64) immediate); break;
+    default: Unreachable;
+    }
+}
+
+static inline void emit_immediate_up_to_32bit(X64_Concatenator* cat, X64_Size size, u64 immediate)
+{
+    switch (size)
+    {
+    case SIZE_1B: emit_u8 (cat, (u8)  immediate); break;
+    case SIZE_2B: emit_u16(cat, (u16) immediate); break;
+    case SIZE_4B:
+    case SIZE_8B: emit_u32(cat, (u32) immediate); break;
+    default: Unreachable;
+    }
+}
+
+static inline void emit_modrm_sib(X64_Concatenator* cat, X64_Operand* reg, X64_Operand* rm)
+{
+    assert(rm->mode == ADDR_REGISTER || rm->mode == ADDR_INDIRECT);
+    if (rm->mode == ADDR_REGISTER)  // register
+    {
+        u8 modrm = 0b11000000 | ((reg->reg & 7) << 3) | (rm->reg & 7);
+        emit_u8(cat, modrm);
+        return;
+    }
+    else if (rm->index == REG_NONE)  // [register + displacement]
+    {
+        if (rm->reg == REG_NONE || rm->reg == REG_FS || rm->reg == REG_GS)  // segment:[disp32]
+        {
+            u8 modrm = 0b00000100 | ((reg->reg & 7) << 3);  // [SIB]
+            emit_u8(cat, modrm);
+            u8 sib = 0b00100101;  // SIB=disp32
+            emit_s8(cat, sib);
+            emit_s32(cat, rm->displacement_s32);
+        }
+        else if (rm->reg == REG_RIP)  // [RIP+disp32]
+        {
+            u8 modrm = 0b00000101 | ((reg->reg & 7) << 3);
+            emit_u8(cat, modrm);
+            emit_s32(cat, rm->displacement_s32);
+        }
+        else if ((rm->reg & 7) == 0b100)  // RSP and R12 special cases
+        {
+            u8 sib = 0b00100100;  // SIB=base
+            if (!rm->displacement_s32)  // [SIB]
+            {
+                u8 modrm = 0b00000100 | ((reg->reg & 7) << 3);
+                emit_u8(cat, modrm);
+                emit_u8(cat, sib);
+            }
+            else if (rm->displacement_s32 == (s8) rm->displacement_s32)  // [SIB+disp8]
+            {
+                u8 modrm = 0b01000100 | ((reg->reg & 7) << 3);
+                emit_u8(cat, modrm);
+                emit_u8(cat, sib);
+                emit_s8(cat, (s8) rm->displacement_s32);
+            }
+            else  // [SIB+disp32]
+            {
+                u8 modrm = 0b10000100 | ((reg->reg & 7) << 3);
+                emit_u8(cat, modrm);
+                emit_u8(cat, sib);
+                emit_s32(cat, rm->displacement_s32);
+            }
+        }
+        else if (!rm->displacement_s32 && (rm->reg & 7) != 0b101)  // [r/m]
+        {
+            u8 modrm = 0b00000000 | ((reg->reg & 7) << 3) | (rm->reg & 7);
+            emit_u8(cat, modrm);
+        }
+        else if (rm->displacement_s32 == (s8) rm->displacement_s32)  // [r/m+disp8]
+        {
+            u8 modrm = 0b01000000 | ((reg->reg & 7) << 3) | (rm->reg & 7);
+            emit_u8(cat, modrm);
+            emit_s8(cat, (s8) rm->displacement_s32);
+        }
+        else  // [r/m+disp32]
+        {
+            u8 modrm = 0b10000000 | ((reg->reg & 7) << 3) | (rm->reg & 7);
+            emit_u8(cat, modrm);
+            emit_s32(cat, rm->displacement_s32);
+        }
+        return;
+    }
+    else if (rm->reg == REG_NONE)  // [index*scale + displacement]
+    {
+        assert(rm->index != REG_RSP);  // can't use RSP as index
+        u8 modrm = 0b00000100 | ((reg->reg & 7) << 3);  // [SIB]
+        emit_u8(cat, modrm);
+        u8 sib = 0b00000101 | (rm->scale << 6) | ((rm->index & 7) << 3);  // SIB=index*scale + disp32
+        emit_u8(cat, sib);
+        emit_s32(cat, rm->displacement_s32);
+    }
+    else  // [register + index*scale + displacement]
+    {
+        assert(rm->index != REG_RSP);  // can't use RSP as index
+        u8 sib = (rm->scale << 6) | ((rm->index & 7) << 3) | (rm->reg & 7);  // SIB=base+index*scale
+        if (!rm->displacement_s32 && (rm->reg & 7) != 0b101)  // [SIB] but not for RBP and R13
+        {
+            u8 modrm = 0b00000100 | ((reg->reg & 7) << 3);
+            emit_u8(cat, modrm);
+            emit_u8(cat, sib);
+        }
+        else if (rm->displacement_s32 == (s8) rm->displacement_s32) // [SIB+disp8]
+        {
+            u8 modrm = 0b01000100 | ((reg->reg & 7) << 3);
+            emit_u8(cat, modrm);
+            emit_u8(cat, sib);
+            emit_s8(cat, (s8) rm->displacement_s32);
+        }
+        else  // [SIB+disp32]
+        {
+            u8 modrm = 0b10000100 | ((reg->reg & 7) << 3);
+            emit_u8(cat, modrm);
+            emit_u8(cat, sib);
+            emit_s32(cat, rm->displacement_s32);
+        }
+    }
+}
+
+static inline void emit_modrm_sib_const(X64_Concatenator* cat, u8 reg_const, X64_Operand* rm)
+{
+    X64_Operand reg = {};
+    reg.mode = ADDR_REGISTER;
+    reg.reg  = (X64_Register) reg_const;
+    emit_modrm_sib(cat, &reg, rm);
+}
+
+
+static inline void maybe_emit_rex_for_size(X64_Concatenator* cat, X64_Size size)
+{
+    if (size == SIZE_8B) emit_u8(cat, REX_W);
+}
+
+static inline void maybe_emit_rex_for_reg(X64_Concatenator* cat, X64_Size size, X64_Operand* reg)
+{
+    u8 rex = 0;
+    if (size == SIZE_1B && (reg->reg >= REG_AH && reg->reg <= REG_BH)) rex |= REX_0;
+    if (size == SIZE_8B)     rex |= REX_W;
+    if (reg->reg >= REG_GP8) rex |= REX_R;
+
+    if (rex) emit_u8(cat, rex);
+}
+
+static inline void maybe_emit_rex_for_rm(X64_Concatenator* cat, X64_Size size, X64_Operand* rm)
+{
+    u8 rex = 0;
+    if (size == SIZE_1B && ((rm ->reg   >= REG_AH && rm ->reg   <= REG_BH)
+                         || (rm ->index >= REG_AH && rm ->index <= REG_BH))) rex |= REX_0;
+    if (size == SIZE_8B)      rex |= REX_W;
+    if (rm->reg   >= REG_GP8) rex |= REX_B;
+    if (rm->index >= REG_GP8) rex |= REX_X;
+
+    if (rex) emit_u8(cat, rex);
+}
+
+static inline void maybe_emit_rex_for_reg_rm(X64_Concatenator* cat, X64_Size size, X64_Operand* reg, X64_Operand* rm)
+{
+    u8 rex = 0;
+    if (size == SIZE_1B && ((reg->reg   >= REG_AH && reg->reg   <= REG_BH)
+                         || (rm ->reg   >= REG_AH && rm ->reg   <= REG_BH)
+                         || (rm ->index >= REG_AH && rm ->index <= REG_BH))) rex |= REX_0;
+    if (size == SIZE_8B)       rex |= REX_W;
+    if (reg->reg   >= REG_GP8) rex |= REX_R;
+    if (rm ->reg   >= REG_GP8) rex |= REX_B;
+    if (rm ->index >= REG_GP8) rex |= REX_X;
+
+    if (rex) emit_u8(cat, rex);
+}
+
+
+static inline void maybe_emit_legacy_prefixes(X64_Concatenator* cat, X64_Size size)
+{
+    if (size == SIZE_2B) emit_u8(cat, 0x66);
+}
+
+static inline void maybe_emit_legacy_prefixes(X64_Concatenator* cat, X64_Size size, X64_Operand* rm)
+{
+    if (rm->reg == REG_FS) emit_u8(cat, 0x64);
+    if (rm->reg == REG_GS) emit_u8(cat, 0x65);
+    if (size == SIZE_2B)   emit_u8(cat, 0x66);
+}
+
+
+// These two functions are NOT THE SAME!
+// s64: It will get sign extended, so any value that fits in s32 is OK!
+// u64: It will get sign extended, so bit 31 must be zero!
+static inline bool is_x64_immediate_safe_for_32bit_signed_use  (s64 imm) { return imm == (s32) imm;    }
+static inline bool is_x64_immediate_safe_for_32bit_unsigned_use(u64 imm) { return imm <= 0x7FFFFFFFul; }
+
+static inline bool is_x64_immediate_safe_for_32bit_use(X64_Operand* op)
+{
+    return op->is_signed
+         ? (op->immediate_s64 == (s32) op->immediate_s64)
+         : (op->immediate_u64 <= 0x7FFFFFFF);
+}
+
+static inline bool is_x64_immediate_safe_for_8bit_use(X64_Operand* op)
+{
+    return op->is_signed
+         ? (op->immediate_s64 == (s8) op->immediate_s64)
+         : (op->immediate_u64 <= 0x7F);
+}
+
+
+
+static void x64_mov(X64_Concatenator* cat, X64_Size size, X64_Operand* to, X64_Operand* from)
+{
+    EnsureInstructionSpaceScoped(cat);
+    assert(to->mode != ADDR_IMMEDIATE);
+    if (from->mode == ADDR_IMMEDIATE)
+    {
+        assert(to->mode == ADDR_REGISTER);
+
+        maybe_emit_legacy_prefixes(cat, size);
+        maybe_emit_rex_for_rm(cat, size, to);
+        u8 op = (size == SIZE_1B ? 0xB0 : 0xB8);
+        emit_u8(cat, op + (to->reg & 7));
+        emit_immediate(cat, size, from->immediate_u64);
+    }
+    else
+    {
+        u8           op;
+        X64_Operand* reg;
+        X64_Operand* rm;
+             if (from->mode == ADDR_REGISTER) op = (size == SIZE_1B ? 0x88 : 0x89), reg = from, rm = to;
+        else if (to  ->mode == ADDR_REGISTER) op = (size == SIZE_1B ? 0x8A : 0x8B), reg = to,   rm = from;
+        else Unreachable;
+
+        maybe_emit_legacy_prefixes(cat, size, rm);
+        maybe_emit_rex_for_reg_rm(cat, size, reg, rm);
+        emit_u8(cat, op);
+        emit_modrm_sib(cat, reg, rm);
+    }
+}
+
+// Returns a pointer to the relative address if 'from' is a RIP-indirect.
+static s32* x64_lea(X64_Concatenator* cat, X64_Size size, X64_Operand* to, X64_Operand* from)
+{
+    EnsureInstructionSpaceScoped(cat);
+    assert(to->mode   == ADDR_REGISTER);
+    assert(from->mode == ADDR_INDIRECT);
+    maybe_emit_legacy_prefixes(cat, size, from);
+    maybe_emit_rex_for_reg_rm(cat, size, to, from);
+    emit_u8(cat, 0x8D);
+    emit_modrm_sib(cat, to, from);
+
+    if (from->mode == ADDR_INDIRECT && from->reg == REG_RIP)
+        return (s32*)(cat->cursor - 4);
+    return NULL;
+}
+
+static void x64_inc(X64_Concatenator* cat, X64_Size size, X64_Operand* rm)
+{
+    EnsureInstructionSpaceScoped(cat);
+    maybe_emit_legacy_prefixes(cat, size, rm);
+    maybe_emit_rex_for_rm(cat, size, rm);
+    emit_u8(cat, size == SIZE_1B ? 0xFE : 0xFF);
+    emit_modrm_sib_const(cat, 0, rm);
+}
+
+static void x64_dec(X64_Concatenator* cat, X64_Size size, X64_Operand* rm)
+{
+    EnsureInstructionSpaceScoped(cat);
+    maybe_emit_legacy_prefixes(cat, size, rm);
+    maybe_emit_rex_for_rm(cat, size, rm);
+    emit_u8(cat, size == SIZE_1B ? 0xFE : 0xFF);
+    emit_modrm_sib_const(cat, 1, rm);
+}
+
+// Relative jumps work by passing a ADDR_IMMEDIATE with the cat->position()
+// of the instruction where to jump.
+// Returns a pointer to the relative address if 'where' is a 32-bit immediate or RIP-indirect.
+static s32* x64_jmp(X64_Concatenator* cat, X64_Operand* where)
+{
+    EnsureInstructionSpaceScoped(cat);
+    if (where->mode == ADDR_IMMEDIATE)
+    {
+        s64 relative8  = (s64) where->immediate_s64 - ((s64) cat->position() + 2);
+        s64 relative32 = (s64) where->immediate_s64 - ((s64) cat->position() + 5);
+        if (relative8 == (s8) relative8)
+        {
+            emit_u8(cat, 0xEB);
+            emit_s8(cat, (s8) relative8);
+        }
+        else
+        {
+            assert(relative32 == (s32) relative32);
+            emit_u8(cat, 0xE9);
+            emit_s32(cat, (s32) relative32);
+            return (s32*)(cat->cursor - 4);
+        }
+    }
+    else
+    {
+        X64_Size size = SIZE_4B;  // this is "wrong" for x64, but default operand size is reversed
+                                  // for JMP, so we don't want to emit a REX.W here, hence size 4B
+        maybe_emit_legacy_prefixes(cat, size, where);
+        maybe_emit_rex_for_rm(cat, size, where);
+        emit_u8(cat, 0xFF);
+        emit_modrm_sib_const(cat, 4, where);
+
+        if (where->mode == ADDR_INDIRECT && where->reg == REG_RIP)
+        {
+            // emit_modrm_sib_const last emitted a s32 for the RIP-relative offset.
+            return (s32*)(cat->cursor - 4);
+        }
+    }
+
+    return NULL;
+}
+
+// Relative jumps work by passing a ADDR_IMMEDIATE with the cat->position()
+// of the instruction to call.
+// Returns a pointer to the relative address if 'where' is a 32-bit immediate or RIP-indirect.
+static s32* x64_call(X64_Concatenator* cat, X64_Operand* where)
+{
+    EnsureInstructionSpaceScoped(cat);
+    if (where->mode == ADDR_IMMEDIATE)
+    {
+        s64 relative32 = (s64) where->immediate_s64 - ((s64) cat->position() + 5);
+        assert(relative32 == (s32) relative32);
+        emit_u8(cat, 0xE8);
+        emit_s32(cat, (s32) relative32);
+        return (s32*)(cat->cursor - 4);
+    }
+    else
+    {
+        X64_Size size = SIZE_4B;  // this is "wrong" for x64, but default operand size is reversed
+                                  // for CALL, so we don't want to emit a REX.W here, hence size 4B
+        maybe_emit_legacy_prefixes(cat, size, where);
+        maybe_emit_rex_for_rm(cat, size, where);
+        emit_u8(cat, 0xFF);
+        emit_modrm_sib_const(cat, 2, where);
+
+        if (where->mode == ADDR_INDIRECT && where->reg == REG_RIP)
+        {
+            // emit_modrm_sib_const last emitted a s32 for the RIP-relative offset.
+            return (s32*)(cat->cursor - 4);
+        }
+    }
+
+    return NULL;
+}
+
+static void x64_add(X64_Concatenator* cat, X64_Size size, X64_Operand* to, X64_Operand* from)
+{
+    EnsureInstructionSpaceScoped(cat);
+    assert(to->mode != ADDR_IMMEDIATE);
+    if (from->mode == ADDR_IMMEDIATE)
+    {
+        assert(is_x64_immediate_safe_for_32bit_use(from));
+
+        if (to->mode == ADDR_REGISTER && to->reg == REG_RAX)
+        {
+            maybe_emit_legacy_prefixes(cat, size);
+            maybe_emit_rex_for_size(cat, size);
+            emit_u8(cat, size == SIZE_1B ? 0x04 : 0x05);
+            emit_immediate_up_to_32bit(cat, size, from->immediate_u64);
+        }
+        else
+        {
+            maybe_emit_legacy_prefixes(cat, size, to);
+            maybe_emit_rex_for_rm(cat, size, to);
+            emit_u8(cat, size == SIZE_1B ? 0x80 : 0x81);
+            emit_modrm_sib_const(cat, 0, to);
+            emit_immediate_up_to_32bit(cat, size, from->immediate_u64);
+        }
+    }
+    else
+    {
+        u8           op;
+        X64_Operand* reg;
+        X64_Operand* rm;
+             if (from->mode == ADDR_REGISTER) op = (size == SIZE_1B ? 0x00 : 0x01), reg = from, rm = to;
+        else if (to  ->mode == ADDR_REGISTER) op = (size == SIZE_1B ? 0x02 : 0x03), reg = to,   rm = from;
+        else Unreachable;
+
+        maybe_emit_legacy_prefixes(cat, size, rm);
+        maybe_emit_rex_for_reg_rm(cat, size, reg, rm);
+        emit_u8(cat, op);
+        emit_modrm_sib(cat, reg, rm);
+    }
+}
+
+static void x64_sub(X64_Concatenator* cat, X64_Size size, X64_Operand* to, X64_Operand* from)
+{
+    EnsureInstructionSpaceScoped(cat);
+    assert(to->mode != ADDR_IMMEDIATE);
+    if (from->mode == ADDR_IMMEDIATE)
+    {
+        assert(is_x64_immediate_safe_for_32bit_use(from));
+
+        if (to->mode == ADDR_REGISTER && to->reg == REG_RAX)
+        {
+            maybe_emit_legacy_prefixes(cat, size);
+            maybe_emit_rex_for_size(cat, size);
+            emit_u8(cat, size == SIZE_1B ? 0x2C : 0x2D);
+            emit_immediate_up_to_32bit(cat, size, from->immediate_u64);
+        }
+        else
+        {
+            maybe_emit_legacy_prefixes(cat, size, to);
+            maybe_emit_rex_for_rm(cat, size, to);
+            emit_u8(cat, size == SIZE_1B ? 0x80 : 0x81);
+            emit_modrm_sib_const(cat, 5, to);
+            emit_immediate_up_to_32bit(cat, size, from->immediate_u64);
+        }
+    }
+    else
+    {
+        u8           op;
+        X64_Operand* reg;
+        X64_Operand* rm;
+             if (from->mode == ADDR_REGISTER) op = (size == SIZE_1B ? 0x28 : 0x29), reg = from, rm = to;
+        else if (to  ->mode == ADDR_REGISTER) op = (size == SIZE_1B ? 0x2A : 0x2B), reg = to,   rm = from;
+        else Unreachable;
+
+        maybe_emit_legacy_prefixes(cat, size, rm);
+        maybe_emit_rex_for_reg_rm(cat, size, reg, rm);
+        emit_u8(cat, op);
+        emit_modrm_sib(cat, reg, rm);
+    }
+}
+
+
+
+#define RoundUp32(x, pow2) ((u32)((x) + pow2 - 1) & ~(u32)(pow2 - 1))
+
+int do_hello_world()
+{
+    constexpr u32 SECTION_ALIGNMENT = 4096;
+    constexpr u32 FILE_ALIGNMENT    = 512;
+
+    struct alignas(FILE_ALIGNMENT) Import_Data
+    {
+        IMAGE_IMPORT_DESCRIPTOR directory[2] = {};
+        IMAGE_THUNK_DATA64 import_lookup[3] = {};
+        IMAGE_THUNK_DATA64 import_address[3] = {};
+        char dll_name[9] = "kernel32";
+
+        u16 import_name_hint1 = 0;
+        char import_name1[12] = "ExitProcess";
+        u16 import_name_hint2 = 0;
+        char import_name2[12] = "WriteFile";
+
+        char hello[12] = "hello world";
+    } import_data;
+
+    uint8_t code[FILE_ALIGNMENT] = {};
+
+    {
+        X64_Concatenator cat = {};
+        // HORRIBLE HACK
+        cat.page_start = code;
+        cat.page_end = code + sizeof(code);
+        cat.cursor = code;
+
+        X64_Operand rsp = x64_register(REG_RSP);
+        X64_Operand rcx = x64_register(REG_RCX);
+        X64_Operand rdx = x64_register(REG_RDX);
+        X64_Operand r8  = x64_register(REG_R8);
+        X64_Operand r9  = x64_register(REG_R9);
+
+        X64_Operand zero         = x64_immediate_s64(0);
+        X64_Operand forty        = x64_immediate_s64(40);
+        X64_Operand eleven       = x64_immediate_s64(11);
+        X64_Operand minus_eleven = x64_immediate_s64(-11);
+
+        X64_Operand rip_indirect_placeholder = x64_indirect(REG_RIP, 0);
+
+        s32* offset;
+
+        x64_sub(&cat, SIZE_8B, &rsp, &forty);
+        x64_mov(&cat, SIZE_8B, &rcx, &minus_eleven);
+         offset = x64_lea(&cat, SIZE_8B, &rdx, &rip_indirect_placeholder);
+        *offset = (s32)(SECTION_ALIGNMENT + MemberOffset(Import_Data, hello) - cat.position());
+        x64_mov(&cat, SIZE_8B, &r8, &eleven);
+        x64_mov(&cat, SIZE_8B, &r9, &zero);
+         offset = x64_call(&cat, &rip_indirect_placeholder);
+        *offset = (s32)(SECTION_ALIGNMENT + MemberOffset(Import_Data, import_address) + 8 - cat.position());
+
+        x64_mov(&cat, SIZE_8B, &rcx, &zero);
+         offset = x64_call(&cat, &rip_indirect_placeholder);
+        *offset = (s32)(SECTION_ALIGNMENT + MemberOffset(Import_Data, import_address) - cat.position());
+    }
+
+    struct alignas(FILE_ALIGNMENT)
+    {
+        IMAGE_DOS_HEADER dos = {};
+        u32 pe_signature = IMAGE_NT_SIGNATURE;
+        IMAGE_FILE_HEADER pe = {};
+        IMAGE_OPTIONAL_HEADER64 optional = {};
+        IMAGE_SECTION_HEADER section[2] = {};
+    } headers;
+    CompileTimeAssert(sizeof(headers) % FILE_ALIGNMENT == 0);
+
+    memcpy(headers.section[0].Name, ".text", 5);
+    headers.section[0].Misc.VirtualSize = RoundUp32(sizeof(code), SECTION_ALIGNMENT);
+    headers.section[0].VirtualAddress = RoundUp32(sizeof(headers), SECTION_ALIGNMENT);
+    headers.section[0].SizeOfRawData = RoundUp32(sizeof(code), FILE_ALIGNMENT);
+    headers.section[0].PointerToRawData = sizeof(headers);
+    headers.section[0].PointerToRelocations = 0;
+    headers.section[0].PointerToLinenumbers = 0;
+    headers.section[0].NumberOfRelocations = 0;
+    headers.section[0].NumberOfLinenumbers = 0;
+    headers.section[0].Characteristics = IMAGE_SCN_CNT_CODE | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_EXECUTE;
+
+    memcpy(headers.section[1].Name, ".data", 5);
+    headers.section[1].Misc.VirtualSize = RoundUp32(sizeof(import_data), SECTION_ALIGNMENT);
+    headers.section[1].VirtualAddress = headers.section[0].VirtualAddress + headers.section[0].Misc.VirtualSize;
+    headers.section[1].SizeOfRawData = RoundUp32(sizeof(import_data), FILE_ALIGNMENT);
+    headers.section[1].PointerToRawData = sizeof(headers) + headers.section[0].SizeOfRawData;
+    headers.section[1].PointerToRelocations = 0;
+    headers.section[1].PointerToLinenumbers = 0;
+    headers.section[1].NumberOfRelocations = 0;
+    headers.section[1].NumberOfLinenumbers = 0;
+    headers.section[1].Characteristics = IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_WRITE;
+
+    import_data.directory[0].OriginalFirstThunk = headers.section[1].VirtualAddress + MemberOffset(Import_Data, import_lookup);
+    import_data.directory[0].TimeDateStamp = 0;
+    import_data.directory[0].ForwarderChain = 0;
+    import_data.directory[0].Name       = headers.section[1].VirtualAddress + MemberOffset(Import_Data, dll_name);
+    import_data.directory[0].FirstThunk = headers.section[1].VirtualAddress + MemberOffset(Import_Data, import_address);
+    import_data.import_lookup [0].AddressOfData = headers.section[1].VirtualAddress + MemberOffset(Import_Data, import_name_hint1);
+    import_data.import_lookup [1].AddressOfData = headers.section[1].VirtualAddress + MemberOffset(Import_Data, import_name_hint2);
+    import_data.import_address[0].AddressOfData = headers.section[1].VirtualAddress + MemberOffset(Import_Data, import_name_hint1);
+    import_data.import_address[1].AddressOfData = headers.section[1].VirtualAddress + MemberOffset(Import_Data, import_name_hint2);
+
+    headers.dos.e_magic = IMAGE_DOS_SIGNATURE;
+    headers.dos.e_lfanew = sizeof(IMAGE_DOS_HEADER);
+    CompileTimeAssert(sizeof(IMAGE_DOS_HEADER) % 8 == 0);
+
+    headers.pe.Machine = IMAGE_FILE_MACHINE_AMD64;
+    headers.pe.NumberOfSections = ArrayCount(headers.section);
+    headers.pe.TimeDateStamp = 0;
+    headers.pe.PointerToSymbolTable = 0;
+    headers.pe.NumberOfSymbols = 0;
+    headers.pe.SizeOfOptionalHeader = sizeof(IMAGE_OPTIONAL_HEADER64);
+    headers.pe.Characteristics = IMAGE_FILE_EXECUTABLE_IMAGE | IMAGE_FILE_LARGE_ADDRESS_AWARE;
+
+    headers.optional.Magic = IMAGE_NT_OPTIONAL_HDR64_MAGIC;
+    headers.optional.MajorLinkerVersion = 0;
+    headers.optional.MinorLinkerVersion = 0;
+    headers.optional.SizeOfCode = headers.section[0].Misc.VirtualSize;
+    headers.optional.SizeOfInitializedData = headers.section[1].Misc.VirtualSize;
+    headers.optional.SizeOfUninitializedData = 0;
+    headers.optional.AddressOfEntryPoint = headers.section[0].VirtualAddress;
+    headers.optional.BaseOfCode = headers.section[0].VirtualAddress;
+    headers.optional.ImageBase = 0x140000000ull;
+    headers.optional.SectionAlignment = SECTION_ALIGNMENT;
+    headers.optional.FileAlignment    = FILE_ALIGNMENT;
+    headers.optional.MajorOperatingSystemVersion = 6;
+    headers.optional.MinorOperatingSystemVersion = 0;
+    headers.optional.MajorImageVersion = 0;
+    headers.optional.MinorImageVersion = 0;
+    headers.optional.MajorSubsystemVersion = 6;
+    headers.optional.MinorSubsystemVersion = 0;
+    headers.optional.Win32VersionValue = 0;
+    headers.optional.SizeOfImage = RoundUp32(sizeof(headers), SECTION_ALIGNMENT)
+                                 + headers.section[0].Misc.VirtualSize
+                                 + headers.section[1].Misc.VirtualSize;
+    headers.optional.SizeOfHeaders = sizeof(headers);
+    headers.optional.CheckSum = 0;
+    headers.optional.Subsystem = IMAGE_SUBSYSTEM_WINDOWS_CUI;
+    headers.optional.DllCharacteristics = IMAGE_DLLCHARACTERISTICS_HIGH_ENTROPY_VA
+                                        | IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE
+                                        | IMAGE_DLLCHARACTERISTICS_NX_COMPAT
+                                        | IMAGE_DLLCHARACTERISTICS_TERMINAL_SERVER_AWARE;
+    headers.optional.SizeOfStackReserve = Megabyte(1);
+    headers.optional.SizeOfStackCommit  = Kilobyte(4);
+    headers.optional.SizeOfHeapReserve  = Megabyte(1);
+    headers.optional.SizeOfHeapCommit   = Kilobyte(4);
+    headers.optional.LoaderFlags = 0;
+    headers.optional.NumberOfRvaAndSizes = 16;
+    headers.optional.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress = headers.section[1].VirtualAddress + MemberOffset(Import_Data, directory);
+    headers.optional.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].Size = sizeof(import_data.directory);
+
+
+    umm at = 0;
+    delete_file("developer/testout.exe"_s);
+    write_to_file("developer/testout.exe"_s, at, sizeof(headers),     &headers,     false); at += sizeof(headers);
+    write_to_file("developer/testout.exe"_s, at, sizeof(code),        &code,        true);  at += sizeof(code);
+    write_to_file("developer/testout.exe"_s, at, sizeof(import_data), &import_data, true);  at += sizeof(import_data);
+
+    return 0;
+}
+
+/*
+extern "C" int main()
+{
+    Profile_Statistics statistics = {};
+    for (umm i = 0; i < 100; i++)
+    {
+        begin_profile(&statistics);
+        Defer(end_profile(&statistics));
+
+        X64_Concatenator cat = {};
+
+        for (umm i = 0; i < 1000000; i++)
+        {
+            X64_Operand to   = x64_register(REG_RSP);
+            X64_Operand from = x64_indirect(REG_RBP, REG_RAX, SIZE_8B, 0x1234);
+            x64_mov(&cat, SIZE_8B, &to, &from);
+        }
+    }
+
+    profile_statistics(&statistics, "1M emit: mov RSP, [RBP+RAX*8+1234h] : in ms"_s, 1000, 3, 5);
+
+    // do_hello_world();
+}
+*/
+
+
+ExitApplicationNamespace
