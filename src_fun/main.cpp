@@ -43,22 +43,18 @@ extern "C" int main(int argc, char** argv)
     if (!parse_top_level(ctx, tokens))
         return 1;
 
+    printf("parsed\n");
     For (ctx->runs)
     {
         Unit* unit = materialize_unit(ctx, *it);
-        if (!unit)
-            return 1;
-        printf("got unit %p\n", unit);
-
-        if (!check_unit(unit))
-            return 1;
-        printf("typechecked\n");
-
+        if (!unit) return 1;
+        if (!pump_pipeline(ctx)) return 1;
+        printf("pumped\n");
+        printf("executing:\n\n");
         run_unit(unit);
     }
 
-    printf("ok!\n");
-
+    printf("\ndone\n");
     return 0;
 }
 

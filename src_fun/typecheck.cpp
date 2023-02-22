@@ -25,8 +25,9 @@ static Block* materialize_block(Unit* unit, Block* materialize_from,
     block->parent_scope_visibility_limit = parent_scope_visibility_limit;
 
     Pipeline_Task task = {};
+    task.unit  = unit;
     task.block = block;
-    add_item(&unit->pipeline, &task);
+    add_item(&unit->ctx->pipeline, &task);
     return block;
 }
 
@@ -172,39 +173,6 @@ static Yield_Result check_block(Unit* unit, Block* block)
     return YIELD_COMPLETED;
 }
 
-static bool pump_pipeline(Unit* unit)
-{
-    while (true)
-    {
-        bool made_progress = false;
-        bool tried_to_make_progress = false;
-        for (umm it_index = 0; it_index < unit->pipeline.count; it_index++)
-        {
-            Block* block = unit->pipeline[it_index].block;
-            if (!block) continue;  // already completed
-            tried_to_make_progress = true;
-
-            Yield_Result result = check_block(unit, block);
-            switch (result)
-            {
-            case YIELD_COMPLETED:       unit->pipeline[it_index].block = NULL;  // fallthrough
-            case YIELD_MADE_PROGRESS:   made_progress = true;                   // fallthrough
-            case YIELD_NO_PROGRESS:     break;
-            case YIELD_ERROR:           return false;
-            IllegalDefaultCase;
-            }
-        }
-
-        if (!tried_to_make_progress)
-            break;
-
-        if (!made_progress)
-            return report_error(unit->ctx, &unit->initiator_from, "Can't progress for unit materialized here."_s);
-    }
-
-    return true;
-}
-
 
 Unit* materialize_unit(Compiler* ctx, Run* initiator)
 {
@@ -220,18 +188,41 @@ Unit* materialize_unit(Compiler* ctx, Run* initiator)
     unit->initiator_to   = initiator->to;
     unit->initiator_run  = initiator;
     unit->entry_block    = materialize_block(unit, initiator->entry_block, NULL, (Statement) 0);
-
-    if (pump_pipeline(unit))
-        return unit;
-
-    Region memory = unit->memory;
-    lk_region_free(&memory);
-    return NULL;
+    return unit;
 }
 
 
-bool check_unit(Unit* unit)
+bool pump_pipeline(Compiler* ctx)
 {
+    while (true)
+    {
+        bool made_progress = false;
+        bool tried_to_make_progress = false;
+        for (umm it_index = 0; it_index < ctx->pipeline.count; it_index++)
+        {
+            Unit*  unit  = ctx->pipeline[it_index].unit;
+            Block* block = ctx->pipeline[it_index].block;
+            if (!block) continue;  // already completed
+            tried_to_make_progress = true;
+
+            Yield_Result result = check_block(unit, block);
+            switch (result)
+            {
+            case YIELD_COMPLETED:       ctx->pipeline[it_index].block = NULL;  // fallthrough
+            case YIELD_MADE_PROGRESS:   made_progress = true;                   // fallthrough
+            case YIELD_NO_PROGRESS:     break;
+            case YIELD_ERROR:           return false;
+            IllegalDefaultCase;
+            }
+        }
+
+        if (!tried_to_make_progress)
+            break;
+
+        if (!made_progress)
+            return report_error_locationless(ctx, "Can't progress typechecking."_s);
+    }
+
     return true;
 }
 

@@ -389,13 +389,6 @@ struct Run
 };
 
 
-
-
-struct Pipeline_Task
-{
-    Block* block;
-};
-
 struct Unit
 {
     Region memory;
@@ -406,8 +399,6 @@ struct Unit
     Run*  initiator_run;
 
     Block* entry_block;
-
-    Dynamic_Array<Pipeline_Task> pipeline;
 };
 
 
@@ -415,6 +406,12 @@ struct Unit
 // API
 ////////////////////////////////////////////////////////////////////////////////
 
+
+struct Pipeline_Task
+{
+    Unit*  unit;
+    Block* block;
+};
 
 struct Compiler
 {
@@ -433,6 +430,9 @@ struct Compiler
     // Parser
     Region parser_memory;
     Dynamic_Array<Run*, false> runs;
+
+    // Typechecker
+    Dynamic_Array<Pipeline_Task> pipeline;
 };
 
 void free_compiler(Compiler* compiler);
@@ -490,11 +490,11 @@ bool parse_top_level(Compiler* ctx, Array<Token> tokens);
 
 Unit* materialize_unit(Compiler* ctx, Run* initiator);
 
-bool check_unit(Unit* unit);
-
 bool find_declaration(Unit* unit, Token const* name,
                       Block* scope, Statement visibility_limit,
                       Block** out_decl_scope, Expression* out_decl_expr);
+
+bool pump_pipeline(Compiler* ctx);
 
 
 ////////////////////////////////////////////////////////////////////////////////
