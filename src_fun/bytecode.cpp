@@ -82,8 +82,17 @@ static Memory* run_expression(Unit* unit, byte* storage, Block* block, Expressio
 
     case EXPRESSION_DECLARATION:
     {
-        // @Incomplete - sizes
-        address->as_u64 = 0;
+        u64 size = infer->size;
+        if (expr->declaration.value == NO_EXPRESSION)
+        {
+            memset(address, 0, size);
+        }
+        else
+        {
+            assert(size == block->inferred_expressions[expr->declaration.value].size);
+            Memory* value = run_expression(unit, storage, block, expr->declaration.value);
+            memcpy(address, value, size);
+        }
     } break;
 
     case EXPRESSION_ASSIGNMENT:
@@ -164,7 +173,8 @@ static void run_block(Unit* unit, byte* storage, Block* block)
 
         case STATEMENT_EXPRESSION:
         {
-            run_expression(unit, storage, block, it->expression);
+            if (block->inferred_expressions[it->expression].constant_index == INVALID_CONSTANT_INDEX)
+                run_expression(unit, storage, block, it->expression);
         } break;
 
         case STATEMENT_IF:

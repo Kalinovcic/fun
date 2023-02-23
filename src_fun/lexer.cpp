@@ -433,8 +433,12 @@ void get_line_and_column(Compiler* ctx, Token_Info const* info, u32* out_line, u
     {
         u32 this_line_offset = line_offsets[line];
         u32 next_line_offset = source->code.length;
-        if (line + 1 < line_offsets.count)
-            next_line_offset = line_offsets[line + 1] - 1;  // -1 because of \n
+        for (umm end_line = line + 1; end_line < line_offsets.count; end_line++)
+        {
+            next_line_offset = line_offsets[end_line] - 1;  // -1 because of \n
+            if (i < out_source_lines.count) break;
+            if (next_line_offset - offset >= info->length) break;
+        }
 
         u32 line_length = next_line_offset - this_line_offset;
         String source_line = { line_length, source->code.data + this_line_offset };
@@ -466,12 +470,17 @@ String location_report_part(Compiler* ctx, Token_Info const* info)
     String source_lines[3];
     get_line_and_column(ctx, info, &line, &column, make_array(source_lines));
 
-    String last_line      = source_lines[ArrayCount(source_lines) - 1];
+    String last_line = source_lines[ArrayCount(source_lines) - 1];
+    umm extra_lines_in_last_line = 0;
+    for (umm i = 0; i < last_line.length; i++)
+        if (last_line[i] == '\n')
+            extra_lines_in_last_line++;
+
     String line_before    = take(&last_line, column - 1);
     String line_highlight = take(&last_line, info->length);
     String line_after     = last_line;
 
-    umm line_characters = digits_base10_u64(line);
+    umm line_characters = digits_base10_u64(line + extra_lines_in_last_line);
     if (line_characters < 4)
         line_characters = 4;
 
@@ -482,9 +491,16 @@ String location_report_part(Compiler* ctx, Token_Info const* info)
     if (line >= 2)
         FormatAppend(&output, temp, "%~% >% %\n",
             lowlight, s64_format(line - 1, line_characters), reset, source_lines[1]);
-    FormatAppend(&output, temp, "%~% >% %~%~%~%~%\n",
-        lowlight, s64_format(line, line_characters), reset,
-        line_before, highlight, line_highlight, reset, line_after);
+    FormatAppend(&output, temp, "%~% >% %~%",
+        lowlight, s64_format(line, line_characters), reset, line_before, highlight);
+    while (String highlighted_text = consume_line_preserve_whitespace(&line_highlight))
+    {
+        FormatAppend(&output, temp, "%", highlighted_text);
+        if (line_highlight)  // have extra highlighted lines
+            FormatAppend(&output, temp, "\n%~% >% ",
+                lowlight, s64_format(++line, line_characters), highlight);
+    }
+    FormatAppend(&output, temp, "%~%\n", reset, line_after);
     return output;
 }
 
@@ -567,6 +583,39 @@ bool report_error(Compiler* ctx, Token const* at1, String message1, Token const*
         lowlight, reset, source2->name, lowlight, line2, column2, reset,
         lowlight, reset, message2,
         location_report_part(ctx, info2));
+
+    fprintf(stderr, "%.*s", StringArgs(output));
+    return false;
+}
+
+bool report_error(Compiler* ctx, Parsed_Expression const* at, String message)
+{
+    bool supports_color = enable_color_output();
+    String lowlight  = supports_color ? "\x1b[30;1m"_s : ""_s;
+    String highlight = supports_color ? "\x1b[31;1m"_s : ""_s;
+    String reset     = supports_color ? "\x1b[m"_s     : ""_s;
+
+    Token_Info info;
+    {
+        Token_Info* from_info = get_token_info(ctx, &at->from);
+        Token_Info* to_info   = get_token_info(ctx, &at->to);
+        info = *from_info;
+        info.length = to_info->offset + to_info->length - from_info->offset;
+    }
+
+    u32 line, column;
+    get_line_and_column(ctx, &info, &line, &column);
+    Source_Info* source = &ctx->sources[info.source_index];
+
+    String indented_newline = Format(temp, "\n% ..% ", lowlight, reset);
+    String output = Format(temp, "\n"
+                                 "%[error]% %~% (%:%)%\n"
+                                 "% ..% %\n"
+                                 "\n"
+                                 "%",
+        highlight, reset, source->name, lowlight, line, column, reset,
+        lowlight, reset, replace_all_occurances(message, "\n"_s, indented_newline, temp),
+        location_report_part(ctx, &info));
 
     fprintf(stderr, "%.*s", StringArgs(output));
     return false;

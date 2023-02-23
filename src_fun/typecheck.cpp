@@ -50,7 +50,8 @@ bool find_declaration(Unit* unit, Token const* name,
             auto* expr = &scope->parsed_expressions[id];
             if (expr->kind != EXPRESSION_DECLARATION) continue;
             if (expr->declaration.name.atom != name->atom) continue;
-            if (expr->visibility_limit >= visibility_limit) break;
+            if (expr->visibility_limit >= visibility_limit &&
+                !(expr->flags & EXPRESSION_IS_CONSTANT_DECLARATION)) break;
 
             *out_decl_scope = scope;
             *out_decl_expr = id;
@@ -129,6 +130,26 @@ void allocate_unit_storage(Unit* unit, Type type, u64* out_size, u64* out_offset
 
 
 
+static umm edit_distance(String a, String b)
+{
+    if (!a) return b.length;
+    if (!b) return a.length;
+
+    if (a[0] == b[0])
+        return edit_distance(consume(a, 1), consume(b, 1));
+
+    umm option1 = edit_distance(consume(a, 1), b);
+    umm option2 = edit_distance(a, consume(b, 1));
+    umm option3 = edit_distance(consume(a, 1), consume(b, 1));
+
+    umm best = option1;
+    if (best > option2) best = option2;
+    if (best > option3) best = option3;
+    return 1 + best;
+}
+
+
+
 enum Yield_Result
 {
     YIELD_COMPLETED,
@@ -167,7 +188,7 @@ static Yield_Result check_expression(Pipeline_Task* task, Expression id)
 
     #define Wait() return YIELD_NO_PROGRESS;
 
-    #define Error(...) return (report_error(unit->ctx, &(expr)->from, Format(temp, ##__VA_ARGS__)), YIELD_ERROR)
+    #define Error(...) return (report_error(unit->ctx, expr, Format(temp, ##__VA_ARGS__)), YIELD_ERROR)
 
     switch (expr->kind)
     {
@@ -189,18 +210,80 @@ static Yield_Result check_expression(Pipeline_Task* task, Expression id)
 
     case EXPRESSION_NAME:
     {
+        Token const* name = &expr->name.token;
+
         Block*     decl_scope;
         Expression decl_id;
-        if (!find_declaration(unit, &expr->name.token, block, expr->visibility_limit, &decl_scope, &decl_id))
-            Error("Can't find name '%'.", get_identifier(unit->ctx, &expr->name.token));
+        if (!find_declaration(unit, name, block, expr->visibility_limit, &decl_scope, &decl_id))
+        {
+            Token const* best_alternative = NULL;
+            umm          best_distance    = UMM_MAX;
+
+            String    identifier       = get_identifier(unit->ctx, name);
+            Block*    scope            = block;
+            Statement visibility_limit = expr->visibility_limit;
+            while (scope)
+            {
+                for (Expression id = (Expression) 0; id < scope->parsed_expressions.count; id = (Expression)(id + 1))
+                {
+                    auto* expr = &scope->parsed_expressions[id];
+                    if (expr->kind != EXPRESSION_DECLARATION) continue;
+
+                    if (expr->declaration.name.atom == name->atom)
+                    {
+                        report_error(unit->ctx, name, Format(temp, "Can't find name '%'.", identifier),
+                                     &expr->declaration.name, "Maybe you are referring to this, but you don't have visibility because of imperative order."_s);
+                        return YIELD_ERROR;
+                    }
+
+                    String other_identifier = get_identifier(unit->ctx, &expr->declaration.name);
+                    umm distance = edit_distance(identifier, other_identifier);
+                    if (best_distance > distance && distance < identifier.length / 3)
+                    {
+                        best_distance = distance;
+                        best_alternative = &expr->declaration.name;
+                    }
+                }
+
+                visibility_limit = scope->parent_scope_visibility_limit;
+                scope            = scope->parent_scope;
+            }
+
+            if (best_alternative)
+            {
+                report_error(unit->ctx, name, Format(temp, "Can't find name '%'.", identifier),
+                             best_alternative, Format(temp, "Maybe you meant '%'?", get_identifier(unit->ctx, best_alternative)));
+                return YIELD_ERROR;
+            }
+
+            Error("Can't find name '%'.", identifier);
+        }
 
         Inferred_Expression* decl_infer = &decl_scope->inferred_expressions[decl_id];
         if (decl_infer->type == INVALID_TYPE) Wait();
 
-        assert(decl_infer->size   != INVALID_STORAGE_SIZE);
-        assert(decl_infer->offset != INVALID_STORAGE_OFFSET);
-        infer->size   = decl_infer->size;
-        infer->offset = decl_infer->offset;
+        if (decl_infer->type == TYPE_SOFT_INTEGER)
+        {
+            Integer copy = int_clone(&task->constants[decl_infer->constant_index]);
+            infer->constant_index = add_constant_integer(&copy);
+        }
+        else if (decl_infer->type == TYPE_SOFT_FLOATING_POINT)
+        {
+            NotImplemented;
+        }
+        else if (decl_infer->type == TYPE_SOFT_BOOL)
+        {
+            infer->constant_bool = decl_infer->constant_bool;
+        }
+        else
+        {
+            assert(!is_soft_type(decl_infer->type));
+            assert(decl_infer->size   != INVALID_STORAGE_SIZE);
+            assert(decl_infer->offset != INVALID_STORAGE_OFFSET);
+            infer->size   = decl_infer->size;
+            infer->offset = decl_infer->offset;
+        }
+
         Infer(decl_infer->type);
     } break;
 
@@ -282,10 +365,56 @@ static Yield_Result check_expression(Pipeline_Task* task, Expression id)
 
     case EXPRESSION_DECLARATION:
     {
-        Type type = expr->declaration.parsed_type;
-        if (!is_primitive_type(type)) NotImplemented;
-        allocate_unit_storage(unit, type, &infer->size, &infer->offset);
-        Infer(type);
+        Type value_type = INVALID_TYPE;
+        if (expr->declaration.value != NO_EXPRESSION)
+        {
+            value_type = block->inferred_expressions[expr->declaration.value].type;
+            if (value_type == INVALID_TYPE) Wait();
+        }
+
+        if (expr->flags & EXPRESSION_IS_CONSTANT_DECLARATION)
+        {
+            assert(expr->declaration.value != NO_EXPRESSION);
+            assert(expr->declaration.parsed_type == INVALID_TYPE);
+
+            auto* value_infer = &block->inferred_expressions[expr->declaration.value];
+            if (value_type == TYPE_SOFT_INTEGER)
+            {
+                Integer copy = int_clone(&task->constants[value_infer->constant_index]);
+                infer->constant_index = add_constant_integer(&copy);
+            }
+            else if (value_type == TYPE_SOFT_FLOATING_POINT)
+            {
+                NotImplemented;
+            }
+            else if (value_type == TYPE_SOFT_BOOL)
+            {
+                infer->constant_bool = value_infer->constant_bool;
+            }
+            else if (!is_soft_type(value_type))
+                Error("RHS is not a constant.");
+            else Unreachable;
+
+            Infer(value_type);
+        }
+        else
+        {
+            Type type = expr->declaration.parsed_type;
+            if (type == INVALID_TYPE)
+            {
+                if (is_soft_type(value_type))
+                    Error("An explicit type is required in this context.");
+                type = value_type;
+            }
+
+            if (!is_primitive_type(type)) NotImplemented;
+            allocate_unit_storage(unit, type, &infer->size, &infer->offset);
+
+            if (expr->declaration.value != NO_EXPRESSION)
+                if (type != value_type)
+                    Error("LHS and RHS types don't match.");
+            Infer(type);
+        }
     } break;
 
     case EXPRESSION_ASSIGNMENT:

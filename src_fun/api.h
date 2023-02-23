@@ -203,6 +203,8 @@ inline bool is_soft_type            (Type type) { return type == TYPE_SOFT_ZERO 
 enum Expression:  u32 {};
 enum Statement:   u32 {};
 
+static constexpr Expression NO_EXPRESSION = (Expression) 0xFFFFFFFF;
+
 enum Block_Index: u32 {};
 static constexpr Block_Index NO_BLOCK = (Block_Index) 0xFFFFFFFF;
 
@@ -290,6 +292,11 @@ enum Expression_Kind: u16
     EXPRESSION_CALL,
 };
 
+enum: flags16
+{
+    EXPRESSION_IS_CONSTANT_DECLARATION = 0x0001,
+};
+
 struct Parsed_Expression
 {
     Expression_Kind kind;
@@ -311,8 +318,9 @@ struct Parsed_Expression
 
         struct
         {
-            Token name;
-            Type  parsed_type;
+            Token      name;
+            Type       parsed_type;
+            Expression value;
         } declaration;
 
         struct
@@ -473,6 +481,7 @@ String location_report_part(Compiler* ctx, Token_Info const* info);
 bool report_error_locationless(Compiler* ctx, String message);
 bool report_error(Compiler* ctx, Token const* at, String message);
 bool report_error(Compiler* ctx, Token const* at1, String message1, Token const* at2, String message2);
+bool report_error(Compiler* ctx, Parsed_Expression const* at, String message);
 
 
 ////////////////////////////////////////////////////////////////////////////////

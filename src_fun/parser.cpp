@@ -139,8 +139,8 @@ struct Block_Builder
 {
     Block* block;
     Dynamic_Array<Parsed_Expression> expressions;
-    Concatenator<Parsed_Statement>  statements;
-    Concatenator<Child_Block>       children_blocks;
+    Concatenator <Parsed_Statement>  statements;
+    Concatenator <Child_Block>       children_blocks;
 };
 
 static void finish_building(Compiler* ctx, Block_Builder* builder)
@@ -195,6 +195,9 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
         Parsed_Expression* expr = add_expression(builder, EXPRESSION_NEGATE, 0, start, unary_operand, out_expression);
         expr->unary_operand = unary_operand;
     }
+    else if (maybe_take_atom(stream, ATOM_ZERO))  add_expression(builder, EXPRESSION_ZERO,  0, start, start, out_expression);
+    else if (maybe_take_atom(stream, ATOM_TRUE))  add_expression(builder, EXPRESSION_TRUE,  0, start, start, out_expression);
+    else if (maybe_take_atom(stream, ATOM_FALSE)) add_expression(builder, EXPRESSION_FALSE, 0, start, start, out_expression);
     else if (maybe_take_atom(stream, ATOM_INTEGER))
     {
         Parsed_Expression* expr = add_expression(builder, EXPRESSION_INTEGER_LITERAL, 0, start, start, out_expression);
@@ -202,15 +205,75 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
     }
     else if (maybe_take_atom(stream, ATOM_FIRST_IDENTIFIER))
     {
-        if (Token* colon = maybe_take_atom(stream, ATOM_COLON))
+        if (maybe_take_atom(stream, ATOM_COLON))
         {
-            Type type;
-            if (!parse_type(stream, &type))
-                return false;
+            For (builder->expressions)
+                if (it->kind == EXPRESSION_DECLARATION)
+                    if (it->declaration.name.atom == start->atom)
+                    {
+                        String identifier = get_identifier(stream->ctx, start);
 
-            Parsed_Expression* expr = add_expression(builder, EXPRESSION_DECLARATION, 0, start, start, out_expression);
-            expr->declaration.name = *start;
-            expr->declaration.parsed_type = type;
+                        String old_source_token = get_source_token(stream->ctx, &it->declaration.name);
+                        String new_source_token = get_source_token(stream->ctx, start);
+
+                        return ReportError(stream->ctx,
+                            start, Format(temp, "Duplicate declaration of '%'.", identifier),
+                            &it->declaration.name, (old_source_token != new_source_token)
+                                ? "Previously declared here. Keep in mind that multiple '_' characters are collapsed into one."_s
+                                : "Previously declared here."_s);
+                    }
+
+            if (maybe_take_atom(stream, ATOM_LEFT_PARENTHESIS))
+            {
+                NotImplemented;
+            }
+            else if (maybe_take_atom(stream, ATOM_COLON))
+            {
+                Expression value;
+                if (!parse_expression(stream, builder, &value))
+                    return false;
+
+                Parsed_Expression* expr = add_expression(builder, EXPRESSION_DECLARATION, EXPRESSION_IS_CONSTANT_DECLARATION, start, value, out_expression);
+                expr->declaration.name = *start;
+                expr->declaration.parsed_type = INVALID_TYPE;
+                expr->declaration.value = value;
+            }
+            else if (maybe_take_atom(stream, ATOM_EQUAL))
+            {
+                Expression value;
+                if (!parse_expression(stream, builder, &value))
+                    return false;
+
+                Parsed_Expression* expr = add_expression(builder, EXPRESSION_DECLARATION, 0, start, value, out_expression);
+                expr->declaration.name = *start;
+                expr->declaration.parsed_type = INVALID_TYPE;
+                expr->declaration.value = value;
+            }
+            else
+            {
+                Type type;
+                if (!parse_type(stream, &type))
+                    return false;
+
+                if (maybe_take_atom(stream, ATOM_EQUAL))
+                {
+                    Expression value;
+                    if (!parse_expression(stream, builder, &value))
+                        return false;
+
+                    Parsed_Expression* expr = add_expression(builder, EXPRESSION_DECLARATION, 0, start, value, out_expression);
+                    expr->declaration.name = *start;
+                    expr->declaration.parsed_type = type;
+                    expr->declaration.value = value;
+                }
+                else
+                {
+                    Parsed_Expression* expr = add_expression(builder, EXPRESSION_DECLARATION, 0, start, stream->cursor - 1, out_expression);
+                    expr->declaration.name = *start;
+                    expr->declaration.parsed_type = type;
+                    expr->declaration.value = NO_EXPRESSION;
+                }
+            }
         }
         else
         {
@@ -262,6 +325,7 @@ static bool parse_expression(Token_Stream* stream, Block_Builder* builder, Expre
         {
             switch (kind)
             {
+            case EXPRESSION_ASSIGNMENT:       return 0;
             case EXPRESSION_EQUAL:            return 1;
             case EXPRESSION_NOT_EQUAL:        return 1;
             case EXPRESSION_GREATER_THAN:     return 2;
@@ -272,7 +336,6 @@ static bool parse_expression(Token_Stream* stream, Block_Builder* builder, Expre
             case EXPRESSION_SUBTRACT:         return 3;
             case EXPRESSION_MULTIPLY:         return 4;
             case EXPRESSION_DIVIDE:           return 4;
-            case EXPRESSION_ASSIGNMENT:       return 5;
             default:                          return U32_MAX;
             }
         };
@@ -476,151 +539,6 @@ static Block* parse_statement_block(Token_Stream* stream)
         return (Block*) ReportError(stream->ctx, next_token_or_eof(stream), "Expected '{' or 'do' to start a block."_s);
     }
 }
-
-#if 0
-Procedure* parse_procedure_or_macro(Compiler* ctx, Token_Stream* stream)
-{
-    bool is_macro = (stream->cursor->atom == ATOM_MACRO);
-    bool is_proc  = !is_macro;
-    Token* start = stream->cursor++;  // take PROC/MACRO
-
-    Token* name = stream->cursor;
-    if (!take_atom(stream, ATOM_FIRST_IDENTIFIER,
-                   is_macro ? "Expected the procedure name after 'macro'."_s
-                            : "Expected the procedure name after 'proc'."_s))
-        return NULL;
-
-
-    // Parse parameter list
-    Token* header_start = stream->cursor;
-    if (!take_atom(stream, ATOM_LEFT_PARENTHESIS, "Expected a parameter list starting with '('."_s))
-        return NULL;
-
-    Dynamic_Array<Parameter> parameters = {};
-    Defer(free_heap_array(&parameters));
-
-    bool allow_comma = false;
-    while (stream->cursor < stream->end && stream->cursor->atom != ATOM_RIGHT_PARENTHESIS)
-    {
-        if (allow_comma)
-        {
-            Parameter* previous_parameter = &parameters[parameters.count - 1];
-            if (is_proc)
-            {
-                if (!take_atom(stream, ATOM_COMMA, "Expected either a ',' or ')'."_s))
-                    return NULL;
-                previous_parameter->flags |= PARAMETER_FOLLOWED_BY_COMMA;
-                if (stream->cursor >= stream->end)
-                    return (Procedure*) ReportErrorEOF(ctx, stream,
-                        "Unexpected ',' at the end of the file. Expected a parameter declaration.\n"_s);
-            }
-            else if (maybe_take_atom(stream, ATOM_COMMA))
-                previous_parameter->flags |= PARAMETER_FOLLOWED_BY_COMMA;
-
-        }
-
-        Parameter* parameter = reserve_item(&parameters);
-        parameter->kind = PARAMETER_LITERAL;
-
-        Token* backtick = stream->cursor;
-        bool is_token_parameter = maybe_take_atom(stream, ATOM_BACKTICK);
-        if (is_token_parameter)
-        {
-            if (is_proc)
-                return (Procedure*) ReportError(ctx, backtick, "Procedures can't accept token parameters."_s);
-            parameter->kind = PARAMETER_TOKEN;
-        }
-
-        Token* name = stream->cursor;
-        if (!take_atom(stream, ATOM_FIRST_IDENTIFIER, "Expected either an identifier or ')'."_s))
-            return NULL;
-        parameter->name = *name;
-
-        if (maybe_take_atom(stream, ATOM_COLON))
-        {
-            if (is_token_parameter)
-                return (Procedure*) ReportError(ctx, backtick, "Token parameters don't have types."_s);
-            parameter->kind = PARAMETER_VARIABLE;
-
-            if (!parse_type(ctx, stream, &parameter->parsed_type))
-                return NULL;
-        }
-        else if (is_proc)
-            return (Procedure*) ReportError(ctx, name,
-                    "Expected a ':' followed by the parameter type.\n"
-                    "(Procedures can't accept literal parameters, only macros.)"_s);
-
-        allow_comma = true;
-    }
-    if (!take_atom(stream, ATOM_RIGHT_PARENTHESIS, "Parameter list was not closed by ')'."_s))
-        return NULL;
-
-    Type return_type = TYPE_VOID;
-    bool accepts_code_block = false;
-    if (maybe_take_atom(stream, ATOM_CODE_BLOCK))
-    {
-        if (!is_macro)
-            return (Procedure*) ReportError(ctx, stream->cursor, "Only macros can accept a code_block! This is a procedure."_s);
-        accepts_code_block = true;
-    }
-    else if (stream->cursor < stream->end && (stream->cursor->atom != ATOM_LEFT_BRACE && stream->cursor->atom != ATOM_DO))
-    {
-        if (!parse_type(ctx, stream, &return_type))
-            return NULL;
-    }
-
-
-    // Create declaration
-    Declaration declaration = (Declaration) ctx->declarations.count;
-    if (declaration & DECLARATION_IS_GLOBAL)
-        return (Procedure*) ReportError(ctx, name,
-            Format(temp, "Too many declarations! Limit is %.", DECLARATION_IS_GLOBAL));
-    declaration = (Declaration)(declaration | DECLARATION_IS_GLOBAL);
-
-    Declaration previous_declaration;
-    if (set(&ctx->declaration_table, &name->atom, &declaration, &previous_declaration))
-    {
-        assert(previous_declaration & DECLARATION_IS_GLOBAL);
-        Declaration_Data* old_declaration_data = &ctx->declarations[previous_declaration & DECLARATION_INDEX_MASK];
-        if (old_declaration_data->kind != DECLARATION_PROCEDURE_OR_MACRO)
-            return (Procedure*) ReportError(ctx,
-                name, Format(temp, "Duplicate global declaration with name '%'.", get_identifier(ctx, name)),
-                &old_declaration_data->name, "Also declared here."_s);
-    }
-    else
-    {
-        previous_declaration = DECLARATION_INVALID;
-    }
-
-    Declaration_Data* declaration_data = reserve_item(&ctx->declarations);
-    declaration_data->kind = DECLARATION_PROCEDURE_OR_MACRO;
-    declaration_data->name = *name;
-    declaration_data->next_overload = previous_declaration;
-
-    // Create procedure
-    Procedure* procedure = PushValue(&ctx->parser_memory, Procedure);
-    procedure->from = *start;
-    procedure->name = *name;
-    if (is_macro)
-        procedure->flags |= PROCEDURE_IS_MACRO;
-    if (accepts_code_block)
-        procedure->flags |= PROCEDURE_EXPECTS_CODE_BLOCK;
-
-    procedure->parameters = parameters;
-    parameters = {};  // clear so it doesn't get freed by a Defer above
-    procedure->return_type = return_type;
-    declaration_data->procedure_or_macro = procedure;
-
-    // Parse body
-    Block* block = parse_statement_block(stream);
-    if (!block)
-        return NULL;
-    procedure->entry_block = block;
-    procedure->to = *(stream->cursor - 1);
-
-    return procedure;
-}
-#endif
 
 Run* parse_run(Compiler* ctx, Token_Stream* stream)
 {
