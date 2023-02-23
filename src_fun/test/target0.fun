@@ -2,7 +2,9 @@
 
 run
 {
-    bla: s8;
+    debug 42069e1000 / 59012;
+
+    /*bla: s8;
     bla = cast(s8, -128);
     debug bla;
 
@@ -13,7 +15,7 @@ run
     else
     {
         debug cast(s64, 15);
-    }
+    }*/
 
     /*a: f32 = 123.45e+6;
     if a > 1e100 [[unlikely]]

@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include "../src_common/common.h"
 #include "../src_common/hash.h"
+#include "../src_common/integer.h"
 #include "api.h"
 
 EnterApplicationNamespace

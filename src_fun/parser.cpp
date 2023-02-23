@@ -1,5 +1,6 @@
 #include "../src_common/common.h"
 #include "../src_common/hash.h"
+#include "../src_common/integer.h"
 #include "api.h"
 #include <stdio.h>
 
@@ -249,19 +250,81 @@ static bool parse_expression(Token_Stream* stream, Block_Builder* builder, Expre
     Expression lhs;
     if (!parse_expression_leaf(stream, builder, &lhs))
         return false;
-    *out_expression = lhs;
 
-    if (maybe_take_atom(stream, ATOM_EQUAL))
+    Dynamic_Array<Expression_Kind> ops   = {};
+    Dynamic_Array<Expression>      exprs = {};
+    Defer(free_heap_array(&ops));
+    Defer(free_heap_array(&exprs));
+
+    auto should_pop = [](Expression_Kind lhs, Expression_Kind rhs)
     {
-        Expression rhs;
-        if (!parse_expression(stream, builder, &rhs))
-            return false;
+        auto priority = [](Expression_Kind kind) -> u32
+        {
+            switch (kind)
+            {
+            case EXPRESSION_EQUAL:            return 1;
+            case EXPRESSION_NOT_EQUAL:        return 1;
+            case EXPRESSION_GREATER_THAN:     return 2;
+            case EXPRESSION_GREATER_OR_EQUAL: return 2;
+            case EXPRESSION_LESS_THAN:        return 2;
+            case EXPRESSION_LESS_OR_EQUAL:    return 2;
+            case EXPRESSION_ADD:              return 3;
+            case EXPRESSION_SUBTRACT:         return 3;
+            case EXPRESSION_MULTIPLY:         return 4;
+            case EXPRESSION_DIVIDE:           return 4;
+            case EXPRESSION_ASSIGNMENT:       return 5;
+            default:                          return U32_MAX;
+            }
+        };
 
-        Parsed_Expression* expr = add_expression(builder, EXPRESSION_ASSIGNMENT, 0, lhs, rhs, out_expression);
-        expr->binary.lhs = lhs;
-        expr->binary.rhs = rhs;
+        if (priority(lhs) > priority(rhs)) return true;
+        if (priority(lhs) < priority(rhs)) return false;
+        if (lhs == EXPRESSION_ASSIGNMENT && rhs == EXPRESSION_ASSIGNMENT)
+            return false;
+        return true;
+    };
+
+    auto pop = [&]()
+    {
+        Expression      binop_lhs  = exprs.address[exprs.count - 2];
+        Expression      binop_rhs  = exprs.address[exprs.count - 1];
+        Expression_Kind binop_kind = ops  .address[ops  .count - 1];
+        exprs.count--;
+        ops  .count--;
+
+        Parsed_Expression* expr = add_expression(builder, binop_kind, 0, binop_lhs, binop_rhs, &exprs.address[exprs.count - 1]);
+        expr->binary.lhs = binop_lhs;
+        expr->binary.rhs = binop_rhs;
+    };
+
+    add_item(&exprs, &lhs);
+
+    while (true)
+    {
+        Expression_Kind op;
+             if (maybe_take_atom(stream, ATOM_EQUAL))         op = EXPRESSION_ASSIGNMENT;
+        else if (maybe_take_atom(stream, ATOM_PLUS))          op = EXPRESSION_ADD;
+        else if (maybe_take_atom(stream, ATOM_MINUS))         op = EXPRESSION_SUBTRACT;
+        else if (maybe_take_atom(stream, ATOM_STAR))          op = EXPRESSION_MULTIPLY;
+        else if (maybe_take_atom(stream, ATOM_SLASH))         op = EXPRESSION_DIVIDE;
+        else if (maybe_take_atom(stream, ATOM_EQUAL))         op = EXPRESSION_EQUAL;
+        else if (maybe_take_atom(stream, ATOM_BANG_EQUAL))    op = EXPRESSION_NOT_EQUAL;
+        else if (maybe_take_atom(stream, ATOM_GREATER))       op = EXPRESSION_GREATER_THAN;
+        else if (maybe_take_atom(stream, ATOM_GREATER_EQUAL)) op = EXPRESSION_GREATER_OR_EQUAL;
+        else if (maybe_take_atom(stream, ATOM_LESS))          op = EXPRESSION_LESS_THAN;
+        else if (maybe_take_atom(stream, ATOM_LESS_EQUAL))    op = EXPRESSION_LESS_OR_EQUAL;
+        else break;
+
+        Expression rhs;
+        if (!parse_expression_leaf(stream, builder, &rhs)) return false;
+        while (ops.count && should_pop(ops[ops.count - 1], op)) pop();
+        add_item(&ops, &op);
+        add_item(&exprs, &rhs);
     }
 
+    while (ops.count) pop();
+    assert(exprs.count == 1);
+    *out_expression = exprs[0];
     return true;
 }
 

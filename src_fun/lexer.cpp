@@ -1,6 +1,6 @@
 #include "../src_common/common.h"
 #include "../src_common/hash.h"
-
+#include "../src_common/integer.h"
 #include "api.h"
 #include <stdio.h>
 
@@ -76,7 +76,7 @@ bool lex_from_memory(Compiler* ctx, String name, String code, Array<Token>* out_
     static const constexpr u8 CHARACTER_DIGIT_BASE10            =  8;
     static const constexpr u8 CHARACTER_DIGIT_BASE16            = 16;
     static const constexpr u8 CHARACTER_WHITE                   = 32;
-    static const constexpr alignas(256) u8 CHARACTER_CLASS[256] =
+    static const constexpr u8 CHARACTER_CLASS[256] =
     {
          0, 0, 0, 0, 0, 0, 0, 0, 0,32,32, 0, 0,32, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         32, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,14,14,10,10,10,10,10,10,10,10, 0, 0, 0, 0, 0, 0,
@@ -153,6 +153,12 @@ bool lex_from_memory(Compiler* ctx, String name, String code, Array<Token>* out_
     if (cursor + 1 < end && cursor[0] == '#' && cursor[1] == '!')
         while (cursor < end && *cursor != '\n') cursor++;
 
+    Integer integer_ten = {};
+    Integer integer_digit = {};
+    Defer(int_free(&integer_ten));
+    Defer(int_free(&integer_digit));
+    int_set16(&integer_ten, 10);
+
     while (cursor < end)
     {
         u8 c  = *cursor;
@@ -180,25 +186,57 @@ bool lex_from_memory(Compiler* ctx, String name, String code, Array<Token>* out_
             info->source_index = source_index;
             info->offset       = cursor - start;
 
-            u64 value = 0;
+            Integer value = {};
+            int_set_zero(&value);
             while (cursor < end)
             {
                 c  = *cursor;
                 cc = CHARACTER_CLASS[c];
                 if (cc & CHARACTER_DIGIT_BASE10)
                 {
-                    u64 new_value = value * 10 + (c - '0');
-                    if (new_value < value)
-                        LexError("Integer literal doesn't fit in 64 bits.")
-                    value = new_value;
+                    int_set16(&integer_digit, c - '0');
+                    int_mul(&value, &integer_ten);
+                    int_add(&value, &integer_digit);
                 }
                 else if (c != '_')
                     break;
                 cursor++;
             }
 
+            if (cursor < end && (*cursor == 'e' || *cursor == 'E'))
+            {
+                cursor++;
+
+                Integer exponent = {};
+                Defer(int_free(&exponent));
+                bool found_at_least_one_digit = false;
+                while (cursor < end)
+                {
+                    c  = *cursor;
+                    cc = CHARACTER_CLASS[c];
+                    if (cc & CHARACTER_DIGIT_BASE10)
+                    {
+                        found_at_least_one_digit = true;
+
+                        int_set16(&integer_digit, c - '0');
+                        int_mul(&exponent, &integer_ten);
+                        int_add(&exponent, &integer_digit);
+                    }
+                    else if (c != '_')
+                        break;
+                    cursor++;
+                }
+                if (!found_at_least_one_digit)
+                    LexError("Missing exponent in numeric literal.")
+
+                Integer multiplier = {};
+                int_pow(&multiplier, &integer_ten, &exponent);
+                int_mul(&value, &multiplier);
+                int_free(&multiplier);
+            }
+
             info->length = (cursor - start) - info->offset;
-            info->value  = value;
+            info->value = value;
             continue;
         }
 

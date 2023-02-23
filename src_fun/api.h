@@ -122,10 +122,10 @@ CompileTimeAssert(sizeof(Token_Info) == 8);
 
 struct Token_Info_Integer: Token_Info
 {
-    u64 value;
+    Integer value;
 };
 
-CompileTimeAssert(sizeof(Token_Info_Integer) == 16);
+CompileTimeAssert(sizeof(Token_Info_Integer) == 40);
 
 struct Token
 {

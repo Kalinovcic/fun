@@ -116,6 +116,45 @@ static Memory* run_expression(Unit* unit, byte* storage, Block* block, Expressio
     return address;
 }
 
+static String int_base10(Integer const* integer, Region* memory)
+{
+    Integer i = int_clone(integer);
+    Defer(int_free(&i));
+    if (i.negative)
+        int_negate(&i);
+
+    Integer ten = {};
+    int_set16(&ten, 10);
+    Defer(int_free(&ten));
+
+    String_Concatenator cat = {};
+    if (int_is_zero(&i))
+        add(&cat, "0"_s);
+    else while (!int_is_zero(&i))
+    {
+        Integer mod = {};
+        Defer(int_free(&mod));
+        int_div(&i, &ten, &mod);
+
+        u32 number = mod.size ? mod.digit[0] : 0;
+        assert(number < 10);
+        char c = '0' + number;
+        add(&cat, &c, 1);
+    }
+
+    if (integer->negative)
+        add(&cat, "-"_s);
+
+    String str = resolve_to_string_and_free(&cat, memory);
+    for (umm i = 0; i < str.length - i - 1; i++)
+    {
+        u8 temp = str[i];
+        str[i] = str[str.length - i - 1];
+        str[str.length - i - 1] = temp;
+    }
+    return str;
+}
+
 static void run_block(Unit* unit, byte* storage, Block* block)
 {
     For (block->parsed_statements)
@@ -147,28 +186,40 @@ static void run_block(Unit* unit, byte* storage, Block* block)
 
         case STATEMENT_DEBUG_OUTPUT:
         {
-            Memory* value = run_expression(unit, storage, block, it->expression);
-            switch (block->inferred_expressions[it->expression].type)
+            auto* infer = &block->inferred_expressions[it->expression];
+            switch (infer->type)
             {
-            case TYPE_U8:                   printf("%llu\n", (unsigned long long) value->as_u8);  break;
-            case TYPE_U16:                  printf("%llu\n", (unsigned long long) value->as_u16); break;
-            case TYPE_U32:                  printf("%llu\n", (unsigned long long) value->as_u32); break;
-            case TYPE_U64:                  printf("%llu\n", (unsigned long long) value->as_u64); break;
-            case TYPE_S8:                   printf("%lld\n", (long long) value->as_s8);  break;
-            case TYPE_S16:                  printf("%lld\n", (long long) value->as_s16); break;
-            case TYPE_S32:                  printf("%lld\n", (long long) value->as_s32); break;
-            case TYPE_S64:                  printf("%lld\n", (long long) value->as_s64); break;
-            case TYPE_SOFT_INTEGER:         printf("<soft integer>\n"); break;
-            case TYPE_F16:                  printf("<f16>\n"); break;
-            case TYPE_F32:                  printf("%f\n", (double) value->as_f32); break;
-            case TYPE_F64:                  printf("%f\n", (double) value->as_f64); break;
+            case TYPE_SOFT_INTEGER:
+            {
+                String str = int_base10(&block->constants[infer->constant_index], temp);
+                printf("%.*s\n", StringArgs(str));
+            } break;
             case TYPE_SOFT_FLOATING_POINT:  printf("<soft floating point>\n"); break;
-            case TYPE_BOOL8:                printf("%s\n", value->as_u8  ? "true" : "false"); break;
-            case TYPE_BOOL16:               printf("%s\n", value->as_u16 ? "true" : "false"); break;
-            case TYPE_BOOL32:               printf("%s\n", value->as_u32 ? "true" : "false"); break;
-            case TYPE_BOOL64:               printf("%s\n", value->as_u64 ? "true" : "false"); break;
-            case TYPE_SOFT_BOOL:            printf("<soft bool>\n"); break;
-            IllegalDefaultCase;
+            case TYPE_SOFT_BOOL:            printf("%s\n", infer->constant_bool ? "true" : "false"); break;
+            default:
+                Memory* value = run_expression(unit, storage, block, it->expression);
+                switch (infer->type)
+                {
+                case TYPE_U8:                   printf("%llu\n", (unsigned long long) value->as_u8);  break;
+                case TYPE_U16:                  printf("%llu\n", (unsigned long long) value->as_u16); break;
+                case TYPE_U32:                  printf("%llu\n", (unsigned long long) value->as_u32); break;
+                case TYPE_U64:                  printf("%llu\n", (unsigned long long) value->as_u64); break;
+                case TYPE_S8:                   printf("%lld\n", (long long) value->as_s8);  break;
+                case TYPE_S16:                  printf("%lld\n", (long long) value->as_s16); break;
+                case TYPE_S32:                  printf("%lld\n", (long long) value->as_s32); break;
+                case TYPE_S64:                  printf("%lld\n", (long long) value->as_s64); break;
+                case TYPE_SOFT_INTEGER:         printf("<soft integer>\n"); break;
+                case TYPE_F16:                  printf("<f16>\n"); break;
+                case TYPE_F32:                  printf("%f\n", (double) value->as_f32); break;
+                case TYPE_F64:                  printf("%f\n", (double) value->as_f64); break;
+                case TYPE_SOFT_FLOATING_POINT:  printf("<soft floating point>\n"); break;
+                case TYPE_BOOL8:                printf("%s\n", value->as_u8  ? "true" : "false"); break;
+                case TYPE_BOOL16:               printf("%s\n", value->as_u16 ? "true" : "false"); break;
+                case TYPE_BOOL32:               printf("%s\n", value->as_u32 ? "true" : "false"); break;
+                case TYPE_BOOL64:               printf("%s\n", value->as_u64 ? "true" : "false"); break;
+                case TYPE_SOFT_BOOL:            printf("<soft bool>\n"); break;
+                IllegalDefaultCase;
+                }
             }
         } break;
 
@@ -185,6 +236,7 @@ static void allocate_remaining_unit_storage(Unit* unit, Block* block)
         Inferred_Expression* infer = &block->inferred_expressions[i];
         if (infer->offset != INVALID_STORAGE_OFFSET) continue;
         assert(infer->type != INVALID_TYPE);
+        if (is_soft_type(infer->type)) continue;  // soft types don't have a runtime address
         allocate_unit_storage(unit, infer->type, &infer->size, &infer->offset);
     }
 

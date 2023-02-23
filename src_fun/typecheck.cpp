@@ -85,16 +85,16 @@ static u64 get_type_size(Unit* unit, Type type)
     case TYPE_S16:                 return 2;
     case TYPE_S32:                 return 4;
     case TYPE_S64:                 return 8;
-    case TYPE_SOFT_INTEGER:        return 8;  // @Reconsider - Unreachable;
+    case TYPE_SOFT_INTEGER:        Unreachable;
     case TYPE_F16:                 return 2;
     case TYPE_F32:                 return 4;
     case TYPE_F64:                 return 8;
-    case TYPE_SOFT_FLOATING_POINT: return 8;  // @Reconsider - Unreachable;
+    case TYPE_SOFT_FLOATING_POINT: Unreachable;
     case TYPE_BOOL8:               return 1;
     case TYPE_BOOL16:              return 2;
     case TYPE_BOOL32:              return 4;
     case TYPE_BOOL64:              return 8;
-    case TYPE_SOFT_BOOL:           return 1;  // @Reconsider - Unreachable;
+    case TYPE_SOFT_BOOL:           Unreachable;
     IllegalDefaultCase;
     }
 }
@@ -177,10 +177,10 @@ static Yield_Result check_expression(Pipeline_Task* task, Expression id)
     case EXPRESSION_FALSE:                  Infer(TYPE_SOFT_BOOL);
     case EXPRESSION_INTEGER_LITERAL:
     {
-        Integer integer = {};
-        int_setu64(&integer, ((Token_Info_Integer*) get_token_info(unit->ctx, &expr->literal))->value);
-        infer->constant_index = add_constant_integer(&integer);
+        Token_Info_Integer* token_info = (Token_Info_Integer*) get_token_info(unit->ctx, &expr->literal);
 
+        Integer integer = int_clone(&token_info->value);
+        infer->constant_index = add_constant_integer(&integer);
         Infer(TYPE_SOFT_INTEGER);
     } break;
 
@@ -271,9 +271,12 @@ static Yield_Result check_expression(Pipeline_Task* task, Expression id)
         {
             NotImplemented;
         }
-        else assert(!is_soft_type(op_infer->type));
+        else
+        {
+            assert(!is_soft_type(op_infer->type));
+            // @Incomplete - check if cast is possible
+        }
 
-        // @Incomplete - check if cast is possible
         Infer(cast_type);
     } break;
 
@@ -298,10 +301,45 @@ static Yield_Result check_expression(Pipeline_Task* task, Expression id)
         Infer(lhs_type);
     } break;
 
-    case EXPRESSION_ADD:              NotImplemented;
-    case EXPRESSION_SUBTRACT:         NotImplemented;
-    case EXPRESSION_MULTIPLY:         NotImplemented;
-    case EXPRESSION_DIVIDE:           NotImplemented;
+    case EXPRESSION_ADD:
+    case EXPRESSION_SUBTRACT:
+    case EXPRESSION_MULTIPLY:
+    case EXPRESSION_DIVIDE:
+    {
+        Type lhs_type = block->inferred_expressions[expr->binary.lhs].type;
+        Type rhs_type = block->inferred_expressions[expr->binary.rhs].type;
+        if (lhs_type == INVALID_TYPE || rhs_type == INVALID_TYPE) Wait();
+        if (lhs_type != rhs_type)
+            Error("LHS and RHS types don't match.");
+        if (!is_numeric_type(lhs_type))
+            Error("Expected a numeric operand.");
+
+        if (lhs_type == TYPE_SOFT_INTEGER)
+        {
+            Integer const* lhs_int = &task->constants[block->inferred_expressions[expr->binary.lhs].constant_index];
+            Integer const* rhs_int = &task->constants[block->inferred_expressions[expr->binary.rhs].constant_index];
+            Integer result = int_clone(lhs_int);
+                 if (expr->kind == EXPRESSION_ADD)      int_add(&result, rhs_int);
+            else if (expr->kind == EXPRESSION_SUBTRACT) int_sub(&result, rhs_int);
+            else if (expr->kind == EXPRESSION_MULTIPLY) int_mul(&result, rhs_int);
+            else if (expr->kind == EXPRESSION_DIVIDE)
+            {
+                Integer mod = {};
+                Defer(int_free(&mod));
+                if (!int_div(&result, rhs_int, &mod))
+                    Error("Division by zero!");
+            }
+            infer->constant_index = add_constant_integer(&result);
+        }
+        else if (lhs_type == TYPE_SOFT_FLOATING_POINT)
+        {
+            NotImplemented;
+        }
+        else assert(!is_soft_type(lhs_type));
+
+        Infer(lhs_type);
+    } break;
+
     case EXPRESSION_EQUAL:            NotImplemented;
     case EXPRESSION_NOT_EQUAL:        NotImplemented;
     case EXPRESSION_GREATER_THAN:     NotImplemented;
