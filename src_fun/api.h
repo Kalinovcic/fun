@@ -42,8 +42,6 @@ enum Atom: u32
 
     // keywords
     ATOM_TYPE,                  // type
-    ATOM_PROC,                  // proc
-    ATOM_MACRO,                 // macro
     ATOM_CODE_BLOCK,            // code_block
     ATOM_GLOBAL,                // global
     ATOM_THREAD_LOCAL,          // thread_local
@@ -176,6 +174,8 @@ enum Type: u32
     TYPE_BOOL64,
     TYPE_SOFT_BOOL,
 
+    TYPE_SOFT_BLOCK,  // refers to a constant parsed block, not yet materialized as part of a unit
+
     TYPE_ONE_PAST_LAST_PRIMITIVE_TYPE,
 
     TYPE_FIRST_USER_TYPE = TYPE_ONE_PAST_LAST_PRIMITIVE_TYPE,
@@ -190,7 +190,7 @@ inline bool is_numeric_type         (Type type) { return is_integer_type(type) |
 inline bool is_bool_type            (Type type) { return type >= TYPE_BOOL8 && type <= TYPE_SOFT_BOOL;                    }
 inline bool is_primitive_type       (Type type) { return type >= TYPE_VOID  && type < TYPE_ONE_PAST_LAST_PRIMITIVE_TYPE;  }
 inline bool is_user_defined_type    (Type type) { return type >= TYPE_FIRST_USER_TYPE;                                    }
-inline bool is_soft_type            (Type type) { return type == TYPE_SOFT_ZERO || type == TYPE_SOFT_INTEGER || type == TYPE_SOFT_FLOATING_POINT || type == TYPE_SOFT_BOOL; }
+inline bool is_soft_type            (Type type) { return type == TYPE_SOFT_ZERO || type == TYPE_SOFT_INTEGER || type == TYPE_SOFT_FLOATING_POINT || type == TYPE_SOFT_BOOL || type == TYPE_SOFT_BLOCK; }
 
 
 
@@ -209,27 +209,17 @@ enum Block_Index: u32 {};
 static constexpr Block_Index NO_BLOCK = (Block_Index) 0xFFFFFFFF;
 
 
-static constexpr u32 INVALID_CONSTANT_INDEX = U32_MAX;
-static constexpr u64 INVALID_STORAGE_SIZE   = U64_MAX;
-static constexpr u64 INVALID_STORAGE_OFFSET = U64_MAX;
-
-struct Inferred_Expression
+enum: flags32
 {
-    union
-    {
-        u32    constant_index;
-        bool   constant_bool;
-    };
-    Type       type;
-    u64        size;
-    u64        offset;
+    BLOCK_HAS_CODE_BLOCK_PARAMETER = 0x0001,
 };
 
 struct Block
 {
     // Filled out in parsing:
-    Token from;
-    Token to;
+    flags32 flags;
+    Token   from;
+    Token   to;
 
     Array<struct Parsed_Expression const> parsed_expressions;
     Array<struct Parsed_Statement  const> parsed_statements;
@@ -242,6 +232,9 @@ struct Block
 
     Block*    parent_scope;
     Statement parent_scope_visibility_limit;
+
+    Block*      materialized_code_block_parameter_parent;
+    Block_Index materialized_code_block_parameter_index;
 };
 
 struct Child_Block
@@ -256,6 +249,8 @@ struct Expression_List
     u32        count;
     Expression expressions[0];
 };
+
+CompileTimeAssert(sizeof(Expression_List) == 4);
 
 enum Expression_Kind: u16
 {
@@ -275,7 +270,6 @@ enum Expression_Kind: u16
     EXPRESSION_NEGATE,
 
     // binary operators
-    EXPRESSION_DECLARATION,
     EXPRESSION_ASSIGNMENT,
     EXPRESSION_ADD,
     EXPRESSION_SUBTRACT,
@@ -288,13 +282,18 @@ enum Expression_Kind: u16
     EXPRESSION_LESS_THAN,
     EXPRESSION_LESS_OR_EQUAL,
 
+    // declarations
+    EXPRESSION_VARIABLE_DECLARATION,
+    EXPRESSION_ALIAS_DECLARATION,
+    EXPRESSION_BLOCK_DECLARATION,
+
     // calling expressions
     EXPRESSION_CALL,
 };
 
 enum: flags16
 {
-    EXPRESSION_IS_CONSTANT_DECLARATION = 0x0001,
+    EXPRESSION_IS_IN_PARENTHESES = 0x0001,
 };
 
 struct Parsed_Expression
@@ -319,9 +318,21 @@ struct Parsed_Expression
         struct
         {
             Token      name;
-            Type       parsed_type;
+            Type       parsed_type;  // may be INVALID_TYPE if 'name := value;' declaration
+            Expression value;        // may be NO_EXPRESSION if 'name: Type;' declaration
+        } variable_declaration;
+
+        struct
+        {
+            Token      name;
             Expression value;
-        } declaration;
+        } alias_declaration;
+
+        struct
+        {
+            Token  name;
+            Block* parsed_block;
+        } block_declaration;
 
         struct
         {
@@ -337,13 +348,36 @@ struct Parsed_Expression
 
         struct
         {
+            Expression  lhs;
+            Block_Index block;
             Expression_List const* arguments;
-            Expression call_expr;
         } call;
     };
 };
 
 CompileTimeAssert(sizeof(Parsed_Expression) == 40);
+
+
+static constexpr u64 INVALID_CONSTANT_INDEX = U64_MAX;
+static constexpr u64 INVALID_STORAGE_SIZE   = U64_MAX;
+static constexpr u64 INVALID_STORAGE_OFFSET = U64_MAX;
+
+struct Inferred_Expression
+{
+    Type       type;
+    u32        _padding;
+    u64        size;
+    u64        offset;
+    Block*     called_block;
+    union
+    {
+        u64    constant_index;
+        bool   constant_bool;
+        Block* constant_block;
+    };
+};
+
+CompileTimeAssert(sizeof(Inferred_Expression) == 40);
 
 
 enum Statement_Kind: u16
@@ -353,6 +387,7 @@ enum Statement_Kind: u16
     STATEMENT_IF,
     STATEMENT_WHILE,
     // STATEMENT_YIELD,
+    STATEMENT_CODE_BLOCK_EXPANSION,
     STATEMENT_DEBUG_OUTPUT,
 };
 
@@ -477,7 +512,7 @@ inline String get_identifier(Compiler* ctx, Token const* token)
 }
 
 
-String location_report_part(Compiler* ctx, Token_Info const* info);
+String location_report_part(Compiler* ctx, Token_Info const* info, umm lines_ahead = 2);
 bool report_error_locationless(Compiler* ctx, String message);
 bool report_error(Compiler* ctx, Token const* at, String message);
 bool report_error(Compiler* ctx, Token const* at1, String message1, Token const* at2, String message2);

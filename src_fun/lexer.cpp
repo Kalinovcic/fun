@@ -42,8 +42,6 @@ static void lex_init(Compiler* ctx)
     AddKeyword(ATOM_BOOL64,       "bool64"_s);
     AddKeyword(ATOM_STRUCT,       "struct"_s);
     AddKeyword(ATOM_TYPE,         "type"_s);
-    AddKeyword(ATOM_PROC,         "proc"_s);
-    AddKeyword(ATOM_MACRO,        "macro"_s);
     AddKeyword(ATOM_CODE_BLOCK,   "code_block"_s);
     AddKeyword(ATOM_GLOBAL,       "global"_s);
     AddKeyword(ATOM_THREAD_LOCAL, "thread_local"_s);
@@ -459,7 +457,7 @@ void get_line_and_column(Compiler* ctx, Token_Info const* info, u32* out_line, u
 
 static bool enable_color_output();
 
-String location_report_part(Compiler* ctx, Token_Info const* info)
+String location_report_part(Compiler* ctx, Token_Info const* info, umm lines_ahead)
 {
     bool supports_color = enable_color_output();
     String lowlight  = supports_color ? "\x1b[30;1m"_s : ""_s;
@@ -467,10 +465,10 @@ String location_report_part(Compiler* ctx, Token_Info const* info)
     String reset     = supports_color ? "\x1b[m"_s     : ""_s;
 
     u32 line, column;
-    String source_lines[3];
-    get_line_and_column(ctx, info, &line, &column, make_array(source_lines));
+    Array<String> source_lines = allocate_array<String>(temp, lines_ahead + 1);
+    get_line_and_column(ctx, info, &line, &column, source_lines);
 
-    String last_line = source_lines[ArrayCount(source_lines) - 1];
+    String last_line = source_lines[source_lines.count - 1];
     umm extra_lines_in_last_line = 0;
     for (umm i = 0; i < last_line.length; i++)
         if (last_line[i] == '\n')
@@ -485,12 +483,12 @@ String location_report_part(Compiler* ctx, Token_Info const* info)
         line_characters = 4;
 
     String output = {};
-    if (line >= 3)
-        FormatAppend(&output, temp, "%~% >% %\n",
-            lowlight, s64_format(line - 2, line_characters), reset, source_lines[0]);
-    if (line >= 2)
-        FormatAppend(&output, temp, "%~% >% %\n",
-            lowlight, s64_format(line - 1, line_characters), reset, source_lines[1]);
+    for (umm i = lines_ahead; i; i--)
+    {
+        if (line >= 1 + i)
+            FormatAppend(&output, temp, "%~% >% %\n",
+                lowlight, s64_format(line - i, line_characters), reset, source_lines[lines_ahead - i]);
+    }
     FormatAppend(&output, temp, "%~% >% %~%",
         lowlight, s64_format(line, line_characters), reset, line_before, highlight);
     while (String highlighted_text = consume_line_preserve_whitespace(&line_highlight))

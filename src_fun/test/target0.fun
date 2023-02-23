@@ -2,16 +2,33 @@
 
 run
 {
-    /*foo: ()
-    {
-    };*/
+    POO :: 123;
 
-    c := cast(u64, POO * 3);
+    repeat3: (code_block)
+    {
+        debug 420;
+        i := cast(u64, 10);
+        while (i)
+        {
+            code_block;
+            i = i - cast(u64, 1);
+        }
+        debug 420;
+    }
+
+    alias :: repeat3;
+
+    alias()
+    {
+        debug 69;
+    }
+
+    /*c := cast(u64, POO * 3);
     b := cast(u64, POO * 2);
     a := cast(u64, POO :: 123);
     debug a;
     debug b;
-    debug c;
+    debug c;*/
 
     /*
     poo1: void;
@@ -22,7 +39,7 @@ run
     bla: s8 = cast(s8, -128);
     debug bla;
 
-    if cast(s64, 5)
+    if (cast(s64, 5))
     {
         debug cast(s64, 5);
     }
@@ -31,16 +48,5 @@ run
         debug cast(s64, 15);
     }
     */
-
-    /*a: f32 = 123.45e+6;
-    if a > 1e100 [[unlikely]]
-    {
-    }
-
-    yield void;
-
-    exit: u32 = 60;
-    code: u32 = 69;
-    syscall(exit, code);*/
 }
 

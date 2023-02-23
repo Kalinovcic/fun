@@ -24,6 +24,8 @@ union Memory
     f64  as_f64;
 };
 
+static void run_block(Unit* unit, byte* storage, Block* block);
+
 static Memory* run_expression(Unit* unit, byte* storage, Block* block, Expression id)
 {
     auto*   expr    = &block->parsed_expressions[id];
@@ -80,20 +82,23 @@ static Memory* run_expression(Unit* unit, byte* storage, Block* block, Expressio
         }
     } break;
 
-    case EXPRESSION_DECLARATION:
+    case EXPRESSION_VARIABLE_DECLARATION:
     {
         u64 size = infer->size;
-        if (expr->declaration.value == NO_EXPRESSION)
+        if (expr->variable_declaration.value == NO_EXPRESSION)
         {
             memset(address, 0, size);
         }
         else
         {
-            assert(size == block->inferred_expressions[expr->declaration.value].size);
-            Memory* value = run_expression(unit, storage, block, expr->declaration.value);
+            assert(size == block->inferred_expressions[expr->variable_declaration.value].size);
+            Memory* value = run_expression(unit, storage, block, expr->variable_declaration.value);
             memcpy(address, value, size);
         }
     } break;
+
+    case EXPRESSION_ALIAS_DECLARATION: Unreachable;
+    case EXPRESSION_BLOCK_DECLARATION:    Unreachable;
 
     case EXPRESSION_ASSIGNMENT:
     {
@@ -108,7 +113,27 @@ static Memory* run_expression(Unit* unit, byte* storage, Block* block, Expressio
     } break;
 
     case EXPRESSION_ADD: NotImplemented;
-    case EXPRESSION_SUBTRACT: NotImplemented;
+    case EXPRESSION_SUBTRACT:
+    {
+        Memory* lhs = run_expression(unit, storage, block, expr->binary.lhs);
+        Memory* rhs = run_expression(unit, storage, block, expr->binary.rhs);
+
+        switch (infer->type)
+        {
+        case TYPE_U8:  address->as_u8  = lhs->as_u8  - rhs->as_u8;  break;
+        case TYPE_U16: address->as_u16 = lhs->as_u16 - rhs->as_u16; break;
+        case TYPE_U32: address->as_u32 = lhs->as_u32 - rhs->as_u32; break;
+        case TYPE_U64: address->as_u64 = lhs->as_u64 - rhs->as_u64; break;
+        case TYPE_S8:  address->as_s8  = lhs->as_s8  - rhs->as_s8;  break;
+        case TYPE_S16: address->as_s16 = lhs->as_s16 - rhs->as_s16; break;
+        case TYPE_S32: address->as_s32 = lhs->as_s32 - rhs->as_s32; break;
+        case TYPE_S64: address->as_s64 = lhs->as_s64 - rhs->as_s64; break;
+        case TYPE_F32: address->as_f32 = lhs->as_f32 - rhs->as_f32; break;
+        case TYPE_F64: address->as_f64 = lhs->as_f64 - rhs->as_f64; break;
+        IllegalDefaultCase;
+        }
+    } break;
+
     case EXPRESSION_MULTIPLY: NotImplemented;
     case EXPRESSION_DIVIDE: NotImplemented;
     case EXPRESSION_EQUAL: NotImplemented;
@@ -117,7 +142,14 @@ static Memory* run_expression(Unit* unit, byte* storage, Block* block, Expressio
     case EXPRESSION_GREATER_OR_EQUAL: NotImplemented;
     case EXPRESSION_LESS_THAN: NotImplemented;
     case EXPRESSION_LESS_OR_EQUAL: NotImplemented;
-    case EXPRESSION_CALL: NotImplemented;
+
+    case EXPRESSION_CALL:
+    {
+        if (expr->call.arguments->count)
+            NotImplemented;
+        assert(infer->called_block);
+        run_block(unit, storage, infer->called_block);
+    } break;
 
     IllegalDefaultCase;
     }
@@ -166,6 +198,15 @@ static String int_base10(Integer const* integer, Region* memory)
 
 static void run_block(Unit* unit, byte* storage, Block* block)
 {
+    for (umm i = 0; i < block->inferred_expressions.count; i++)
+    {
+        Inferred_Expression* infer = &block->inferred_expressions[i];
+        if (infer->offset != INVALID_STORAGE_OFFSET) continue;
+        assert(infer->type != INVALID_TYPE);
+        if (is_soft_type(infer->type)) continue;  // soft types don't have a runtime address
+        allocate_unit_storage(unit, infer->type, &infer->size, &infer->offset);
+    }
+
     For (block->parsed_statements)
     {
         switch (it->kind)
@@ -194,6 +235,14 @@ static void run_block(Unit* unit, byte* storage, Block* block)
                 run_block(unit, storage, block->children_blocks[it->true_block].child);
         } break;
 
+        case STATEMENT_CODE_BLOCK_EXPANSION:
+        {
+            assert(block->materialized_code_block_parameter_parent);
+            Block* expand = block->materialized_code_block_parameter_parent->children_blocks[
+                                block->materialized_code_block_parameter_index].child;
+            run_block(unit, storage, expand);
+        } break;
+
         case STATEMENT_DEBUG_OUTPUT:
         {
             auto* infer = &block->inferred_expressions[it->expression];
@@ -206,6 +255,18 @@ static void run_block(Unit* unit, byte* storage, Block* block)
             } break;
             case TYPE_SOFT_FLOATING_POINT:  printf("<soft floating point>\n"); break;
             case TYPE_SOFT_BOOL:            printf("%s\n", infer->constant_bool ? "true" : "false"); break;
+            case TYPE_SOFT_BLOCK:
+            {
+                Token_Info info;
+                {
+                    Token_Info* from_info = get_token_info(unit->ctx, &infer->constant_block->from);
+                    Token_Info* to_info   = get_token_info(unit->ctx, &infer->constant_block->to);
+                    info = *from_info;
+                    info.length = to_info->offset + to_info->length - from_info->offset;
+                }
+                String location = location_report_part(unit->ctx, &info, 1);
+                printf("<soft block>\n%.*s\n", StringArgs(location));
+            } break;
             default:
                 Memory* value = run_expression(unit, storage, block, it->expression);
                 switch (infer->type)
@@ -218,16 +279,13 @@ static void run_block(Unit* unit, byte* storage, Block* block)
                 case TYPE_S16:                  printf("%lld\n", (long long) value->as_s16); break;
                 case TYPE_S32:                  printf("%lld\n", (long long) value->as_s32); break;
                 case TYPE_S64:                  printf("%lld\n", (long long) value->as_s64); break;
-                case TYPE_SOFT_INTEGER:         printf("<soft integer>\n"); break;
                 case TYPE_F16:                  printf("<f16>\n"); break;
                 case TYPE_F32:                  printf("%f\n", (double) value->as_f32); break;
                 case TYPE_F64:                  printf("%f\n", (double) value->as_f64); break;
-                case TYPE_SOFT_FLOATING_POINT:  printf("<soft floating point>\n"); break;
                 case TYPE_BOOL8:                printf("%s\n", value->as_u8  ? "true" : "false"); break;
                 case TYPE_BOOL16:               printf("%s\n", value->as_u16 ? "true" : "false"); break;
                 case TYPE_BOOL32:               printf("%s\n", value->as_u32 ? "true" : "false"); break;
                 case TYPE_BOOL64:               printf("%s\n", value->as_u64 ? "true" : "false"); break;
-                case TYPE_SOFT_BOOL:            printf("<soft bool>\n"); break;
                 IllegalDefaultCase;
                 }
             }
@@ -239,25 +297,8 @@ static void run_block(Unit* unit, byte* storage, Block* block)
 }
 
 
-static void allocate_remaining_unit_storage(Unit* unit, Block* block)
-{
-    for (umm i = 0; i < block->inferred_expressions.count; i++)
-    {
-        Inferred_Expression* infer = &block->inferred_expressions[i];
-        if (infer->offset != INVALID_STORAGE_OFFSET) continue;
-        assert(infer->type != INVALID_TYPE);
-        if (is_soft_type(infer->type)) continue;  // soft types don't have a runtime address
-        allocate_unit_storage(unit, infer->type, &infer->size, &infer->offset);
-    }
-
-    For (block->children_blocks)
-        allocate_remaining_unit_storage(unit, it->child);
-}
-
 void run_unit(Unit* unit)
 {
-    allocate_remaining_unit_storage(unit, unit->entry_block);
-
     byte* storage = alloc<byte>(NULL, unit->next_storage_offset);
     Defer(free(storage));
     run_block(unit, storage, unit->entry_block);
