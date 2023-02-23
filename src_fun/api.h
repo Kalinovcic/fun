@@ -205,6 +205,8 @@ enum Statement:   u32 {};
 
 static constexpr Expression NO_EXPRESSION = (Expression) 0xFFFFFFFF;
 
+static constexpr Statement NO_VISIBILITY = (Statement) 0xFFFFFFFF;
+
 enum Block_Index: u32 {};
 static constexpr Block_Index NO_BLOCK = (Block_Index) 0xFFFFFFFF;
 
@@ -228,7 +230,7 @@ struct Block
     // Filled out in typechecking:
     Block* materialized_from;
     Array<struct Inferred_Expression> inferred_expressions;  // parallel to parsed_expressions
-    Array<struct Integer> constants;
+    Dynamic_Array<struct Integer> constants;
 
     Block*    parent_scope;
     Statement parent_scope_visibility_limit;
@@ -373,11 +375,15 @@ struct Inferred_Expression
     {
         u64    constant_index;
         bool   constant_bool;
-        Block* constant_block;
+        struct
+        {
+            Block* materialized_parent;
+            Block* parsed_child;
+        } constant_block;
     };
 };
 
-CompileTimeAssert(sizeof(Inferred_Expression) == 40);
+CompileTimeAssert(sizeof(Inferred_Expression) == 48);
 
 
 enum Statement_Kind: u16
@@ -448,8 +454,6 @@ struct Pipeline_Task
 {
     Unit*  unit;
     Block* block;
-
-    Dynamic_Array<Integer> constants;
 };
 
 struct Compiler

@@ -2,26 +2,28 @@
 
 run
 {
-    POO :: 123;
+    N :: 10;
+    M :: 420;
 
-    repeat3: (code_block)
+    foo: ()
     {
-        debug 420;
-        i := cast(u64, 10);
-        while (i)
+        debug M;
+    }
+
+    repeat: (code_block)
+    {
+        foo();
+        n := cast(u64, N);
+        while (n)
         {
             code_block;
-            i = i - cast(u64, 1);
+            n = n - cast(u64, 1);
         }
-        debug 420;
+        foo();
     }
 
-    alias :: repeat3;
-
-    alias()
-    {
+    repeat() do
         debug 69;
-    }
 
     /*c := cast(u64, POO * 3);
     b := cast(u64, POO * 2);

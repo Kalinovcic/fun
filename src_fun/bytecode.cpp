@@ -198,15 +198,6 @@ static String int_base10(Integer const* integer, Region* memory)
 
 static void run_block(Unit* unit, byte* storage, Block* block)
 {
-    for (umm i = 0; i < block->inferred_expressions.count; i++)
-    {
-        Inferred_Expression* infer = &block->inferred_expressions[i];
-        if (infer->offset != INVALID_STORAGE_OFFSET) continue;
-        assert(infer->type != INVALID_TYPE);
-        if (is_soft_type(infer->type)) continue;  // soft types don't have a runtime address
-        allocate_unit_storage(unit, infer->type, &infer->size, &infer->offset);
-    }
-
     For (block->parsed_statements)
     {
         switch (it->kind)
@@ -259,8 +250,8 @@ static void run_block(Unit* unit, byte* storage, Block* block)
             {
                 Token_Info info;
                 {
-                    Token_Info* from_info = get_token_info(unit->ctx, &infer->constant_block->from);
-                    Token_Info* to_info   = get_token_info(unit->ctx, &infer->constant_block->to);
+                    Token_Info* from_info = get_token_info(unit->ctx, &infer->constant_block.parsed_child->from);
+                    Token_Info* to_info   = get_token_info(unit->ctx, &infer->constant_block.parsed_child->to);
                     info = *from_info;
                     info.length = to_info->offset + to_info->length - from_info->offset;
                 }
@@ -297,8 +288,28 @@ static void run_block(Unit* unit, byte* storage, Block* block)
 }
 
 
+static void allocate_remaining_unit_storage(Unit* unit, Block* block)
+{
+    for (umm i = 0; i < block->inferred_expressions.count; i++)
+    {
+        Inferred_Expression* infer = &block->inferred_expressions[i];
+        if (infer->called_block)
+            allocate_remaining_unit_storage(unit, infer->called_block);
+
+        if (infer->offset != INVALID_STORAGE_OFFSET) continue;
+        assert(infer->type != INVALID_TYPE);
+        if (is_soft_type(infer->type)) continue;  // soft types don't have a runtime address
+        allocate_unit_storage(unit, infer->type, &infer->size, &infer->offset);
+    }
+
+    For (block->children_blocks)
+        allocate_remaining_unit_storage(unit, it->child);
+}
+
 void run_unit(Unit* unit)
 {
+    allocate_remaining_unit_storage(unit, unit->entry_block);
+
     byte* storage = alloc<byte>(NULL, unit->next_storage_offset);
     Defer(free(storage));
     run_block(unit, storage, unit->entry_block);

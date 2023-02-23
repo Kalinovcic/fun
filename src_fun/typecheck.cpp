@@ -176,8 +176,8 @@ static Yield_Result check_expression(Pipeline_Task* task, Expression id)
 
     auto add_constant_integer = [&](Integer* integer) -> u32
     {
-        u32 index = task->constants.count;
-        add_item(&task->constants, integer);
+        u32 index = block->constants.count;
+        add_item(&block->constants, integer);
         return index;
     };
 
@@ -280,7 +280,7 @@ static Yield_Result check_expression(Pipeline_Task* task, Expression id)
 
         if (decl_infer->type == TYPE_SOFT_INTEGER)
         {
-            Integer copy = int_clone(&task->constants[decl_infer->constant_index]);
+            Integer copy = int_clone(&decl_scope->constants[decl_infer->constant_index]);
             infer->constant_index = add_constant_integer(&copy);
         }
         else if (decl_infer->type == TYPE_SOFT_FLOATING_POINT)
@@ -317,7 +317,7 @@ static Yield_Result check_expression(Pipeline_Task* task, Expression id)
 
         if (op_infer->type == TYPE_SOFT_INTEGER)
         {
-            Integer integer = int_clone(&task->constants[op_infer->constant_index]);
+            Integer integer = int_clone(&block->constants[op_infer->constant_index]);
             int_negate(&integer);
             infer->constant_index = add_constant_integer(&integer);
         }
@@ -344,7 +344,7 @@ static Yield_Result check_expression(Pipeline_Task* task, Expression id)
 
             u64 target_size = get_type_size(unit, cast_type);
 
-            Integer const* integer = &task->constants[op_infer->constant_index];
+            Integer const* integer = &block->constants[op_infer->constant_index];
             if (integer->negative)
             {
                 if (is_unsigned_integer_type(cast_type))
@@ -417,7 +417,7 @@ static Yield_Result check_expression(Pipeline_Task* task, Expression id)
         if (value_infer->type == INVALID_TYPE) Wait();
         if (value_infer->type == TYPE_SOFT_INTEGER)
         {
-            Integer copy = int_clone(&task->constants[value_infer->constant_index]);
+            Integer copy = int_clone(&block->constants[value_infer->constant_index]);
             infer->constant_index = add_constant_integer(&copy);
         }
         else if (value_infer->type == TYPE_SOFT_FLOATING_POINT)
@@ -441,7 +441,8 @@ static Yield_Result check_expression(Pipeline_Task* task, Expression id)
 
     case EXPRESSION_BLOCK_DECLARATION:
     {
-        infer->constant_block = expr->block_declaration.parsed_block;
+        infer->constant_block.materialized_parent = block;
+        infer->constant_block.parsed_child = expr->block_declaration.parsed_block;
         Infer(TYPE_SOFT_BLOCK);
     } break;
 
@@ -473,8 +474,8 @@ static Yield_Result check_expression(Pipeline_Task* task, Expression id)
 
         if (lhs_type == TYPE_SOFT_INTEGER)
         {
-            Integer const* lhs_int = &task->constants[block->inferred_expressions[expr->binary.lhs].constant_index];
-            Integer const* rhs_int = &task->constants[block->inferred_expressions[expr->binary.rhs].constant_index];
+            Integer const* lhs_int = &block->constants[block->inferred_expressions[expr->binary.lhs].constant_index];
+            Integer const* rhs_int = &block->constants[block->inferred_expressions[expr->binary.rhs].constant_index];
             Integer result = int_clone(lhs_int);
                  if (expr->kind == EXPRESSION_ADD)      int_add(&result, rhs_int);
             else if (expr->kind == EXPRESSION_SUBTRACT) int_sub(&result, rhs_int);
@@ -514,7 +515,8 @@ static Yield_Result check_expression(Pipeline_Task* task, Expression id)
         if (expr->call.arguments->count)
             NotImplemented;
 
-        Block* lhs_block = lhs_infer->constant_block;
+        Block* lhs_parent = lhs_infer->constant_block.materialized_parent;
+        Block* lhs_block  = lhs_infer->constant_block.parsed_child;
         assert(lhs_block);
 
         bool expects_code_block = lhs_block->flags & BLOCK_HAS_CODE_BLOCK_PARAMETER;
@@ -524,7 +526,7 @@ static Yield_Result check_expression(Pipeline_Task* task, Expression id)
         else if (!expects_code_block && have_code_block)
             Error("Callee doesn't expect a block parameter.");
 
-        Block* callee = materialize_block(unit, lhs_block, NULL, (Statement) 0);
+        Block* callee = materialize_block(unit, lhs_block, lhs_parent, NO_VISIBILITY);
         callee->materialized_code_block_parameter_parent = block;
         callee->materialized_code_block_parameter_index  = expr->call.block;
         infer->called_block = callee;
@@ -565,8 +567,6 @@ static Yield_Result check_block(Pipeline_Task* task)
 
     if (waiting)
         return made_progress ? YIELD_MADE_PROGRESS : YIELD_NO_PROGRESS;
-    block->constants = allocate_array(&unit->memory, &task->constants);
-    free_heap_array(&task->constants);
 
     // typecheck statements
     // @Incomplete
@@ -598,7 +598,7 @@ Unit* materialize_unit(Compiler* ctx, Run* initiator)
     unit->initiator_from = initiator->from;
     unit->initiator_to   = initiator->to;
     unit->initiator_run  = initiator;
-    unit->entry_block    = materialize_block(unit, initiator->entry_block, NULL, (Statement) 0);
+    unit->entry_block    = materialize_block(unit, initiator->entry_block, NULL, NO_VISIBILITY);
     return unit;
 }
 
