@@ -33,6 +33,7 @@ static void lex_init(Compiler* ctx)
     AddKeyword(ATOM_S16,          "s16"_s);
     AddKeyword(ATOM_S32,          "s32"_s);
     AddKeyword(ATOM_S64,          "s64"_s);
+    AddKeyword(ATOM_F16,          "f16"_s);
     AddKeyword(ATOM_F32,          "f32"_s);
     AddKeyword(ATOM_F64,          "f64"_s);
     AddKeyword(ATOM_BOOL8,        "bool8"_s);

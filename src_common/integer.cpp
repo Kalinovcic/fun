@@ -110,6 +110,23 @@ void int_set32(Integer* v, s32 value)
     }
 }
 
+void int_setu64(Integer* v, u64 value)
+{
+    if (!value)
+    {
+        int_set_zero(v);
+        return;
+    }
+
+    u32 size = 0;
+    while (value)
+    {
+        *int_digit(v, size++) = value & DIGIT_MASK;
+        value >>= DIGIT_BITS;
+    }
+    v->size = size;
+}
+
 void int_set(Integer* v, Integer const* a)
 {
     int_free(v);

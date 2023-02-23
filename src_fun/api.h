@@ -31,6 +31,7 @@ enum Atom: u32
     ATOM_S16,                   // s16
     ATOM_S32,                   // s32
     ATOM_S64,                   // s64
+    ATOM_F16,                   // f16
     ATOM_F32,                   // f32
     ATOM_F64,                   // f64
     ATOM_BOOL8,                 // bool8
@@ -149,7 +150,7 @@ constexpr u32 TYPE_BASE_MASK       = ~TYPE_POINTER_MASK;
 
 enum Type: u32
 {
-    TYPE_INVALID,
+    INVALID_TYPE,
 
     TYPE_VOID,
     TYPE_SOFT_ZERO,
@@ -180,13 +181,16 @@ enum Type: u32
     TYPE_FIRST_USER_TYPE = TYPE_ONE_PAST_LAST_PRIMITIVE_TYPE,
 };
 
-inline bool is_integer_type       (Type type) { return type >= TYPE_U8    && type <= TYPE_SOFT_INTEGER;                 }
-inline bool is_floating_point_type(Type type) { return type >= TYPE_F16   && type <= TYPE_SOFT_FLOATING_POINT;          }
-inline bool is_numeric_type       (Type type) { return is_integer_type(type) || is_floating_point_type(type);           }
-inline bool is_boolean_type       (Type type) { return type >= TYPE_BOOL8 && type <= TYPE_SOFT_BOOL;                    }
-inline bool is_primitive_type     (Type type) { return type >= TYPE_VOID  && type <  TYPE_ONE_PAST_LAST_PRIMITIVE_TYPE; }
-inline bool is_user_defined_type  (Type type) { return type >= TYPE_FIRST_USER_TYPE;                                    }
-inline bool is_soft_type          (Type type) { return type == TYPE_SOFT_ZERO || type == TYPE_SOFT_INTEGER || type == TYPE_SOFT_FLOATING_POINT || type == TYPE_SOFT_BOOL; }
+inline u32  get_indirection         (Type type) { return type >> TYPE_POINTER_SHIFT; }
+inline bool is_integer_type         (Type type) { return type >= TYPE_U8    && type <= TYPE_SOFT_INTEGER;                 }
+inline bool is_unsigned_integer_type(Type type) { return type >= TYPE_U8    && type <= TYPE_U64;                          }
+inline bool is_signed_integer_type  (Type type) { return type >= TYPE_S8    && type <= TYPE_S64;                          }
+inline bool is_floating_point_type  (Type type) { return type >= TYPE_F16   && type <= TYPE_SOFT_FLOATING_POINT;          }
+inline bool is_numeric_type         (Type type) { return is_integer_type(type) || is_floating_point_type(type);           }
+inline bool is_bool_type            (Type type) { return type >= TYPE_BOOL8 && type <= TYPE_SOFT_BOOL;                    }
+inline bool is_primitive_type       (Type type) { return type >= TYPE_VOID  && type < TYPE_ONE_PAST_LAST_PRIMITIVE_TYPE;  }
+inline bool is_user_defined_type    (Type type) { return type >= TYPE_FIRST_USER_TYPE;                                    }
+inline bool is_soft_type            (Type type) { return type == TYPE_SOFT_ZERO || type == TYPE_SOFT_INTEGER || type == TYPE_SOFT_FLOATING_POINT || type == TYPE_SOFT_BOOL; }
 
 
 
@@ -202,46 +206,21 @@ enum Statement:   u32 {};
 enum Block_Index: u32 {};
 static constexpr Block_Index NO_BLOCK = (Block_Index) 0xFFFFFFFF;
 
-#if 0
-// top bit in declaration is set for global declarations
-enum Declaration: u32
+
+static constexpr u32 INVALID_CONSTANT_INDEX = U32_MAX;
+static constexpr u64 INVALID_STORAGE_SIZE   = U64_MAX;
+static constexpr u64 INVALID_STORAGE_OFFSET = U64_MAX;
+
+struct Inferred_Expression
 {
-    DECLARATION_IS_GLOBAL  = 0x80000000,
-    DECLARATION_INDEX_MASK = 0x7FFFFFFF,
-    DECLARATION_INVALID    = 0xFFFFFFFF,
-};
-
-
-enum Declaration_Kind: u32
-{
-    DECLARATION_PROCEDURE,
-    DECLARATION_VARIABLE,
-};
-
-struct Declaration_Data
-{
-    // Filled out in parsing:
-    Declaration_Kind kind;
-    Token            name;
-    Declaration      next_overload;
-
     union
     {
-        struct Procedure* procedure;
-        Type parsed_variable_type;
+        u32    constant_index;
+        bool   constant_bool;
     };
-
-    // Filled out in typechecking:
-    Type inferred_type;
-};
-#endif
-
-
-struct Declaration
-{
-    Token      name;
-    Statement  visibility_limit;
-    Expression declared_by;
+    Type       type;
+    u64        size;
+    u64        offset;
 };
 
 struct Block
@@ -256,13 +235,11 @@ struct Block
 
     // Filled out in typechecking:
     Block* materialized_from;
-    Array<Type> inferred_types;  // parallel to expressions
+    Array<struct Inferred_Expression> inferred_expressions;  // parallel to parsed_expressions
+    Array<struct Integer> constants;
 
     Block*    parent_scope;
     Statement parent_scope_visibility_limit;
-
-    // Used in execution:
-    Array<union Runtime_Value> values;  // parallel to expressions
 };
 
 struct Child_Block
@@ -290,9 +267,9 @@ enum Expression_Kind: u16
     EXPRESSION_FLOATING_POINT_LITERAL,
 
     EXPRESSION_NAME,
+    EXPRESSION_CAST,
 
     // unary operators
-    EXPRESSION_CAST,
     EXPRESSION_NEGATE,
 
     // binary operators
@@ -317,29 +294,44 @@ struct Parsed_Expression
 {
     Expression_Kind kind;
     flags16         flags;
-
     Statement       visibility_limit;
-    u32             _padding;
 
     Token from;
     Token to;
 
-    // Weirdly split into two unions to remove unnecessary padding.
-
     union
     {
-        Expression binary_lhs;
-        Expression call_lhs;
-        Type       parsed_type;
-    };
-
-    union
-    {
-        Token name;
         Token literal;
         Expression unary_operand;
-        Expression binary_rhs;
-        Expression_List const* arguments;
+
+        struct
+        {
+            Token token;
+        } name;
+
+        struct
+        {
+            Token name;
+            Type  parsed_type;
+        } declaration;
+
+        struct
+        {
+            Expression lhs;
+            Expression rhs;
+        } binary;
+
+        struct
+        {
+            Expression value;
+            Type       parsed_type;
+        } cast;
+
+        struct
+        {
+            Expression_List const* arguments;
+            Expression call_expr;
+        } call;
     };
 };
 
@@ -399,6 +391,8 @@ struct Unit
     Run*  initiator_run;
 
     Block* entry_block;
+
+    u64 next_storage_offset;
 };
 
 
@@ -411,6 +405,8 @@ struct Pipeline_Task
 {
     Unit*  unit;
     Block* block;
+
+    Dynamic_Array<Integer> constants;
 };
 
 struct Compiler
@@ -493,6 +489,8 @@ Unit* materialize_unit(Compiler* ctx, Run* initiator);
 bool find_declaration(Unit* unit, Token const* name,
                       Block* scope, Statement visibility_limit,
                       Block** out_decl_scope, Expression* out_decl_expr);
+
+void allocate_unit_storage(Unit* unit, Type type, u64* out_size, u64* out_offset);
 
 bool pump_pipeline(Compiler* ctx);
 

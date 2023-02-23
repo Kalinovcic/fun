@@ -17,6 +17,7 @@ void int_free(Integer* v);
 void int_set_zero(Integer* v);                                      // v = 0
 void int_set16(Integer* v, s16 value);                              // v = value
 void int_set32(Integer* v, s32 value);                              // v = value
+void int_setu64(Integer* v, u64 value);                             // v = value
 void int_set(Integer* v, Integer const* a);                         // v = a
 void int_set(Integer* v, String binary, bool big_endian);           // v = binary
 String int_binary_abs(Integer* v, Region* memory, bool big_endian); // returns |v| as binary

@@ -2,21 +2,17 @@
 
 run
 {
-    debug 123;
-    debug 12;
-    debug 1;
-
-    bla: u64;
-    bla = cast(u64, 69);
+    bla: s8;
+    bla = cast(s8, -128);
     debug bla;
 
-    if 5
+    if cast(s64, 5)
     {
-        debug 5;
+        debug cast(s64, 5);
     }
     else
     {
-        debug 15;
+        debug cast(s64, 15);
     }
 
     /*a: f32 = 123.45e+6;

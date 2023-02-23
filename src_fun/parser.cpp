@@ -102,7 +102,7 @@ static bool parse_type(Token_Stream* stream, Type* out_type)
     if (!name)
         return false;
 
-    Type type = TYPE_INVALID;
+    Type type = INVALID_TYPE;
     switch (name->atom)
     {
     case ATOM_VOID:   type = TYPE_VOID;   break;
@@ -114,6 +114,7 @@ static bool parse_type(Token_Stream* stream, Type* out_type)
     case ATOM_S16:    type = TYPE_S16;    break;
     case ATOM_S32:    type = TYPE_S32;    break;
     case ATOM_S64:    type = TYPE_S64;    break;
+    case ATOM_F16:    type = TYPE_F16;    break;
     case ATOM_F32:    type = TYPE_F32;    break;
     case ATOM_F64:    type = TYPE_F64;    break;
     case ATOM_BOOL8:  type = TYPE_BOOL8;  break;
@@ -126,6 +127,7 @@ static bool parse_type(Token_Stream* stream, Type* out_type)
     } break;
     }
 
+    assert(type != INVALID_TYPE);
     *out_type = (Type)(type + (indirection_count << TYPE_POINTER_SHIFT));
     return true;
 }
@@ -135,31 +137,66 @@ static bool parse_type(Token_Stream* stream, Type* out_type)
 struct Block_Builder
 {
     Block* block;
-    Concatenator<Parsed_Expression> expressions;
+    Dynamic_Array<Parsed_Expression> expressions;
     Concatenator<Parsed_Statement>  statements;
     Concatenator<Child_Block>       children_blocks;
 };
 
-static bool parse_expression(Token_Stream* stream, Block_Builder* builder, Expression* out_expression)
+static void finish_building(Compiler* ctx, Block_Builder* builder)
 {
-#define NextExpression() ((Expression) builder->expressions.count)
+    Block* block = builder->block;
+    Region* memory = &ctx->parser_memory;
 
-    auto add_expression = [builder](Expression_Kind kind, flags32 flags, Token* from, Token* to) -> Parsed_Expression*
-    {
-        Parsed_Expression* result = reserve_item(&builder->expressions);
-        result->kind  = kind;
-        result->flags = flags;
-        result->visibility_limit = (Statement) builder->statements.count;
-        result->from  = *from;
-        result->to    = *to;
-        return result;
-    };
+    block->parsed_expressions = const_array(allocate_array(memory, &builder->expressions));
+    block->parsed_statements  = const_array(resolve_to_array_and_free(&builder->statements, memory));
+    block->children_blocks    = const_array(resolve_to_array_and_free(&builder->children_blocks, memory));
+    free_heap_array(&builder->expressions);
+}
 
+// IMPORTANT! Make sure to not use the returned pointer after calling add_expression() again!
+static Parsed_Expression* add_expression(Block_Builder* builder, Expression_Kind kind, flags32 flags, Token* from, Token* to, Expression* out_id)
+{
+    *out_id = (Expression) builder->expressions.count;
+    Parsed_Expression* result = reserve_item(&builder->expressions);
+    result->kind  = kind;
+    result->flags = flags;
+    result->from  = *from;
+    result->to    = *to;
+    result->visibility_limit = (Statement) builder->statements.count;
+    return result;
+}
+
+static Parsed_Expression* add_expression(Block_Builder* builder, Expression_Kind kind, flags32 flags, Token* from, Expression to, Expression* out_id)
+{
+    return add_expression(builder, kind, flags, from, &builder->expressions[to].to, out_id);
+}
+
+static Parsed_Expression* add_expression(Block_Builder* builder, Expression_Kind kind, flags32 flags, Expression from, Token* to, Expression* out_id)
+{
+    return add_expression(builder, kind, flags, &builder->expressions[from].from, to, out_id);
+}
+
+static Parsed_Expression* add_expression(Block_Builder* builder, Expression_Kind kind, flags32 flags, Expression from, Expression to, Expression* out_id)
+{
+    return add_expression(builder, kind, flags, &builder->expressions[from].from, &builder->expressions[to].to, out_id);
+}
+
+static bool parse_expression(Token_Stream* stream, Block_Builder* builder, Expression* out_expression);
+
+static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, Expression* out_expression)
+{
     Token* start = stream->cursor;
-    if (maybe_take_atom(stream, ATOM_INTEGER))
+    if (maybe_take_atom(stream, ATOM_MINUS))
     {
-        *out_expression = NextExpression();
-        Parsed_Expression* expr = add_expression(EXPRESSION_INTEGER_LITERAL, 0, start, start);
+        Expression unary_operand;
+        if (!parse_expression_leaf(stream, builder, &unary_operand))
+            return false;
+        Parsed_Expression* expr = add_expression(builder, EXPRESSION_NEGATE, 0, start, unary_operand, out_expression);
+        expr->unary_operand = unary_operand;
+    }
+    else if (maybe_take_atom(stream, ATOM_INTEGER))
+    {
+        Parsed_Expression* expr = add_expression(builder, EXPRESSION_INTEGER_LITERAL, 0, start, start, out_expression);
         expr->literal = *start;
     }
     else if (maybe_take_atom(stream, ATOM_FIRST_IDENTIFIER))
@@ -170,16 +207,14 @@ static bool parse_expression(Token_Stream* stream, Block_Builder* builder, Expre
             if (!parse_type(stream, &type))
                 return false;
 
-            *out_expression = NextExpression();
-            Parsed_Expression* expr = add_expression(EXPRESSION_DECLARATION, 0, start, start);
-            expr->name = *start;
-            expr->parsed_type = type;
+            Parsed_Expression* expr = add_expression(builder, EXPRESSION_DECLARATION, 0, start, start, out_expression);
+            expr->declaration.name = *start;
+            expr->declaration.parsed_type = type;
         }
         else
         {
-            *out_expression = NextExpression();
-            Parsed_Expression* expr = add_expression(EXPRESSION_NAME, 0, start, start);
-            expr->name = *start;
+            Parsed_Expression* expr = add_expression(builder, EXPRESSION_NAME, 0, start, start, out_expression);
+            expr->name.token = *start;
         }
     }
     else if (maybe_take_atom(stream, ATOM_CAST))
@@ -197,31 +232,37 @@ static bool parse_expression(Token_Stream* stream, Block_Builder* builder, Expre
         if (!take_atom(stream, ATOM_RIGHT_PARENTHESIS, "Expected ')' after the value operand to 'cast'."_s))
             return false;
 
-        *out_expression = NextExpression();
-        Parsed_Expression* expr = add_expression(EXPRESSION_CAST, 0, start, stream->cursor - 1);
-        expr->parsed_type = type;
-        expr->unary_operand = operand;
+        Parsed_Expression* expr = add_expression(builder, EXPRESSION_CAST, 0, start, stream->cursor - 1, out_expression);
+        expr->cast.parsed_type = type;
+        expr->cast.value = operand;
     }
     else
     {
         return ReportError(stream->ctx, next_token_or_eof(stream), "Expected an expression."_s);
     }
 
+    return true;
+}
+
+static bool parse_expression(Token_Stream* stream, Block_Builder* builder, Expression* out_expression)
+{
+    Expression lhs;
+    if (!parse_expression_leaf(stream, builder, &lhs))
+        return false;
+    *out_expression = lhs;
+
     if (maybe_take_atom(stream, ATOM_EQUAL))
     {
-        Expression lhs = *out_expression;
         Expression rhs;
         if (!parse_expression(stream, builder, &rhs))
             return false;
 
-        *out_expression = NextExpression();
-        Parsed_Expression* expr = add_expression(EXPRESSION_ASSIGNMENT, 0, start, stream->cursor - 1);
-        expr->binary_lhs = lhs;
-        expr->binary_rhs = rhs;
+        Parsed_Expression* expr = add_expression(builder, EXPRESSION_ASSIGNMENT, 0, lhs, rhs, out_expression);
+        expr->binary.lhs = lhs;
+        expr->binary.rhs = rhs;
     }
 
     return true;
-#undef NextExpression
 }
 
 static Block* parse_statement_block(Token_Stream* stream);
@@ -339,9 +380,7 @@ static Block* parse_statement_block(Token_Stream* stream)
 
         Block_Builder builder = {};
         builder.block = block;
-        Defer(block->parsed_expressions = const_array(resolve_to_array_and_free(&builder.expressions,     &ctx->parser_memory)));
-        Defer(block->parsed_statements  = const_array(resolve_to_array_and_free(&builder.statements,      &ctx->parser_memory)));
-        Defer(block->children_blocks    = const_array(resolve_to_array_and_free(&builder.children_blocks, &ctx->parser_memory)));
+        Defer(finish_building(ctx, &builder));
 
         while (stream->cursor < stream->end && stream->cursor->atom != ATOM_RIGHT_BRACE)
             if (!parse_statement(stream, &builder))
@@ -361,9 +400,7 @@ static Block* parse_statement_block(Token_Stream* stream)
 
         Block_Builder builder = {};
         builder.block = block;
-        Defer(block->parsed_expressions = const_array(resolve_to_array_and_free(&builder.expressions,     &ctx->parser_memory)));
-        Defer(block->parsed_statements  = const_array(resolve_to_array_and_free(&builder.statements,      &ctx->parser_memory)));
-        Defer(block->children_blocks    = const_array(resolve_to_array_and_free(&builder.children_blocks, &ctx->parser_memory)));
+        Defer(finish_building(ctx, &builder));
 
         if (!parse_statement(stream, &builder))
             return NULL;
