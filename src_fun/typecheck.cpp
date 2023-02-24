@@ -10,7 +10,7 @@ EnterApplicationNamespace
 
 
 static Block* materialize_block(Unit* unit, Block* materialize_from,
-                                Block* parent_scope, Statement parent_scope_visibility_limit)
+                                Block* parent_scope, Visibility parent_scope_visibility_limit)
 {
     Block* block = PushValue(&unit->memory, Block);
 
@@ -45,7 +45,7 @@ static Block* materialize_block(Unit* unit, Block* materialize_from,
 
 
 bool find_declaration(Unit* unit, Token const* name,
-                      Block* scope, Statement visibility_limit,
+                      Block* scope, Visibility visibility_limit,
                       Block** out_decl_scope, Expression* out_decl_expr)
 {
     while (scope)
@@ -246,9 +246,9 @@ static Yield_Result check_expression(Pipeline_Task* task, Expression id)
             Token const* best_alternative = NULL;
             umm          best_distance    = UMM_MAX;
 
-            String    identifier       = get_identifier(unit->ctx, name);
-            Block*    scope            = block;
-            Statement visibility_limit = expr->visibility_limit;
+            String     identifier       = get_identifier(unit->ctx, name);
+            Block*     scope            = block;
+            Visibility visibility_limit = expr->visibility_limit;
             while (scope)
             {
                 for (Expression id = (Expression) 0; id < scope->parsed_expressions.count; id = (Expression)(id + 1))

@@ -122,7 +122,7 @@ static Parsed_Expression* add_expression(Block_Builder* builder, Expression_Kind
     result->flags = 0;
     result->from  = *from;
     result->to    = *to;
-    result->visibility_limit = (Statement) builder->imperative_order.count;
+    result->visibility_limit = (Visibility) builder->imperative_order.count;
     return result;
 }
 

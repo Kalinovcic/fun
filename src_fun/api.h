@@ -210,11 +210,11 @@ inline bool is_soft_type            (Type type) { return type == TYPE_SOFT_ZERO 
 
 
 // enums so we can't just assign any number in assignment
-enum Expression:  u32 {};
-enum Statement:   u32 {};
+enum Expression: u32 {};
+enum Visibility: u32 {};
 
 static constexpr Expression NO_EXPRESSION = (Expression) 0xFFFFFFFF;
-static constexpr Statement  NO_VISIBILITY = (Statement)  0xFFFFFFFF;
+static constexpr Visibility NO_VISIBILITY = (Visibility) 0xFFFFFFFF;
 
 
 enum: flags32
@@ -238,17 +238,11 @@ struct Block
     Array<struct Inferred_Expression> inferred_expressions;  // parallel to parsed_expressions
     Dynamic_Array<struct Integer> constants;
 
-    Block*    parent_scope;
-    Statement parent_scope_visibility_limit;
+    Block*     parent_scope;
+    Visibility parent_scope_visibility_limit;
 
     // Block*      materialized_block_parameter_parent;
     // Block_Index materialized_block_parameter_index;
-};
-
-struct Child_Block
-{
-    Block*    child;
-    Statement visibility_limit;
 };
 
 
@@ -316,7 +310,7 @@ struct Parsed_Expression
 {
     Expression_Kind kind;
     flags16         flags;
-    Statement       visibility_limit;
+    Visibility      visibility_limit;
 
     Token from;
     Token to;
@@ -525,7 +519,7 @@ bool parse_top_level(Compiler* ctx, Array<Token> tokens);
 Unit* materialize_unit(Compiler* ctx, Run* initiator);
 
 bool find_declaration(Unit* unit, Token const* name,
-                      Block* scope, Statement visibility_limit,
+                      Block* scope, Visibility visibility_limit,
                       Block** out_decl_scope, Expression* out_decl_expr);
 
 void allocate_unit_storage(Unit* unit, Type type, u64* out_size, u64* out_offset);
