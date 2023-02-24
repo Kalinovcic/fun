@@ -73,6 +73,7 @@ static Memory* run_expression(Unit* unit, byte* storage, Block* block, Expressio
     auto*   expr    = &block->parsed_expressions[id];
     auto*   infer   = &block->inferred_expressions[id];
     Memory* address = (Memory*)(storage + infer->offset);
+    assert(!(infer->flags & INFERRED_EXPRESSION_IS_NOT_EVALUATED_AT_RUNTIME));
 
     // report_error(unit->ctx, expr, Format(temp, "block: %, kind: %", block, expr->kind));
 
@@ -282,7 +283,7 @@ static void run_block(Unit* unit, byte* storage, Block* block)
     assert(block->flags & BLOCK_RUNTIME_ALLOCATED);
     // report_error(unit->ctx, &block->from, Format(temp, "entered block: %", block));
     For (block->imperative_order)
-        if (block->inferred_expressions[*it].constant_index == INVALID_CONSTANT_INDEX)
+        if (!(block->inferred_expressions[*it].flags & INFERRED_EXPRESSION_IS_NOT_EVALUATED_AT_RUNTIME))
             run_expression(unit, storage, block, *it);
         // else
         //     report_error(unit->ctx, &block->parsed_expressions[*it], Format(temp, "SKIP block: %, kind: %", block, block->parsed_expressions[*it].kind));
@@ -298,9 +299,9 @@ static void allocate_remaining_unit_storage(Unit* unit, Block* block)
         if (infer->called_block)
             allocate_remaining_unit_storage(unit, infer->called_block);
 
+        if (infer->flags & INFERRED_EXPRESSION_IS_NOT_EVALUATED_AT_RUNTIME) continue;
         if (infer->offset != INVALID_STORAGE_OFFSET) continue;
         assert(infer->type != INVALID_TYPE);
-        if (is_soft_type(infer->type)) continue;  // soft types don't have a runtime address
         allocate_unit_storage(unit, infer->type, &infer->size, &infer->offset);
     }
 

@@ -271,7 +271,7 @@ enum Expression_Kind: u16
 enum: flags16
 {
     EXPRESSION_IS_IN_PARENTHESES             = 0x0001,
-    EXPRESSION_IS_PARAMETER                  = 0x0002,
+    EXPRESSION_DECLARATION_IS_PARAMETER      = 0x0002,
     EXPRESSION_DECLARATION_IS_ALIAS          = 0x0004,
     EXPRESSION_DECLARATION_IS_ORDERED        = 0x0008,
     EXPRESSION_ALLOW_PARENT_SCOPE_VISIBILITY = 0x0010,
@@ -341,10 +341,15 @@ struct Soft_Block
     struct Block* parsed_child;
 };
 
+enum: flags32
+{
+    INFERRED_EXPRESSION_IS_NOT_EVALUATED_AT_RUNTIME = 0x0001,
+};
+
 struct Inferred_Expression
 {
+    flags32       flags;
     Type          type;
-    u32           _padding;
     u64           size;
     u64           offset;
     struct Block* called_block;
@@ -358,8 +363,6 @@ struct Inferred_Expression
 };
 
 CompileTimeAssert(sizeof(Inferred_Expression) == 48);
-
-
 
 
 enum: flags32

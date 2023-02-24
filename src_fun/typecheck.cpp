@@ -180,15 +180,21 @@ static Yield_Result check_expression(Pipeline_Task* task, Expression id)
     assert(infer->type == INVALID_TYPE);
 
 
-    #define Infer(t)                                                  \
-    {                                                                 \
-        assert(t != INVALID_TYPE);                                    \
-        if (t == TYPE_SOFT_ZERO)                                      \
-            assert(expr->kind == EXPRESSION_ZERO);                    \
-        else if (is_soft_type(t))                                     \
-            assert(infer->constant_index != INVALID_CONSTANT_INDEX);  \
-        infer->type = t;                                              \
-        return YIELD_COMPLETED;                                       \
+    #define Infer(t)                                                            \
+    {                                                                           \
+        assert(t != INVALID_TYPE);                                              \
+        if (t == TYPE_SOFT_ZERO)                                                \
+            assert(expr->kind == EXPRESSION_ZERO);                              \
+        else if (is_soft_type(t))                                               \
+            assert(infer->constant_index != INVALID_CONSTANT_INDEX);            \
+        if (is_soft_type(t))                                                    \
+        {                                                                       \
+            infer->flags |= INFERRED_EXPRESSION_IS_NOT_EVALUATED_AT_RUNTIME;    \
+            assert(infer->size   == INVALID_STORAGE_SIZE);                      \
+            assert(infer->offset == INVALID_STORAGE_OFFSET);                    \
+        }                                                                       \
+        infer->type = t;                                                        \
+        return YIELD_COMPLETED;                                                 \
     }
 
     #define Wait() return YIELD_NO_PROGRESS;
@@ -341,6 +347,9 @@ static Yield_Result check_expression(Pipeline_Task* task, Expression id)
 
     case EXPRESSION_DECLARATION:
     {
+        if (expr->flags & EXPRESSION_DECLARATION_IS_PARAMETER)
+            infer->flags |= INFERRED_EXPRESSION_IS_NOT_EVALUATED_AT_RUNTIME;
+
         if (expr->flags & EXPRESSION_DECLARATION_IS_ALIAS)
         {
             auto* value_infer = &block->inferred_expressions[expr->declaration.value];

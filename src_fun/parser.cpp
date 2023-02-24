@@ -273,7 +273,7 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
 
                     Expression decl_expr_id;
                     Parsed_Expression* decl_expr = add_expression(&parameter_builder, EXPRESSION_DECLARATION, name, stream->cursor - 1, &decl_expr_id);
-                    decl_expr->flags |= EXPRESSION_IS_PARAMETER;
+                    decl_expr->flags |= EXPRESSION_DECLARATION_IS_PARAMETER;
                     decl_expr->declaration.name  = *name;
                     decl_expr->declaration.type  = type;
                     decl_expr->declaration.value = NO_EXPRESSION;
