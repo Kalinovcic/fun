@@ -54,7 +54,9 @@ bool find_declaration(Unit* unit, Token const* name,
             if (expr->kind != EXPRESSION_DECLARATION) continue;
 
             if (expr->declaration.name.atom != name->atom) continue;
-            if ((expr->flags & EXPRESSION_DECLARATION_IS_ORDERED) && expr->visibility_limit >= visibility_limit) break;
+            if ((expr->flags & EXPRESSION_DECLARATION_IS_ORDERED) &&
+                (expr->visibility_limit >= visibility_limit || visibility_limit == NO_VISIBILITY))
+                break;
 
             *out_decl_scope = scope;
             *out_decl_expr = id;
@@ -258,8 +260,11 @@ static Yield_Result check_expression(Pipeline_Task* task, Expression id)
                     Token const* decl_name = &expr->declaration.name;
                     if (decl_name->atom == name->atom)
                     {
-                        report_error(unit->ctx, name, Format(temp, "Can't find name '%'.", identifier),
-                                     decl_name, "Maybe you are referring to this, but you don't have visibility because of imperative order."_s);
+                        String hint = "Maybe you are referring to this, but you don't have visibility because of imperative order."_s;
+                        if (visibility_limit == NO_VISIBILITY)
+                            hint = "Maybe you are referring to this, but you don't have visibility because it's in an outer scope."_s;
+
+                        report_error(unit->ctx, name, Format(temp, "Can't find name '%'.", identifier), decl_name, hint);
                         return YIELD_ERROR;
                     }
 
@@ -343,82 +348,6 @@ static Yield_Result check_expression(Pipeline_Task* task, Expression id)
         else assert(!is_soft_type(op_infer->type));
 
         Infer(op_infer->type);
-    } break;
-
-    case EXPRESSION_DECLARATION:
-    {
-        if (expr->flags & EXPRESSION_DECLARATION_IS_PARAMETER)
-            infer->flags |= INFERRED_EXPRESSION_IS_NOT_EVALUATED_AT_RUNTIME;
-
-        if (expr->flags & EXPRESSION_DECLARATION_IS_ALIAS)
-        {
-            auto* value_infer = &block->inferred_expressions[expr->declaration.value];
-            if (value_infer->type == INVALID_TYPE) Wait();
-            if (value_infer->type == TYPE_SOFT_INTEGER)
-            {
-                Integer copy = int_clone(&block->constants[value_infer->constant_index]);
-                infer->constant_index = add_constant_integer(&copy);
-            }
-            else if (value_infer->type == TYPE_SOFT_FLOATING_POINT)
-            {
-                NotImplemented;
-            }
-            else if (value_infer->type == TYPE_SOFT_BOOL)
-            {
-                infer->constant_bool = value_infer->constant_bool;
-            }
-            else if (value_infer->type == TYPE_SOFT_TYPE)
-            {
-                infer->constant_type = value_infer->constant_type;
-            }
-            else if (value_infer->type == TYPE_SOFT_BLOCK)
-            {
-                infer->constant_block = value_infer->constant_block;
-            }
-            else if (!is_soft_type(value_infer->type))
-                Error("RHS is not a constant.");
-            else Unreachable;
-
-            Infer(value_infer->type);
-        }
-        else
-        {
-            Type value_type = INVALID_TYPE;
-            if (expr->declaration.value != NO_EXPRESSION)
-            {
-                value_type = block->inferred_expressions[expr->declaration.value].type;
-                if (value_type == INVALID_TYPE) Wait();
-                if (value_type == TYPE_SOFT_BLOCK)
-                    Error("Blocks can't be assigned to runtime values.");
-            }
-
-            Type type = INVALID_TYPE;
-            if (expr->declaration.type != NO_EXPRESSION)
-            {
-                auto* type_infer = &block->inferred_expressions[expr->declaration.type];
-                if (type_infer->type == INVALID_TYPE) Wait();
-
-                if (!is_type_type(type_infer->type))
-                    Error("Expected a type after ':' in declaration.");
-                if (type_infer->type != TYPE_SOFT_TYPE)
-                    Error("The type in declaration is not known at compile-time.");
-                type = type_infer->constant_type;
-            }
-            else
-            {
-                if (is_soft_type(value_type))
-                    Error("An explicit type is required in this context.");
-                type = value_type;
-            }
-
-            if (expr->declaration.value != NO_EXPRESSION)
-                if (type != value_type)
-                    Error("LHS and RHS types don't match.");
-
-            if (!is_primitive_type(type)) NotImplemented;
-            allocate_unit_storage(unit, type, &infer->size, &infer->offset);
-            Infer(type);
-        }
     } break;
 
     case EXPRESSION_ASSIGNMENT:
@@ -594,7 +523,10 @@ static Yield_Result check_expression(Pipeline_Task* task, Expression id)
         else if (!expects_block && have_block)
             Error("Callee doesn't expect a block parameter.");
 
-        Block* callee = materialize_block(unit, lhs_block, lhs_parent, NO_VISIBILITY);
+        Visibility visibility = (expr->flags & EXPRESSION_ALLOW_PARENT_SCOPE_VISIBILITY)
+                ? expr->visibility_limit
+                : NO_VISIBILITY;
+        Block* callee = materialize_block(unit, lhs_block, lhs_parent, visibility);
         // callee->materialized_block_parameter_parent = block;
         // callee->materialized_block_parameter_index  = expr->call.block;
         infer->called_block = callee;
@@ -602,6 +534,84 @@ static Yield_Result check_expression(Pipeline_Task* task, Expression id)
         // @Incomplete
         Infer(TYPE_VOID);
     } break;
+
+    case EXPRESSION_DECLARATION:
+    {
+        if (expr->flags & EXPRESSION_DECLARATION_IS_PARAMETER)
+            infer->flags |= INFERRED_EXPRESSION_IS_NOT_EVALUATED_AT_RUNTIME;
+
+        if (expr->flags & EXPRESSION_DECLARATION_IS_ALIAS)
+        {
+            auto* value_infer = &block->inferred_expressions[expr->declaration.value];
+            if (value_infer->type == INVALID_TYPE) Wait();
+            if (value_infer->type == TYPE_SOFT_INTEGER)
+            {
+                Integer copy = int_clone(&block->constants[value_infer->constant_index]);
+                infer->constant_index = add_constant_integer(&copy);
+            }
+            else if (value_infer->type == TYPE_SOFT_FLOATING_POINT)
+            {
+                NotImplemented;
+            }
+            else if (value_infer->type == TYPE_SOFT_BOOL)
+            {
+                infer->constant_bool = value_infer->constant_bool;
+            }
+            else if (value_infer->type == TYPE_SOFT_TYPE)
+            {
+                infer->constant_type = value_infer->constant_type;
+            }
+            else if (value_infer->type == TYPE_SOFT_BLOCK)
+            {
+                infer->constant_block = value_infer->constant_block;
+            }
+            else if (!is_soft_type(value_infer->type))
+                Error("RHS is not a constant.");
+            else Unreachable;
+
+            Infer(value_infer->type);
+        }
+        else
+        {
+            Type value_type = INVALID_TYPE;
+            if (expr->declaration.value != NO_EXPRESSION)
+            {
+                value_type = block->inferred_expressions[expr->declaration.value].type;
+                if (value_type == INVALID_TYPE) Wait();
+                if (value_type == TYPE_SOFT_BLOCK)
+                    Error("Blocks can't be assigned to runtime values.");
+            }
+
+            Type type = INVALID_TYPE;
+            if (expr->declaration.type != NO_EXPRESSION)
+            {
+                auto* type_infer = &block->inferred_expressions[expr->declaration.type];
+                if (type_infer->type == INVALID_TYPE) Wait();
+
+                if (!is_type_type(type_infer->type))
+                    Error("Expected a type after ':' in declaration.");
+                if (type_infer->type != TYPE_SOFT_TYPE)
+                    Error("The type in declaration is not known at compile-time.");
+                type = type_infer->constant_type;
+            }
+            else
+            {
+                if (is_soft_type(value_type))
+                    Error("An explicit type is required in this context.");
+                type = value_type;
+            }
+
+            if (expr->declaration.value != NO_EXPRESSION)
+                if (type != value_type)
+                    Error("LHS and RHS types don't match.");
+
+            if (!is_primitive_type(type)) NotImplemented;
+            allocate_unit_storage(unit, type, &infer->size, &infer->offset);
+            Infer(type);
+        }
+    } break;
+
+    case EXPRESSION_RUN: NotImplemented;
 
     case EXPRESSION_DEBUG:
     {
@@ -624,7 +634,7 @@ static Yield_Result check_block(Pipeline_Task* task)
     Unit*  unit  = task->unit;
     Block* block = task->block;
 
-#define STRESS_TEST 1
+#define STRESS_TEST 0
 
 #if STRESS_TEST
     static Random rng = {};

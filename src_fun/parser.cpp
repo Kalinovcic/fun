@@ -161,11 +161,11 @@ static bool parse_child_block(Token_Stream* stream, Block_Builder* builder, Expr
 
     Expression block_expr_id;
     Parsed_Expression* block_expr = add_expression(builder, EXPRESSION_BLOCK, &block->from, &block->to, &block_expr_id);
-    block_expr->flags |= EXPRESSION_ALLOW_PARENT_SCOPE_VISIBILITY;
     block_expr->parsed_block = block;
 
     Expression call_expr_id;
     Parsed_Expression* call_expr = add_expression(builder, EXPRESSION_CALL, &block->from, &block->to, &call_expr_id);
+    call_expr->flags |= EXPRESSION_ALLOW_PARENT_SCOPE_VISIBILITY;
     call_expr->call.lhs       = block_expr_id;
     call_expr->call.arguments = make_expression_list(&stream->ctx->parser_memory, 0);
     call_expr->call.block     = NO_EXPRESSION;

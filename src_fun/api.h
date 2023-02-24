@@ -258,13 +258,13 @@ enum Expression_Kind: u16
     EXPRESSION_LESS_OR_EQUAL,
     EXPRESSION_CAST,
 
-    // declarations
-    EXPRESSION_DECLARATION,
-
     // branching expressions
     EXPRESSION_BRANCH,
     EXPRESSION_CALL,
 
+    // other
+    EXPRESSION_DECLARATION,
+    EXPRESSION_RUN,
     EXPRESSION_DEBUG,
 };
 

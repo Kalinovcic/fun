@@ -24,23 +24,22 @@ run
     if (cast(u64, 1))
      => print();
     else
-     => debug 69;
+     => debug 420;
 
 
-/*
     N :: 10;
     M :: 420e100;
 
     foo :: () => debug M;
 
-    repeat :: (block)
+    repeat :: (a: block)
     {
         foo();
-        n := cast(u64, N);
+        n := cast(u8, N);
         while (n)
         {
-            block;
-            n = n - cast(u64, 1);
+            debug 69;
+            n = n - cast(u8, 1);
         }
         foo();
     }
@@ -51,6 +50,5 @@ run
     a := cast(u64, POO :: 123); debug a;
     b := cast(u64, POO * 2);    debug b;
     c := cast(u64, POO * 3);    debug c;
-*/
 }
 
