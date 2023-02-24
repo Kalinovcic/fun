@@ -217,35 +217,6 @@ static constexpr Expression NO_EXPRESSION = (Expression) 0xFFFFFFFF;
 static constexpr Visibility NO_VISIBILITY = (Visibility) 0xFFFFFFFF;
 
 
-enum: flags32
-{
-    BLOCK_IS_PARAMETER_BLOCK  = 0x0001,
-    BLOCK_HAS_BLOCK_PARAMETER = 0x0002,
-};
-
-struct Block
-{
-    // Filled out in parsing:
-    flags32 flags;
-    Token   from;
-    Token   to;
-
-    Array<struct Parsed_Expression const> parsed_expressions;
-    Array<Expression const> imperative_order;
-
-    // Filled out in typechecking:
-    Block* materialized_from;
-    Array<struct Inferred_Expression> inferred_expressions;  // parallel to parsed_expressions
-    Dynamic_Array<struct Integer> constants;
-
-    Block*     parent_scope;
-    Visibility parent_scope_visibility_limit;
-
-    // Block*      materialized_block_parameter_parent;
-    // Block_Index materialized_block_parameter_index;
-};
-
-
 struct Expression_List
 {
     u32        count;
@@ -288,8 +259,7 @@ enum Expression_Kind: u16
     EXPRESSION_CAST,
 
     // declarations
-    EXPRESSION_VARIABLE_DECLARATION,
-    EXPRESSION_ALIAS_DECLARATION,
+    EXPRESSION_DECLARATION,
 
     // branching expressions
     EXPRESSION_BRANCH,
@@ -302,8 +272,10 @@ enum: flags16
 {
     EXPRESSION_IS_IN_PARENTHESES             = 0x0001,
     EXPRESSION_IS_PARAMETER                  = 0x0002,
-    EXPRESSION_ALLOW_PARENT_SCOPE_VISIBILITY = 0x0004,
-    EXPRESSION_BRANCH_IS_LOOP                = 0x0008,
+    EXPRESSION_DECLARATION_IS_ALIAS          = 0x0004,
+    EXPRESSION_DECLARATION_IS_ORDERED        = 0x0008,
+    EXPRESSION_ALLOW_PARENT_SCOPE_VISIBILITY = 0x0010,
+    EXPRESSION_BRANCH_IS_LOOP                = 0x0020,
 };
 
 struct Parsed_Expression
@@ -317,10 +289,10 @@ struct Parsed_Expression
 
     union
     {
-        Token      literal;
-        Expression unary_operand;
-        Type       parsed_type;
-        Block*     parsed_block;
+        Token         literal;
+        Expression    unary_operand;
+        Type          parsed_type;
+        struct Block* parsed_block;
 
         struct
         {
@@ -332,13 +304,7 @@ struct Parsed_Expression
             Token      name;
             Expression type;   // may be NO_EXPRESSION if 'name := value;' declaration
             Expression value;  // may be NO_EXPRESSION if 'name: Type;' declaration
-        } variable_declaration;
-
-        struct
-        {
-            Token      name;
-            Expression value;
-        } alias_declaration;
+        } declaration;
 
         struct
         {
@@ -369,41 +335,61 @@ static constexpr u64 INVALID_CONSTANT_INDEX = U64_MAX;
 static constexpr u64 INVALID_STORAGE_SIZE   = U64_MAX;
 static constexpr u64 INVALID_STORAGE_OFFSET = U64_MAX;
 
+struct Soft_Block
+{
+    struct Block* materialized_parent;
+    struct Block* parsed_child;
+};
+
 struct Inferred_Expression
 {
-    Type       type;
-    u32        _padding;
-    u64        size;
-    u64        offset;
-    Block*     called_block;
+    Type          type;
+    u32           _padding;
+    u64           size;
+    u64           offset;
+    struct Block* called_block;
     union
     {
-        u64    constant_index;
-        bool   constant_bool;
-        Type   constant_type;
-        struct
-        {
-            Block* materialized_parent;
-            Block* parsed_child;
-        } constant_block;
+        u64        constant_index;
+        bool       constant_bool;
+        Type       constant_type;
+        Soft_Block constant_block;
     };
 };
 
 CompileTimeAssert(sizeof(Inferred_Expression) == 48);
 
 
-enum Statement_Kind: u16
+
+
+enum: flags32
 {
-    STATEMENT_EXPRESSION,
+    BLOCK_IS_MATERIALIZED     = 0x0001,
+    BLOCK_IS_PARAMETER_BLOCK  = 0x0002,
+    BLOCK_HAS_BLOCK_PARAMETER = 0x0004,
+    BLOCK_RUNTIME_ALLOCATED   = 0x0008,
 };
 
-struct Parsed_Statement
+struct Block
 {
-    Statement_Kind kind;
-    Token          from;
-    Token          to;
-    Expression     expression;
+    // Filled out in parsing:
+    flags32 flags;
+    Token   from;
+    Token   to;
+
+    Array<struct Parsed_Expression const> parsed_expressions;
+    Array<Expression const> imperative_order;
+
+    // Filled out in typechecking:
+    Block* materialized_from;
+    Array<struct Inferred_Expression> inferred_expressions;  // parallel to parsed_expressions
+    Dynamic_Array<struct Integer> constants;
+
+    Block*     parent_scope;
+    Visibility parent_scope_visibility_limit;
+    Soft_Block block_parameter;
 };
+
 
 
 struct Run

@@ -257,31 +257,34 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
                     if (!take_atom(stream, ATOM_COLON, "Expected ':' between the parameter name and type."_s))
                         return false;
 
+                    if (maybe_take_atom(stream, ATOM_BLOCK))
+                    {
+                        if (!take_atom(stream, ATOM_RIGHT_PARENTHESIS, "Expected ')' after 'block', as it must be the last parameter."_s))
+                            return false;
+
+                        // @Incomplete
+                        parameter_block->flags |= BLOCK_HAS_BLOCK_PARAMETER;
+                        break;
+                    }
+
                     Expression type;
                     if (!parse_expression(stream, &parameter_builder, &type))
                         return false;
 
                     Expression decl_expr_id;
-                    Parsed_Expression* decl_expr = add_expression(&parameter_builder, EXPRESSION_VARIABLE_DECLARATION, name, stream->cursor - 1, &decl_expr_id);
+                    Parsed_Expression* decl_expr = add_expression(&parameter_builder, EXPRESSION_DECLARATION, name, stream->cursor - 1, &decl_expr_id);
                     decl_expr->flags |= EXPRESSION_IS_PARAMETER;
-                    decl_expr->variable_declaration.name  = *name;
-                    decl_expr->variable_declaration.type  = type;
-                    decl_expr->variable_declaration.value = NO_EXPRESSION;
-                    add_item(&builder->imperative_order, &decl_expr_id);
+                    decl_expr->declaration.name  = *name;
+                    decl_expr->declaration.type  = type;
+                    decl_expr->declaration.value = NO_EXPRESSION;
+                    add_item(&parameter_builder.imperative_order, &decl_expr_id);
                 }
                 parameter_block->to = *(stream->cursor - 1);
-
-                // bool accepts_block = maybe_take_atom(stream, ATOM_BLOCK);
-                // if (!take_atom(stream, ATOM_RIGHT_PARENTHESIS, "Expected ')' after the block parameter list."_s))
-                //     return false;
-
-                // if (accepts_block)
-                //     block_flags |= BLOCK_HAS_BLOCK_PARAMETER;
 
                 Expression call;
                 if (!parse_child_block(stream, &parameter_builder, &call))
                     return false;
-                add_item(&builder->imperative_order, &call);
+                add_item(&parameter_builder.imperative_order, &call);
             }
 
             Parsed_Expression* expr = add_expression(builder, EXPRESSION_BLOCK, start, stream->cursor - 1, out_expression);
@@ -330,70 +333,51 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
         {
             For (builder->expressions)
             {
-                Token* old_name = NULL;
-                     if (it->kind == EXPRESSION_VARIABLE_DECLARATION) old_name = &it->variable_declaration.name;
-                else if (it->kind == EXPRESSION_ALIAS_DECLARATION   ) old_name = &it->alias_declaration   .name;
-                if (old_name && old_name->atom == start->atom)
-                {
-                    String identifier = get_identifier(stream->ctx, start);
+                if (it->kind != EXPRESSION_DECLARATION) continue;
+                Token* old_name = &it->declaration.name;
+                if (old_name->atom != start->atom) continue;
 
-                    String old_source_token = get_source_token(stream->ctx, old_name);
-                    String new_source_token = get_source_token(stream->ctx, start);
+                String identifier = get_identifier(stream->ctx, start);
 
-                    return ReportError(stream->ctx,
-                        start, Format(temp, "Duplicate declaration of '%'.", identifier),
-                        old_name, (old_source_token != new_source_token)
-                            ? "Previously declared here. Keep in mind that multiple '_' characters are collapsed into one."_s
-                            : "Previously declared here."_s);
-                }
+                String old_source_token = get_source_token(stream->ctx, old_name);
+                String new_source_token = get_source_token(stream->ctx, start);
+
+                return ReportError(stream->ctx,
+                    start, Format(temp, "Duplicate declaration of '%'.", identifier),
+                    old_name, (old_source_token != new_source_token)
+                        ? "Previously declared here. Keep in mind that multiple '_' characters are collapsed into one."_s
+                        : "Previously declared here."_s);
             }
+
+            bool       alias = false;
+            Expression type  = NO_EXPRESSION;
+            Expression value = NO_EXPRESSION;
 
             if (maybe_take_atom(stream, ATOM_COLON))
             {
-                Expression value;
+                alias = true;
                 if (!parse_expression(stream, builder, &value))
                     return false;
-
-                Parsed_Expression* expr = add_expression(builder, EXPRESSION_ALIAS_DECLARATION, start, value, out_expression);
-                expr->alias_declaration.name = *start;
-                expr->alias_declaration.value = value;
             }
             else if (maybe_take_atom(stream, ATOM_EQUAL))
             {
-                Expression value;
                 if (!parse_expression(stream, builder, &value))
                     return false;
-
-                Parsed_Expression* expr = add_expression(builder, EXPRESSION_VARIABLE_DECLARATION, start, value, out_expression);
-                expr->variable_declaration.name = *start;
-                expr->variable_declaration.type = NO_EXPRESSION;
-                expr->variable_declaration.value = value;
             }
             else
             {
-                Expression type;
                 if (!parse_expression_leaf(stream, builder, &type))
                     return false;
-
                 if (maybe_take_atom(stream, ATOM_EQUAL))
-                {
-                    Expression value;
                     if (!parse_expression(stream, builder, &value))
                         return false;
-
-                    Parsed_Expression* expr = add_expression(builder, EXPRESSION_VARIABLE_DECLARATION, start, value, out_expression);
-                    expr->variable_declaration.name = *start;
-                    expr->variable_declaration.type = type;
-                    expr->variable_declaration.value = value;
-                }
-                else
-                {
-                    Parsed_Expression* expr = add_expression(builder, EXPRESSION_VARIABLE_DECLARATION, start, stream->cursor - 1, out_expression);
-                    expr->variable_declaration.name = *start;
-                    expr->variable_declaration.type = type;
-                    expr->variable_declaration.value = NO_EXPRESSION;
-                }
             }
+
+            Parsed_Expression* expr = add_expression(builder, EXPRESSION_DECLARATION, start, value, out_expression);
+            expr->flags |= alias ? EXPRESSION_DECLARATION_IS_ALIAS : EXPRESSION_DECLARATION_IS_ORDERED;
+            expr->declaration.name  = *start;
+            expr->declaration.type  = type;
+            expr->declaration.value = value;
         }
         else
         {

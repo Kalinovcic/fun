@@ -18,11 +18,11 @@ run
     wrap(block);  // this will make wrap() not compile, because the call to inner() is wrong
 */
 
-    print :: (a: u32)
+    print :: (b: block)
      => debug 123;
 
-    if (cast(u64, 0))
-     => print();
+    if (cast(u64, 1))
+     => print() => debug 420;
     else
      => debug 69;
 

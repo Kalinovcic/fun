@@ -74,6 +74,8 @@ static Memory* run_expression(Unit* unit, byte* storage, Block* block, Expressio
     auto*   infer   = &block->inferred_expressions[id];
     Memory* address = (Memory*)(storage + infer->offset);
 
+    // report_error(unit->ctx, expr, Format(temp, "block: %, kind: %", block, expr->kind));
+
     switch (expr->kind)
     {
 
@@ -104,22 +106,20 @@ static Memory* run_expression(Unit* unit, byte* storage, Block* block, Expressio
         }
     } break;
 
-    case EXPRESSION_VARIABLE_DECLARATION:
+    case EXPRESSION_DECLARATION:
     {
         u64 size = infer->size;
-        if (expr->variable_declaration.value == NO_EXPRESSION)
+        if (expr->declaration.value == NO_EXPRESSION)
         {
             memset(address, 0, size);
         }
         else
         {
-            assert(size == block->inferred_expressions[expr->variable_declaration.value].size);
-            Memory* value = run_expression(unit, storage, block, expr->variable_declaration.value);
+            assert(size == block->inferred_expressions[expr->declaration.value].size);
+            Memory* value = run_expression(unit, storage, block, expr->declaration.value);
             memcpy(address, value, size);
         }
     } break;
-
-    case EXPRESSION_ALIAS_DECLARATION: Unreachable;
 
     case EXPRESSION_ASSIGNMENT:
     {
@@ -278,9 +278,15 @@ static Memory* run_expression(Unit* unit, byte* storage, Block* block, Expressio
 
 static void run_block(Unit* unit, byte* storage, Block* block)
 {
+    assert(block->flags & BLOCK_IS_MATERIALIZED);
+    assert(block->flags & BLOCK_RUNTIME_ALLOCATED);
+    // report_error(unit->ctx, &block->from, Format(temp, "entered block: %", block));
     For (block->imperative_order)
         if (block->inferred_expressions[*it].constant_index == INVALID_CONSTANT_INDEX)
             run_expression(unit, storage, block, *it);
+        // else
+        //     report_error(unit->ctx, &block->parsed_expressions[*it], Format(temp, "SKIP block: %, kind: %", block, block->parsed_expressions[*it].kind));
+    // report_error(unit->ctx, &block->to, Format(temp, "left block: %", block));
 }
 
 
@@ -297,14 +303,15 @@ static void allocate_remaining_unit_storage(Unit* unit, Block* block)
         if (is_soft_type(infer->type)) continue;  // soft types don't have a runtime address
         allocate_unit_storage(unit, infer->type, &infer->size, &infer->offset);
     }
+
+    block->flags |= BLOCK_RUNTIME_ALLOCATED;
 }
 
 void run_unit(Unit* unit)
 {
-    allocate_remaining_unit_storage(unit, unit->entry_block);
-
     byte* storage = alloc<byte>(NULL, unit->next_storage_offset);
     Defer(free(storage));
+    allocate_remaining_unit_storage(unit, unit->entry_block);
     run_block(unit, storage, unit->entry_block);
 }
 

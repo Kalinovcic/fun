@@ -13,10 +13,11 @@ static Block* materialize_block(Unit* unit, Block* materialize_from,
                                 Block* parent_scope, Visibility parent_scope_visibility_limit)
 {
     Block* block = PushValue(&unit->memory, Block);
+    *block = *materialize_from;
+    assert(!(materialize_from->flags & BLOCK_IS_MATERIALIZED));
 
-    block->materialized_from  = materialize_from;
-    block->parsed_expressions = materialize_from->parsed_expressions;
-    block->imperative_order   = materialize_from->imperative_order;
+    block->flags |= BLOCK_IS_MATERIALIZED;
+    block->materialized_from = materialize_from;
 
     block->inferred_expressions = allocate_array<Inferred_Expression>(&unit->memory, block->parsed_expressions.count);
     For (block->inferred_expressions)
@@ -30,10 +31,7 @@ static Block* materialize_block(Unit* unit, Block* materialize_from,
     block->parent_scope                  = parent_scope;
     block->parent_scope_visibility_limit = parent_scope_visibility_limit;
     if (parent_scope && parent_scope_visibility_limit != NO_VISIBILITY)
-    {
-        // block->materialized_block_parameter_parent = parent_scope->materialized_block_parameter_parent;
-        // block->materialized_block_parameter_index  = parent_scope->materialized_block_parameter_index;
-    }
+        block->block_parameter = parent_scope->block_parameter;
 
     Pipeline_Task task = {};
     task.unit  = unit;
@@ -53,15 +51,10 @@ bool find_declaration(Unit* unit, Token const* name,
         for (Expression id = (Expression) 0; id < scope->parsed_expressions.count; id = (Expression)(id + 1))
         {
             auto* expr = &scope->parsed_expressions[id];
+            if (expr->kind != EXPRESSION_DECLARATION) continue;
 
-            Token const* decl_name = NULL;
-                 if (expr->kind == EXPRESSION_VARIABLE_DECLARATION) decl_name = &expr->variable_declaration.name;
-            else if (expr->kind == EXPRESSION_ALIAS_DECLARATION)    decl_name = &expr->alias_declaration   .name;
-            else continue;
-
-            if (decl_name->atom != name->atom) continue;
-            if (expr->kind == EXPRESSION_VARIABLE_DECLARATION &&
-                expr->visibility_limit >= visibility_limit) break;
+            if (expr->declaration.name.atom != name->atom) continue;
+            if ((expr->flags & EXPRESSION_DECLARATION_IS_ORDERED) && expr->visibility_limit >= visibility_limit) break;
 
             *out_decl_scope = scope;
             *out_decl_expr = id;
@@ -254,12 +247,9 @@ static Yield_Result check_expression(Pipeline_Task* task, Expression id)
                 for (Expression id = (Expression) 0; id < scope->parsed_expressions.count; id = (Expression)(id + 1))
                 {
                     auto* expr = &scope->parsed_expressions[id];
+                    if (expr->kind != EXPRESSION_DECLARATION) continue;
 
-                    Token const* decl_name = NULL;
-                         if (expr->kind == EXPRESSION_VARIABLE_DECLARATION) decl_name = &expr->variable_declaration.name;
-                    else if (expr->kind == EXPRESSION_ALIAS_DECLARATION)    decl_name = &expr->alias_declaration   .name;
-                    else continue;
-
+                    Token const* decl_name = &expr->declaration.name;
                     if (decl_name->atom == name->atom)
                     {
                         report_error(unit->ctx, name, Format(temp, "Can't find name '%'.", identifier),
@@ -349,75 +339,77 @@ static Yield_Result check_expression(Pipeline_Task* task, Expression id)
         Infer(op_infer->type);
     } break;
 
-    case EXPRESSION_VARIABLE_DECLARATION:
+    case EXPRESSION_DECLARATION:
     {
-        Type value_type = INVALID_TYPE;
-        if (expr->variable_declaration.value != NO_EXPRESSION)
+        if (expr->flags & EXPRESSION_DECLARATION_IS_ALIAS)
         {
-            value_type = block->inferred_expressions[expr->variable_declaration.value].type;
-            if (value_type == INVALID_TYPE) Wait();
-            if (value_type == TYPE_SOFT_BLOCK)
-                Error("Blocks can't be assigned to runtime values.");
-        }
+            auto* value_infer = &block->inferred_expressions[expr->declaration.value];
+            if (value_infer->type == INVALID_TYPE) Wait();
+            if (value_infer->type == TYPE_SOFT_INTEGER)
+            {
+                Integer copy = int_clone(&block->constants[value_infer->constant_index]);
+                infer->constant_index = add_constant_integer(&copy);
+            }
+            else if (value_infer->type == TYPE_SOFT_FLOATING_POINT)
+            {
+                NotImplemented;
+            }
+            else if (value_infer->type == TYPE_SOFT_BOOL)
+            {
+                infer->constant_bool = value_infer->constant_bool;
+            }
+            else if (value_infer->type == TYPE_SOFT_TYPE)
+            {
+                infer->constant_type = value_infer->constant_type;
+            }
+            else if (value_infer->type == TYPE_SOFT_BLOCK)
+            {
+                infer->constant_block = value_infer->constant_block;
+            }
+            else if (!is_soft_type(value_infer->type))
+                Error("RHS is not a constant.");
+            else Unreachable;
 
-        Type type = INVALID_TYPE;
-        if (expr->variable_declaration.type != NO_EXPRESSION)
-        {
-            auto* type_infer = &block->inferred_expressions[expr->variable_declaration.type];
-            if (type_infer->type == INVALID_TYPE) Wait();
-
-            if (!is_type_type(type_infer->type))
-                Error("Expected a type after ':' in declaration.");
-            if (type_infer->type != TYPE_SOFT_TYPE)
-                Error("The type in declaration is not known at compile-time.");
-            type = type_infer->constant_type;
+            Infer(value_infer->type);
         }
         else
         {
-            if (is_soft_type(value_type))
-                Error("An explicit type is required in this context.");
-            type = value_type;
-        }
+            Type value_type = INVALID_TYPE;
+            if (expr->declaration.value != NO_EXPRESSION)
+            {
+                value_type = block->inferred_expressions[expr->declaration.value].type;
+                if (value_type == INVALID_TYPE) Wait();
+                if (value_type == TYPE_SOFT_BLOCK)
+                    Error("Blocks can't be assigned to runtime values.");
+            }
 
-        if (expr->variable_declaration.value != NO_EXPRESSION)
-            if (type != value_type)
-                Error("LHS and RHS types don't match.");
+            Type type = INVALID_TYPE;
+            if (expr->declaration.type != NO_EXPRESSION)
+            {
+                auto* type_infer = &block->inferred_expressions[expr->declaration.type];
+                if (type_infer->type == INVALID_TYPE) Wait();
 
-        if (!is_primitive_type(type)) NotImplemented;
-        allocate_unit_storage(unit, type, &infer->size, &infer->offset);
-        Infer(type);
-    } break;
+                if (!is_type_type(type_infer->type))
+                    Error("Expected a type after ':' in declaration.");
+                if (type_infer->type != TYPE_SOFT_TYPE)
+                    Error("The type in declaration is not known at compile-time.");
+                type = type_infer->constant_type;
+            }
+            else
+            {
+                if (is_soft_type(value_type))
+                    Error("An explicit type is required in this context.");
+                type = value_type;
+            }
 
-    case EXPRESSION_ALIAS_DECLARATION:
-    {
-        auto* value_infer = &block->inferred_expressions[expr->alias_declaration.value];
-        if (value_infer->type == INVALID_TYPE) Wait();
-        if (value_infer->type == TYPE_SOFT_INTEGER)
-        {
-            Integer copy = int_clone(&block->constants[value_infer->constant_index]);
-            infer->constant_index = add_constant_integer(&copy);
-        }
-        else if (value_infer->type == TYPE_SOFT_FLOATING_POINT)
-        {
-            NotImplemented;
-        }
-        else if (value_infer->type == TYPE_SOFT_BOOL)
-        {
-            infer->constant_bool = value_infer->constant_bool;
-        }
-        else if (value_infer->type == TYPE_SOFT_TYPE)
-        {
-            infer->constant_type = value_infer->constant_type;
-        }
-        else if (value_infer->type == TYPE_SOFT_BLOCK)
-        {
-            infer->constant_block = value_infer->constant_block;
-        }
-        else if (!is_soft_type(value_infer->type))
-            Error("RHS is not a constant.");
-        else Unreachable;
+            if (expr->declaration.value != NO_EXPRESSION)
+                if (type != value_type)
+                    Error("LHS and RHS types don't match.");
 
-        Infer(value_infer->type);
+            if (!is_primitive_type(type)) NotImplemented;
+            allocate_unit_storage(unit, type, &infer->size, &infer->offset);
+            Infer(type);
+        }
     } break;
 
     case EXPRESSION_ASSIGNMENT:
