@@ -166,11 +166,53 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
 
     if (maybe_take_atom(stream, ATOM_LEFT_PARENTHESIS))
     {
-        if (!parse_expression(stream, builder, out_expression))
-            return false;
-        if (!take_atom(stream, ATOM_RIGHT_PARENTHESIS, "Expected a closing ')' parenthesis."_s))
-            return false;
-        builder->expressions[*out_expression].flags |= EXPRESSION_IS_IN_PARENTHESES;
+        // Significant lookahead ahead:
+        // Whenever we encounter a '(' token, we scan forward to see if we can find '=>' or '{''
+        // If we can, then parse this as a block expression.
+        // Otherwise, it's just a normal parenthesized expression
+        bool parse_as_a_block = false;
+        {
+            umm open_parents_counter = 1;
+            umm lookahead = 0;
+            while (open_parents_counter && (stream->cursor + lookahead < stream->end))
+            {
+                Atom atom = stream->cursor[lookahead++].atom;
+                     if (atom == ATOM_LEFT_PARENTHESIS)  open_parents_counter++;
+                else if (atom == ATOM_RIGHT_PARENTHESIS) open_parents_counter--;
+            }
+            if (!open_parents_counter && (stream->cursor + lookahead < stream->end))
+            {
+                Atom atom = stream->cursor[lookahead].atom;
+                if (atom == ATOM_EQUAL_GREATER || atom == ATOM_LEFT_BRACE)
+                    parse_as_a_block = true;
+            }
+        }
+
+        if (parse_as_a_block)
+        {
+            bool accepts_code_block = maybe_take_atom(stream, ATOM_CODE_BLOCK);
+            if (!take_atom(stream, ATOM_RIGHT_PARENTHESIS, "Expected ')' after the block parameter list."_s))
+                return false;
+
+            flags32 block_flags = 0;
+            if (accepts_code_block)
+                block_flags |= BLOCK_HAS_CODE_BLOCK_PARAMETER;
+
+            Block* block = parse_statement_block(stream, block_flags);
+            if (!block)
+                return false;
+
+            Parsed_Expression* expr = add_expression(builder, EXPRESSION_BLOCK, 0, start, stream->cursor - 1, out_expression);
+            expr->parsed_block = block;
+        }
+        else
+        {
+            if (!parse_expression(stream, builder, out_expression))
+                return false;
+            if (!take_atom(stream, ATOM_RIGHT_PARENTHESIS, "Expected a closing ')' parenthesis."_s))
+                return false;
+            builder->expressions[*out_expression].flags |= EXPRESSION_IS_IN_PARENTHESES;
+        }
     }
     else if (maybe_take_atom(stream, ATOM_MINUS))     { if (!make_unary(EXPRESSION_NEGATE))      return false; }
     else if (maybe_take_atom(stream, ATOM_AMPERSAND)) { if (!make_unary(EXPRESSION_ADDRESS))     return false; }
@@ -209,7 +251,6 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
                 Token* old_name = NULL;
                      if (it->kind == EXPRESSION_VARIABLE_DECLARATION) old_name = &it->variable_declaration.name;
                 else if (it->kind == EXPRESSION_ALIAS_DECLARATION   ) old_name = &it->alias_declaration   .name;
-                else if (it->kind == EXPRESSION_BLOCK_DECLARATION   ) old_name = &it->block_declaration   .name;
                 if (old_name && old_name->atom == start->atom)
                 {
                     String identifier = get_identifier(stream->ctx, start);
@@ -225,25 +266,7 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
                 }
             }
 
-            if (maybe_take_atom(stream, ATOM_LEFT_PARENTHESIS))
-            {
-                bool accepts_code_block = maybe_take_atom(stream, ATOM_CODE_BLOCK);
-                if (!take_atom(stream, ATOM_RIGHT_PARENTHESIS, "Expected ')' after the block parameter list."_s))
-                    return false;
-
-                flags32 block_flags = 0;
-                if (accepts_code_block)
-                    block_flags |= BLOCK_HAS_CODE_BLOCK_PARAMETER;
-
-                Block* block = parse_statement_block(stream, block_flags);
-                if (!block)
-                    return false;
-
-                Parsed_Expression* expr = add_expression(builder, EXPRESSION_BLOCK_DECLARATION, 0, start, stream->cursor - 1, out_expression);
-                expr->block_declaration.name = *start;
-                expr->block_declaration.parsed_block = block;
-            }
-            else if (maybe_take_atom(stream, ATOM_COLON))
+            if (maybe_take_atom(stream, ATOM_COLON))
             {
                 Expression value;
                 if (!parse_expression(stream, builder, &value))
@@ -328,7 +351,7 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
                 return false;
 
             Block_Index block = NO_BLOCK;
-            if (lookahead_atom(stream, ATOM_DO, 0) || lookahead_atom(stream, ATOM_LEFT_BRACE, 0))
+            if (lookahead_atom(stream, ATOM_EQUAL_GREATER, 0) || lookahead_atom(stream, ATOM_LEFT_BRACE, 0))
                 if (!parse_statement_block(stream, builder, &block))
                     return false;
 
@@ -448,21 +471,18 @@ static bool parse_statement_block(Token_Stream* stream, Block_Builder* builder, 
     return true;
 }
 
-static Token* semicolon_after_expression(Token_Stream* stream, Block_Builder* builder, Expression id)
+static bool semicolon_after_statement(Token_Stream* stream)
 {
-    Parsed_Expression* expr = &builder->expressions[id];
-    if (!(expr->flags & EXPRESSION_IS_IN_PARENTHESES))
+    if (stream->cursor - 1 >= stream->start)
     {
-        if (expr->kind == EXPRESSION_BLOCK_DECLARATION)
-            return stream->cursor - 1;
-
-        if (expr->kind == EXPRESSION_CALL && expr->call.block != NO_BLOCK)
-            return stream->cursor - 1;
+        Token* previous = stream->cursor - 1;
+        if (previous->atom == ATOM_SEMICOLON)   return true;
+        if (previous->atom == ATOM_RIGHT_BRACE) return true;
     }
     Token* semicolon = stream->cursor;
-    if (!take_atom(stream, ATOM_SEMICOLON, "Expected ';' after the expression."_s))
-        return NULL;
-    return semicolon;
+    if (!take_atom(stream, ATOM_SEMICOLON, "Expected ';' after the statement."_s))
+        return false;
+    return true;
 }
 
 static bool parse_statement(Token_Stream* stream, Block_Builder* builder)
@@ -486,6 +506,8 @@ static bool parse_statement(Token_Stream* stream, Block_Builder* builder)
 
         Block_Index true_block;
         if (!parse_statement_block(stream, builder, &true_block))
+            return false;
+        if (!semicolon_after_statement(stream))
             return false;
 
         Block_Index false_block = NO_BLOCK;
@@ -532,27 +554,20 @@ static bool parse_statement(Token_Stream* stream, Block_Builder* builder)
         if (!parse_expression(stream, builder, &expression))
             return false;
 
-        Token* semicolon = semicolon_after_expression(stream, builder, expression);
-        if (!semicolon) return false;
-
         Parsed_Statement* stmt = reserve_item(&builder->statements);
         stmt->kind       = STATEMENT_DEBUG_OUTPUT;
         stmt->flags      = statement_flags;
         stmt->from       = *statement_start;
-        stmt->to         = *semicolon;
+        stmt->to         = *(stream->cursor - 1);
         stmt->expression = expression;
     }
     else if (maybe_take_atom(stream, ATOM_CODE_BLOCK))
     {
-        Token* semicolon = stream->cursor;
-        if (!take_atom(stream, ATOM_SEMICOLON, "Expected ';' after the 'code_block' keyword."_s))
-            return false;
-
         Parsed_Statement* stmt = reserve_item(&builder->statements);
         stmt->kind  = STATEMENT_CODE_BLOCK_EXPANSION;
         stmt->flags = statement_flags;
         stmt->from  = *statement_start;
-        stmt->to    = *semicolon;
+        stmt->to    = *(stream->cursor - 1);
     }
     else
     {
@@ -560,14 +575,11 @@ static bool parse_statement(Token_Stream* stream, Block_Builder* builder)
         if (!parse_expression(stream, builder, &expression))
             return false;
 
-        Token* semicolon = semicolon_after_expression(stream, builder, expression);
-        if (!semicolon) return false;
-
         Parsed_Statement* stmt = reserve_item(&builder->statements);
         stmt->kind       = STATEMENT_EXPRESSION;
         stmt->flags      = statement_flags;
         stmt->from       = *statement_start;
-        stmt->to         = *semicolon;
+        stmt->to         = *(stream->cursor - 1);
         stmt->expression = expression;
     }
 
@@ -589,8 +601,12 @@ static Block* parse_statement_block(Token_Stream* stream, flags32 flags)
         Defer(finish_building(ctx, &builder));
 
         while (stream->cursor < stream->end && stream->cursor->atom != ATOM_RIGHT_BRACE)
+        {
             if (!parse_statement(stream, &builder))
                 return NULL;
+            if (!semicolon_after_statement(stream))
+                return NULL;
+        }
         Token* block_end = stream->cursor;
         if (!take_atom(stream, ATOM_RIGHT_BRACE, "Body was not closed by '}'.\n"
                                                  "(Check for mismatched braces.)"_s))
@@ -599,7 +615,7 @@ static Block* parse_statement_block(Token_Stream* stream, flags32 flags)
 
         return block;
     }
-    else if (maybe_take_atom(stream, ATOM_DO))
+    else if (maybe_take_atom(stream, ATOM_EQUAL_GREATER))
     {
         Block* block = PushValue(&ctx->parser_memory, Block);
         block->flags = flags;

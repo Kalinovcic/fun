@@ -365,7 +365,8 @@ bool lex_from_memory(Compiler* ctx, String name, String code, Array<Token>* out_
         else if (c == '=')
         {
             cursor++, atom = ATOM_EQUAL;
-            if (cursor < end && *cursor == '=') cursor++, atom = ATOM_EQUAL_EQUAL;
+                 if (cursor < end && *cursor == '>') cursor++, atom = ATOM_EQUAL_GREATER;
+            else if (cursor < end && *cursor == '=') cursor++, atom = ATOM_EQUAL_EQUAL;
         }
         else if (c == '<')
         {

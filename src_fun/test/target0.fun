@@ -19,16 +19,14 @@ run
 */
 
 
-
-    /*N :: 10;
+    N :: 10;
     M :: 420e100;
 
-    foo: ()
-    {
-        debug M;
-    }
+    () { debug M; }();
 
-    repeat: (code_block)
+    foo :: () => debug M;
+
+    repeat :: (code_block)
     {
         foo();
         n := cast(u64, N);
@@ -40,11 +38,11 @@ run
         foo();
     }
 
-    repeat() do
-        debug 69;
+    repeat()
+     => debug 69;
 
     a := cast(u64, POO :: 123); debug a;
     b := cast(u64, POO * 2);    debug b;
-    c := cast(u64, POO * 3);    debug c;*/
+    c := cast(u64, POO * 3);    debug c;
 }
 

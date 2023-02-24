@@ -82,6 +82,7 @@ enum Atom: u32
     ATOM_PERCENT,               // %
     ATOM_AMPERSAND,             // &
     ATOM_BANG,                  // !
+    ATOM_EQUAL_GREATER,         // =>
     ATOM_EQUAL_EQUAL,           // ==
     ATOM_BANG_EQUAL,            // !=
     ATOM_LESS,                  // <
@@ -274,6 +275,7 @@ enum Expression_Kind: u16
     EXPRESSION_INTEGER_LITERAL,
     EXPRESSION_FLOATING_POINT_LITERAL,
     EXPRESSION_TYPE_LITERAL,
+    EXPRESSION_BLOCK,
 
     EXPRESSION_NAME,
 
@@ -299,7 +301,6 @@ enum Expression_Kind: u16
     // declarations
     EXPRESSION_VARIABLE_DECLARATION,
     EXPRESSION_ALIAS_DECLARATION,
-    EXPRESSION_BLOCK_DECLARATION,
 
     // calling expressions
     EXPRESSION_CALL,
@@ -324,6 +325,7 @@ struct Parsed_Expression
         Token      literal;
         Expression unary_operand;
         Type       parsed_type;
+        Block*     parsed_block;
 
         struct
         {

@@ -78,7 +78,6 @@ static Memory* run_expression(Unit* unit, byte* storage, Block* block, Expressio
     } break;
 
     case EXPRESSION_ALIAS_DECLARATION: Unreachable;
-    case EXPRESSION_BLOCK_DECLARATION:    Unreachable;
 
     case EXPRESSION_ASSIGNMENT:
     {

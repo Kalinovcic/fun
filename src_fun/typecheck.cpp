@@ -57,7 +57,6 @@ bool find_declaration(Unit* unit, Token const* name,
             Token const* decl_name = NULL;
                  if (expr->kind == EXPRESSION_VARIABLE_DECLARATION) decl_name = &expr->variable_declaration.name;
             else if (expr->kind == EXPRESSION_ALIAS_DECLARATION)    decl_name = &expr->alias_declaration   .name;
-            else if (expr->kind == EXPRESSION_BLOCK_DECLARATION)    decl_name = &expr->block_declaration   .name;
             else continue;
 
             if (decl_name->atom != name->atom) continue;
@@ -229,6 +228,13 @@ static Yield_Result check_expression(Pipeline_Task* task, Expression id)
         Infer(TYPE_SOFT_TYPE);
     } break;
 
+    case EXPRESSION_BLOCK:
+    {
+        infer->constant_block.materialized_parent = block;
+        infer->constant_block.parsed_child = expr->parsed_block;
+        Infer(TYPE_SOFT_BLOCK);
+    } break;
+
     case EXPRESSION_NAME:
     {
         Token const* name = &expr->name.token;
@@ -252,7 +258,6 @@ static Yield_Result check_expression(Pipeline_Task* task, Expression id)
                     Token const* decl_name = NULL;
                          if (expr->kind == EXPRESSION_VARIABLE_DECLARATION) decl_name = &expr->variable_declaration.name;
                     else if (expr->kind == EXPRESSION_ALIAS_DECLARATION)    decl_name = &expr->alias_declaration   .name;
-                    else if (expr->kind == EXPRESSION_BLOCK_DECLARATION)    decl_name = &expr->block_declaration   .name;
                     else continue;
 
                     if (decl_name->atom == name->atom)
@@ -413,13 +418,6 @@ static Yield_Result check_expression(Pipeline_Task* task, Expression id)
         else Unreachable;
 
         Infer(value_infer->type);
-    } break;
-
-    case EXPRESSION_BLOCK_DECLARATION:
-    {
-        infer->constant_block.materialized_parent = block;
-        infer->constant_block.parsed_child = expr->block_declaration.parsed_block;
-        Infer(TYPE_SOFT_BLOCK);
     } break;
 
     case EXPRESSION_ASSIGNMENT:
