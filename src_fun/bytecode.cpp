@@ -62,26 +62,6 @@ static Memory* run_expression(Unit* unit, byte* storage, Block* block, Expressio
         }
     } break;
 
-    case EXPRESSION_CAST:
-    {
-        if (infer->constant_index != INVALID_CONSTANT_INDEX)
-        {
-            Integer const* integer = &block->constants[infer->constant_index];
-            u64 abs = 0;
-            for (umm i = 0; i < integer->size; i++)
-                abs |= ((u64) integer->digit[i]) << (i * DIGIT_BITS);
-            if (integer->negative)
-                abs = -abs;
-            memcpy(address->base, &abs, infer->size);
-        }
-        else
-        {
-            // @Incomplete - do the actual cast
-            Memory* op = run_expression(unit, storage, block, expr->cast.value);
-            memcpy(address->base, op->base, infer->size);
-        }
-    } break;
-
     case EXPRESSION_VARIABLE_DECLARATION:
     {
         u64 size = infer->size;
@@ -142,6 +122,26 @@ static Memory* run_expression(Unit* unit, byte* storage, Block* block, Expressio
     case EXPRESSION_GREATER_OR_EQUAL: NotImplemented;
     case EXPRESSION_LESS_THAN: NotImplemented;
     case EXPRESSION_LESS_OR_EQUAL: NotImplemented;
+
+    case EXPRESSION_CAST:
+    {
+        if (infer->constant_index != INVALID_CONSTANT_INDEX)
+        {
+            Integer const* integer = &block->constants[infer->constant_index];
+            u64 abs = 0;
+            for (umm i = 0; i < integer->size; i++)
+                abs |= ((u64) integer->digit[i]) << (i * DIGIT_BITS);
+            if (integer->negative)
+                abs = -abs;
+            memcpy(address->base, &abs, infer->size);
+        }
+        else
+        {
+            // @Incomplete - do the actual cast
+            Memory* op = run_expression(unit, storage, block, expr->binary.rhs);
+            memcpy(address->base, op->base, infer->size);
+        }
+    } break;
 
     case EXPRESSION_CALL:
     {
@@ -246,6 +246,7 @@ static void run_block(Unit* unit, byte* storage, Block* block)
             } break;
             case TYPE_SOFT_FLOATING_POINT:  printf("<soft floating point>\n"); break;
             case TYPE_SOFT_BOOL:            printf("%s\n", infer->constant_bool ? "true" : "false"); break;
+            case TYPE_SOFT_TYPE:            printf("<soft type>\n"); break;
             case TYPE_SOFT_BLOCK:
             {
                 Token_Info info;

@@ -2,8 +2,26 @@
 
 run
 {
-    N :: 10;
-    M :: 420;
+/*
+    wrap: ($T: type)
+    {
+        inner: ($a: T)
+        {
+            debug 123;
+        }
+
+        inner(zero);
+    }
+
+    wrap(u32);  // works fine
+
+    wrap(block);  // this will make wrap() not compile, because the call to inner() is wrong
+*/
+
+
+
+    /*N :: 10;
+    M :: 420e100;
 
     foo: ()
     {
@@ -25,30 +43,8 @@ run
     repeat() do
         debug 69;
 
-    /*c := cast(u64, POO * 3);
-    b := cast(u64, POO * 2);
-    a := cast(u64, POO :: 123);
-    debug a;
-    debug b;
-    debug c;*/
-
-    /*
-    poo1: void;
-    poo2: void;
-    poo1 = poo2;
-    debug FF :: 42069e1000 / 59012;
-
-    bla: s8 = cast(s8, -128);
-    debug bla;
-
-    if (cast(s64, 5))
-    {
-        debug cast(s64, 5);
-    }
-    else
-    {
-        debug cast(s64, 15);
-    }
-    */
+    a := cast(u64, POO :: 123); debug a;
+    b := cast(u64, POO * 2);    debug b;
+    c := cast(u64, POO * 3);    debug c;*/
 }
 

@@ -42,6 +42,7 @@ static void lex_init(Compiler* ctx)
     AddKeyword(ATOM_BOOL64,       "bool64"_s);
     AddKeyword(ATOM_STRUCT,       "struct"_s);
     AddKeyword(ATOM_TYPE,         "type"_s);
+    AddKeyword(ATOM_BLOCK,        "block"_s);
     AddKeyword(ATOM_CODE_BLOCK,   "code_block"_s);
     AddKeyword(ATOM_GLOBAL,       "global"_s);
     AddKeyword(ATOM_THREAD_LOCAL, "thread_local"_s);
@@ -355,6 +356,7 @@ bool lex_from_memory(Compiler* ctx, String name, String code, Array<Token>* out_
             }
         }
         else if (c == '%') cursor++, atom = ATOM_PERCENT;
+        else if (c == '&') cursor++, atom = ATOM_AMPERSAND;
         else if (c == '!')
         {
             cursor++, atom = ATOM_BANG;

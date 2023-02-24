@@ -42,6 +42,7 @@ enum Atom: u32
 
     // keywords
     ATOM_TYPE,                  // type
+    ATOM_BLOCK,                 // block
     ATOM_CODE_BLOCK,            // code_block
     ATOM_GLOBAL,                // global
     ATOM_THREAD_LOCAL,          // thread_local
@@ -79,6 +80,7 @@ enum Atom: u32
     ATOM_STAR,                  // *
     ATOM_SLASH,                 // /
     ATOM_PERCENT,               // %
+    ATOM_AMPERSAND,             // &
     ATOM_BANG,                  // !
     ATOM_EQUAL_EQUAL,           // ==
     ATOM_BANG_EQUAL,            // !=
@@ -161,20 +163,25 @@ enum Type: u32
     TYPE_S16,
     TYPE_S32,
     TYPE_S64,
-    TYPE_SOFT_INTEGER,
+    TYPE_SOFT_INTEGER,          // this is the type of compile-time evaluated integer expressions
 
     TYPE_F16,
     TYPE_F32,
     TYPE_F64,
-    TYPE_SOFT_FLOATING_POINT,
+    TYPE_SOFT_FLOATING_POINT,   // this is the type of compile-time evaluated floating-point expressions
 
     TYPE_BOOL8,
     TYPE_BOOL16,
     TYPE_BOOL32,
     TYPE_BOOL64,
-    TYPE_SOFT_BOOL,
+    TYPE_SOFT_BOOL,             // this is the type of compile-time evaluated logic expressions
 
-    TYPE_SOFT_BLOCK,  // refers to a constant parsed block, not yet materialized as part of a unit
+    TYPE_TYPE,
+    TYPE_SOFT_TYPE,             // this is the type of compile-time evaluated type expressions
+
+    TYPE_SOFT_BLOCK,            // refers to a constant parsed block, not yet materialized
+                                // @Reconsider - materialized blocks do not have values at the moment,
+                                //               but we might need that for unit instantiation?
 
     TYPE_ONE_PAST_LAST_PRIMITIVE_TYPE,
 
@@ -190,7 +197,9 @@ inline bool is_numeric_type         (Type type) { return is_integer_type(type) |
 inline bool is_bool_type            (Type type) { return type >= TYPE_BOOL8 && type <= TYPE_SOFT_BOOL;                    }
 inline bool is_primitive_type       (Type type) { return type >= TYPE_VOID  && type < TYPE_ONE_PAST_LAST_PRIMITIVE_TYPE;  }
 inline bool is_user_defined_type    (Type type) { return type >= TYPE_FIRST_USER_TYPE;                                    }
-inline bool is_soft_type            (Type type) { return type == TYPE_SOFT_ZERO || type == TYPE_SOFT_INTEGER || type == TYPE_SOFT_FLOATING_POINT || type == TYPE_SOFT_BOOL || type == TYPE_SOFT_BLOCK; }
+inline bool is_type_type            (Type type) { return type == TYPE_TYPE  || type == TYPE_SOFT_TYPE;                    }
+inline bool is_block_type           (Type type) { return type == TYPE_SOFT_BLOCK;                                         }
+inline bool is_soft_type            (Type type) { return type == TYPE_SOFT_ZERO || type == TYPE_SOFT_INTEGER || type == TYPE_SOFT_FLOATING_POINT || type == TYPE_SOFT_BOOL || type == TYPE_SOFT_TYPE || type == TYPE_SOFT_BLOCK; }
 
 
 
@@ -264,12 +273,14 @@ enum Expression_Kind: u16
     EXPRESSION_FALSE,
     EXPRESSION_INTEGER_LITERAL,
     EXPRESSION_FLOATING_POINT_LITERAL,
+    EXPRESSION_TYPE_LITERAL,
 
     EXPRESSION_NAME,
-    EXPRESSION_CAST,
 
     // unary operators
     EXPRESSION_NEGATE,
+    EXPRESSION_ADDRESS,
+    EXPRESSION_DEREFERENCE,
 
     // binary operators
     EXPRESSION_ASSIGNMENT,
@@ -283,6 +294,7 @@ enum Expression_Kind: u16
     EXPRESSION_GREATER_OR_EQUAL,
     EXPRESSION_LESS_THAN,
     EXPRESSION_LESS_OR_EQUAL,
+    EXPRESSION_CAST,
 
     // declarations
     EXPRESSION_VARIABLE_DECLARATION,
@@ -309,8 +321,9 @@ struct Parsed_Expression
 
     union
     {
-        Token literal;
+        Token      literal;
         Expression unary_operand;
+        Type       parsed_type;
 
         struct
         {
@@ -320,8 +333,8 @@ struct Parsed_Expression
         struct
         {
             Token      name;
-            Type       parsed_type;  // may be INVALID_TYPE if 'name := value;' declaration
-            Expression value;        // may be NO_EXPRESSION if 'name: Type;' declaration
+            Expression type;   // may be NO_EXPRESSION if 'name := value;' declaration
+            Expression value;  // may be NO_EXPRESSION if 'name: Type;' declaration
         } variable_declaration;
 
         struct
@@ -341,12 +354,6 @@ struct Parsed_Expression
             Expression lhs;
             Expression rhs;
         } binary;
-
-        struct
-        {
-            Expression value;
-            Type       parsed_type;
-        } cast;
 
         struct
         {
@@ -375,6 +382,7 @@ struct Inferred_Expression
     {
         u64    constant_index;
         bool   constant_bool;
+        Type   constant_type;
         struct
         {
             Block* materialized_parent;
@@ -388,11 +396,10 @@ CompileTimeAssert(sizeof(Inferred_Expression) == 48);
 
 enum Statement_Kind: u16
 {
-    STATEMENT_DECLARATION,
     STATEMENT_EXPRESSION,
     STATEMENT_IF,
     STATEMENT_WHILE,
-    // STATEMENT_YIELD,
+    STATEMENT_YIELD,
     STATEMENT_CODE_BLOCK_EXPANSION,
     STATEMENT_DEBUG_OUTPUT,
 };

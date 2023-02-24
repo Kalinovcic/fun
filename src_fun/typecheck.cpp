@@ -107,6 +107,8 @@ static u64 get_type_size(Unit* unit, Type type)
     case TYPE_BOOL32:              return 4;
     case TYPE_BOOL64:              return 8;
     case TYPE_SOFT_BOOL:           Unreachable;
+    case TYPE_TYPE:                return 4;
+    case TYPE_SOFT_TYPE:           Unreachable;
     IllegalDefaultCase;
     }
 }
@@ -219,6 +221,14 @@ static Yield_Result check_expression(Pipeline_Task* task, Expression id)
     case EXPRESSION_FLOATING_POINT_LITERAL:
         NotImplemented;
 
+    case EXPRESSION_TYPE_LITERAL:
+    {
+        // @Future @Incomplete - do typechecking inside the type here, once we get to type polymorphism
+        assert(is_primitive_type(expr->parsed_type));
+        infer->constant_type = expr->parsed_type;
+        Infer(TYPE_SOFT_TYPE);
+    } break;
+
     case EXPRESSION_NAME:
     {
         Token const* name = &expr->name.token;
@@ -291,6 +301,10 @@ static Yield_Result check_expression(Pipeline_Task* task, Expression id)
         {
             infer->constant_bool = decl_infer->constant_bool;
         }
+        else if (decl_infer->type == TYPE_SOFT_TYPE)
+        {
+            infer->constant_type = decl_infer->constant_type;
+        }
         else if (decl_infer->type == TYPE_SOFT_BLOCK)
         {
             infer->constant_block = decl_infer->constant_block;
@@ -330,59 +344,6 @@ static Yield_Result check_expression(Pipeline_Task* task, Expression id)
         Infer(op_infer->type);
     } break;
 
-    case EXPRESSION_CAST:
-    {
-        if (!is_primitive_type(expr->cast.parsed_type)) NotImplemented;
-        Type cast_type = expr->cast.parsed_type;
-        auto* op_infer = &block->inferred_expressions[expr->cast.value];
-        if (op_infer->type == INVALID_TYPE) Wait();
-
-        if (op_infer->type == TYPE_SOFT_INTEGER)
-        {
-            if (!is_integer_type(cast_type))
-                NotImplemented;
-
-            u64 target_size = get_type_size(unit, cast_type);
-
-            Integer const* integer = &block->constants[op_infer->constant_index];
-            if (integer->negative)
-            {
-                if (is_unsigned_integer_type(cast_type))
-                    Error("The cast value operand is a negative constant, it can't be cast to an unsigned type.");
-
-                Integer min = {};
-                int_set_zero(&min);
-                int_set_bit(&min, target_size * 8 - 1);
-                if (int_compare_abs(integer, &min) > 0)
-                    Error("The cast value operand doesn't fit in the specified type.");
-            }
-            else
-            {
-                u64 max_log2 = (target_size * 8) - (is_signed_integer_type(cast_type) ? 1 : 0);
-                if (int_log2_abs(integer) >= max_log2)
-                    Error("The cast value operand doesn't fit in the specified type.");
-            }
-
-            Integer copy = int_clone(integer);
-            infer->constant_index = add_constant_integer(&copy);
-        }
-        else if (op_infer->type == TYPE_SOFT_FLOATING_POINT)
-        {
-            NotImplemented;
-        }
-        else if (op_infer->type == TYPE_SOFT_BOOL)
-        {
-            NotImplemented;
-        }
-        else
-        {
-            assert(!is_soft_type(op_infer->type));
-            // @Incomplete - check if cast is possible
-        }
-
-        Infer(cast_type);
-    } break;
-
     case EXPRESSION_VARIABLE_DECLARATION:
     {
         Type value_type = INVALID_TYPE;
@@ -394,20 +355,31 @@ static Yield_Result check_expression(Pipeline_Task* task, Expression id)
                 Error("Blocks can't be assigned to runtime values.");
         }
 
-        Type type = expr->variable_declaration.parsed_type;
-        if (type == INVALID_TYPE)
+        Type type = INVALID_TYPE;
+        if (expr->variable_declaration.type != NO_EXPRESSION)
+        {
+            auto* type_infer = &block->inferred_expressions[expr->variable_declaration.type];
+            if (type_infer->type == INVALID_TYPE) Wait();
+
+            if (!is_type_type(type_infer->type))
+                Error("Expected a type after ':' in declaration.");
+            if (type_infer->type != TYPE_SOFT_TYPE)
+                Error("The type in declaration is not known at compile-time.");
+            type = type_infer->constant_type;
+        }
+        else
         {
             if (is_soft_type(value_type))
                 Error("An explicit type is required in this context.");
             type = value_type;
         }
 
-        if (!is_primitive_type(type)) NotImplemented;
-        allocate_unit_storage(unit, type, &infer->size, &infer->offset);
-
         if (expr->variable_declaration.value != NO_EXPRESSION)
             if (type != value_type)
                 Error("LHS and RHS types don't match.");
+
+        if (!is_primitive_type(type)) NotImplemented;
+        allocate_unit_storage(unit, type, &infer->size, &infer->offset);
         Infer(type);
     } break;
 
@@ -427,6 +399,10 @@ static Yield_Result check_expression(Pipeline_Task* task, Expression id)
         else if (value_infer->type == TYPE_SOFT_BOOL)
         {
             infer->constant_bool = value_infer->constant_bool;
+        }
+        else if (value_infer->type == TYPE_SOFT_TYPE)
+        {
+            infer->constant_type = value_infer->constant_type;
         }
         else if (value_infer->type == TYPE_SOFT_BLOCK)
         {
@@ -504,6 +480,66 @@ static Yield_Result check_expression(Pipeline_Task* task, Expression id)
     case EXPRESSION_GREATER_OR_EQUAL: NotImplemented;
     case EXPRESSION_LESS_THAN:        NotImplemented;
     case EXPRESSION_LESS_OR_EQUAL:    NotImplemented;
+
+    case EXPRESSION_CAST:
+    {
+        auto* lhs_infer = &block->inferred_expressions[expr->binary.lhs];
+        auto* rhs_infer = &block->inferred_expressions[expr->binary.rhs];
+        if (lhs_infer->type == INVALID_TYPE || rhs_infer->type == INVALID_TYPE) Wait();
+
+        if (!is_type_type(lhs_infer->type))
+            Error("Expected a type as the first operand to 'cast'.");
+        if (lhs_infer->type != TYPE_SOFT_TYPE)
+            Error("The first operand to 'cast' is not known at compile-time.");
+
+        if (!is_numeric_type(rhs_infer->type))  // @Incomplete
+            Error("Expected a numeric value as the second operand to 'cast'.");
+
+        Type cast_type = lhs_infer->constant_type;
+        if (!is_numeric_type(cast_type))
+            Error("Expected a numeric type as the first operand to 'cast'.");
+
+        if (rhs_infer->type == TYPE_SOFT_INTEGER)
+        {
+            if (!is_integer_type(cast_type))
+                NotImplemented;
+
+            u64 target_size = get_type_size(unit, cast_type);
+
+            Integer const* integer = &block->constants[rhs_infer->constant_index];
+            if (integer->negative)
+            {
+                if (is_unsigned_integer_type(cast_type))
+                    Error("The cast value operand is a negative constant, it can't be cast to an unsigned type.");
+
+                Integer min = {};
+                int_set_zero(&min);
+                int_set_bit(&min, target_size * 8 - 1);
+                if (int_compare_abs(integer, &min) > 0)
+                    Error("The cast value operand doesn't fit in the specified type.");
+            }
+            else
+            {
+                u64 max_log2 = (target_size * 8) - (is_signed_integer_type(cast_type) ? 1 : 0);
+                if (int_log2_abs(integer) >= max_log2)
+                    Error("The cast value operand doesn't fit in the specified type.");
+            }
+
+            Integer copy = int_clone(integer);
+            infer->constant_index = add_constant_integer(&copy);
+        }
+        else if (rhs_infer->type == TYPE_SOFT_FLOATING_POINT)
+        {
+            NotImplemented;
+        }
+        else
+        {
+            assert(!is_soft_type(rhs_infer->type));
+            // @Incomplete - check if cast is possible
+        }
+
+        Infer(cast_type);
+    } break;
 
     case EXPRESSION_CALL:
     {

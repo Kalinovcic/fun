@@ -94,51 +94,6 @@ static bool lookahead_atom(Token_Stream* stream, Atom atom, umm lookahead)
 }
 
 
-static bool parse_type(Token_Stream* stream, Type* out_type)
-{
-    u32 indirection_count = 0;
-    while (Token* star = maybe_take_atom(stream, ATOM_STAR))
-    {
-        indirection_count++;
-        if (indirection_count > TYPE_MAX_INDIRECTION)
-            return ReportError(stream->ctx, star, Format(temp, "Too many indirections! Maximum is %", TYPE_MAX_INDIRECTION));
-    }
-
-    Token* name = take_next_token(stream, "Expected a type name."_s);
-    if (!name)
-        return false;
-
-    Type type = INVALID_TYPE;
-    switch (name->atom)
-    {
-    case ATOM_VOID:   type = TYPE_VOID;   break;
-    case ATOM_U8:     type = TYPE_U8;     break;
-    case ATOM_U16:    type = TYPE_U16;    break;
-    case ATOM_U32:    type = TYPE_U32;    break;
-    case ATOM_U64:    type = TYPE_U64;    break;
-    case ATOM_S8:     type = TYPE_S8;     break;
-    case ATOM_S16:    type = TYPE_S16;    break;
-    case ATOM_S32:    type = TYPE_S32;    break;
-    case ATOM_S64:    type = TYPE_S64;    break;
-    case ATOM_F16:    type = TYPE_F16;    break;
-    case ATOM_F32:    type = TYPE_F32;    break;
-    case ATOM_F64:    type = TYPE_F64;    break;
-    case ATOM_BOOL8:  type = TYPE_BOOL8;  break;
-    case ATOM_BOOL16: type = TYPE_BOOL16; break;
-    case ATOM_BOOL32: type = TYPE_BOOL32; break;
-    case ATOM_BOOL64: type = TYPE_BOOL64; break;
-    default:
-    {
-        return ReportError(stream->ctx, name, "Expected a type name."_s);
-    } break;
-    }
-
-    assert(type != INVALID_TYPE);
-    *out_type = (Type)(type + (indirection_count << TYPE_POINTER_SHIFT));
-    return true;
-}
-
-
 
 struct Block_Builder
 {
@@ -194,6 +149,21 @@ static bool parse_expression(Token_Stream* stream, Block_Builder* builder, Expre
 static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, Expression* out_expression)
 {
     Token* start = stream->cursor;
+    auto make_unary = [&](Expression_Kind kind) -> bool
+    {
+        Expression unary_operand;
+        if (!parse_expression_leaf(stream, builder, &unary_operand))
+            return false;
+        Parsed_Expression* expr = add_expression(builder, kind, 0, start, unary_operand, out_expression);
+        expr->unary_operand = unary_operand;
+        return true;
+    };
+
+    auto make_type_literal = [&](Type type)
+    {
+        add_expression(builder, EXPRESSION_TYPE_LITERAL, 0, start, start, out_expression)->parsed_type = type;
+    };
+
     if (maybe_take_atom(stream, ATOM_LEFT_PARENTHESIS))
     {
         if (!parse_expression(stream, builder, out_expression))
@@ -202,14 +172,9 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
             return false;
         builder->expressions[*out_expression].flags |= EXPRESSION_IS_IN_PARENTHESES;
     }
-    else if (maybe_take_atom(stream, ATOM_MINUS))
-    {
-        Expression unary_operand;
-        if (!parse_expression_leaf(stream, builder, &unary_operand))
-            return false;
-        Parsed_Expression* expr = add_expression(builder, EXPRESSION_NEGATE, 0, start, unary_operand, out_expression);
-        expr->unary_operand = unary_operand;
-    }
+    else if (maybe_take_atom(stream, ATOM_MINUS))     { if (!make_unary(EXPRESSION_NEGATE))      return false; }
+    else if (maybe_take_atom(stream, ATOM_AMPERSAND)) { if (!make_unary(EXPRESSION_ADDRESS))     return false; }
+    else if (maybe_take_atom(stream, ATOM_STAR))      { if (!make_unary(EXPRESSION_DEREFERENCE)) return false; }
     else if (maybe_take_atom(stream, ATOM_ZERO))  add_expression(builder, EXPRESSION_ZERO,  0, start, start, out_expression);
     else if (maybe_take_atom(stream, ATOM_TRUE))  add_expression(builder, EXPRESSION_TRUE,  0, start, start, out_expression);
     else if (maybe_take_atom(stream, ATOM_FALSE)) add_expression(builder, EXPRESSION_FALSE, 0, start, start, out_expression);
@@ -218,6 +183,23 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
         Parsed_Expression* expr = add_expression(builder, EXPRESSION_INTEGER_LITERAL, 0, start, start, out_expression);
         expr->literal = *start;
     }
+    else if (maybe_take_atom(stream, ATOM_VOID))   make_type_literal(TYPE_VOID);
+    else if (maybe_take_atom(stream, ATOM_U8))     make_type_literal(TYPE_U8);
+    else if (maybe_take_atom(stream, ATOM_U16))    make_type_literal(TYPE_U16);
+    else if (maybe_take_atom(stream, ATOM_U32))    make_type_literal(TYPE_U32);
+    else if (maybe_take_atom(stream, ATOM_U64))    make_type_literal(TYPE_U64);
+    else if (maybe_take_atom(stream, ATOM_S8))     make_type_literal(TYPE_S8);
+    else if (maybe_take_atom(stream, ATOM_S16))    make_type_literal(TYPE_S16);
+    else if (maybe_take_atom(stream, ATOM_S32))    make_type_literal(TYPE_S32);
+    else if (maybe_take_atom(stream, ATOM_S64))    make_type_literal(TYPE_S64);
+    else if (maybe_take_atom(stream, ATOM_F16))    make_type_literal(TYPE_F16);
+    else if (maybe_take_atom(stream, ATOM_F32))    make_type_literal(TYPE_F32);
+    else if (maybe_take_atom(stream, ATOM_F64))    make_type_literal(TYPE_F64);
+    else if (maybe_take_atom(stream, ATOM_BOOL8))  make_type_literal(TYPE_BOOL8);
+    else if (maybe_take_atom(stream, ATOM_BOOL16)) make_type_literal(TYPE_BOOL16);
+    else if (maybe_take_atom(stream, ATOM_BOOL32)) make_type_literal(TYPE_BOOL32);
+    else if (maybe_take_atom(stream, ATOM_BOOL64)) make_type_literal(TYPE_BOOL64);
+    else if (maybe_take_atom(stream, ATOM_TYPE))   make_type_literal(TYPE_TYPE);
     else if (maybe_take_atom(stream, ATOM_FIRST_IDENTIFIER))
     {
         if (maybe_take_atom(stream, ATOM_COLON))
@@ -279,13 +261,13 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
 
                 Parsed_Expression* expr = add_expression(builder, EXPRESSION_VARIABLE_DECLARATION, 0, start, value, out_expression);
                 expr->variable_declaration.name = *start;
-                expr->variable_declaration.parsed_type = INVALID_TYPE;
+                expr->variable_declaration.type = NO_EXPRESSION;
                 expr->variable_declaration.value = value;
             }
             else
             {
-                Type type;
-                if (!parse_type(stream, &type))
+                Expression type;
+                if (!parse_expression_leaf(stream, builder, &type))
                     return false;
 
                 if (maybe_take_atom(stream, ATOM_EQUAL))
@@ -296,14 +278,14 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
 
                     Parsed_Expression* expr = add_expression(builder, EXPRESSION_VARIABLE_DECLARATION, 0, start, value, out_expression);
                     expr->variable_declaration.name = *start;
-                    expr->variable_declaration.parsed_type = type;
+                    expr->variable_declaration.type = type;
                     expr->variable_declaration.value = value;
                 }
                 else
                 {
                     Parsed_Expression* expr = add_expression(builder, EXPRESSION_VARIABLE_DECLARATION, 0, start, stream->cursor - 1, out_expression);
                     expr->variable_declaration.name = *start;
-                    expr->variable_declaration.parsed_type = type;
+                    expr->variable_declaration.type = type;
                     expr->variable_declaration.value = NO_EXPRESSION;
                 }
             }
@@ -318,20 +300,20 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
     {
         if (!take_atom(stream, ATOM_LEFT_PARENTHESIS, "Expected '(' after the 'cast' keyword."_s))
             return false;
-        Type type;
-        if (!parse_type(stream, &type))
+        Expression lhs;
+        if (!parse_expression(stream, builder, &lhs))
             return false;
-        if (!take_atom(stream, ATOM_COMMA, "Expected ',' between the type and value operands to 'cast'."_s))
+        if (!take_atom(stream, ATOM_COMMA, "Expected ',' between the operands to 'cast'."_s))
             return false;
-        Expression operand;
-        if (!parse_expression(stream, builder, &operand))
+        Expression rhs;
+        if (!parse_expression(stream, builder, &rhs))
             return false;
-        if (!take_atom(stream, ATOM_RIGHT_PARENTHESIS, "Expected ')' after the value operand to 'cast'."_s))
+        if (!take_atom(stream, ATOM_RIGHT_PARENTHESIS, "Expected ')' after the second operand to 'cast'."_s))
             return false;
 
         Parsed_Expression* expr = add_expression(builder, EXPRESSION_CAST, 0, start, stream->cursor - 1, out_expression);
-        expr->cast.parsed_type = type;
-        expr->cast.value = operand;
+        expr->binary.lhs = lhs;
+        expr->binary.rhs = rhs;
     }
     else
     {
