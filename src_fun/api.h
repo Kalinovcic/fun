@@ -223,7 +223,8 @@ static constexpr Block_Index NO_BLOCK = (Block_Index) 0xFFFFFFFF;
 
 enum: flags32
 {
-    BLOCK_HAS_CODE_BLOCK_PARAMETER = 0x0001,
+    BLOCK_IS_PARAMETER_BLOCK  = 0x0001,
+    BLOCK_HAS_BLOCK_PARAMETER = 0x0002,
 };
 
 struct Block
@@ -245,8 +246,8 @@ struct Block
     Block*    parent_scope;
     Statement parent_scope_visibility_limit;
 
-    Block*      materialized_code_block_parameter_parent;
-    Block_Index materialized_code_block_parameter_index;
+    Block*      materialized_block_parameter_parent;
+    Block_Index materialized_block_parameter_index;
 };
 
 struct Child_Block
@@ -276,7 +277,6 @@ enum Expression_Kind: u16
     EXPRESSION_FLOATING_POINT_LITERAL,
     EXPRESSION_TYPE_LITERAL,
     EXPRESSION_BLOCK,
-
     EXPRESSION_NAME,
 
     // unary operators
@@ -302,13 +302,19 @@ enum Expression_Kind: u16
     EXPRESSION_VARIABLE_DECLARATION,
     EXPRESSION_ALIAS_DECLARATION,
 
-    // calling expressions
+    // branching expressions
+    EXPRESSION_BRANCH,
     EXPRESSION_CALL,
+
+    EXPRESSION_DEBUG,
 };
 
 enum: flags16
 {
-    EXPRESSION_IS_IN_PARENTHESES = 0x0001,
+    EXPRESSION_IS_IN_PARENTHESES             = 0x0001,
+    EXPRESSION_IS_PARAMETER                  = 0x0002,
+    EXPRESSION_ALLOW_PARENT_SCOPE_VISIBILITY = 0x0004,
+    EXPRESSION_BRANCH_IS_LOOP                = 0x0008,
 };
 
 struct Parsed_Expression
@@ -363,6 +369,13 @@ struct Parsed_Expression
             Block_Index block;
             Expression_List const* arguments;
         } call;
+
+        struct
+        {
+            Expression condition;
+            Expression on_success;
+            Expression on_failure;
+        } branch;
     };
 };
 
@@ -398,12 +411,7 @@ CompileTimeAssert(sizeof(Inferred_Expression) == 48);
 
 enum Statement_Kind: u16
 {
-    STATEMENT_EXPRESSION,
-    STATEMENT_IF,
-    STATEMENT_WHILE,
-    STATEMENT_YIELD,
-    STATEMENT_CODE_BLOCK_EXPANSION,
-    STATEMENT_DEBUG_OUTPUT,
+    STATEMENT_EXPRESSION
 };
 
 enum: flags16
@@ -422,8 +430,8 @@ struct Parsed_Statement
     {
         struct
         {
-            Block_Index true_block;
-            Block_Index false_block;
+            Expression if_true;
+            Expression if_false;
         };
     };
 };

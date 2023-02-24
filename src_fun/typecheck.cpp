@@ -29,10 +29,10 @@ static Block* materialize_block(Unit* unit, Block* materialize_from,
 
     block->parent_scope                  = parent_scope;
     block->parent_scope_visibility_limit = parent_scope_visibility_limit;
-    if (parent_scope)
+    if (parent_scope && parent_scope_visibility_limit != NO_VISIBILITY)
     {
-        block->materialized_code_block_parameter_parent = parent_scope->materialized_code_block_parameter_parent;
-        block->materialized_code_block_parameter_index  = parent_scope->materialized_code_block_parameter_index;
+        block->materialized_block_parameter_parent = parent_scope->materialized_block_parameter_parent;
+        block->materialized_block_parameter_index  = parent_scope->materialized_block_parameter_index;
     }
 
     Pipeline_Task task = {};
@@ -539,6 +539,37 @@ static Yield_Result check_expression(Pipeline_Task* task, Expression id)
         Infer(cast_type);
     } break;
 
+    case EXPRESSION_BRANCH:
+    {
+        if (expr->branch.condition != NO_EXPRESSION)
+        {
+            Type type = block->inferred_expressions[expr->branch.condition].type;
+            if (type == INVALID_TYPE) Wait();
+            if (!is_integer_type(type) && !is_bool_type(type))
+                Error("Expected an integer or boolean value as the condition.");
+            if (is_soft_type(type))
+                Error("@Incomplete - condition may not be a compile-time value");
+        }
+
+        Type success_type = INVALID_TYPE;
+        Type failure_type = INVALID_TYPE;
+        if (expr->branch.on_success != NO_EXPRESSION)
+        {
+            success_type = block->inferred_expressions[expr->branch.on_success].type;
+            if (success_type == INVALID_TYPE) Wait();
+        }
+        if (expr->branch.on_failure != NO_EXPRESSION)
+        {
+            failure_type = block->inferred_expressions[expr->branch.on_failure].type;
+            if (failure_type == INVALID_TYPE) Wait();
+        }
+
+        if (success_type != INVALID_TYPE && failure_type != INVALID_TYPE)
+            if (success_type != failure_type)
+                Error("The expression yields a different type depending on the condition.");
+        Infer(success_type);
+    } break;
+
     case EXPRESSION_CALL:
     {
         auto* lhs_infer = &block->inferred_expressions[expr->call.lhs];
@@ -553,19 +584,26 @@ static Yield_Result check_expression(Pipeline_Task* task, Expression id)
         Block* lhs_block  = lhs_infer->constant_block.parsed_child;
         assert(lhs_block);
 
-        bool expects_code_block = lhs_block->flags & BLOCK_HAS_CODE_BLOCK_PARAMETER;
-        bool have_code_block    = expr->call.block != NO_BLOCK;
-        if (expects_code_block && !have_code_block)
+        bool expects_block = lhs_block->flags & BLOCK_HAS_BLOCK_PARAMETER;
+        bool have_block    = expr->call.block != NO_BLOCK;
+        if (expects_block && !have_block)
             Error("Callee expects a block parameter.");
-        else if (!expects_code_block && have_code_block)
+        else if (!expects_block && have_block)
             Error("Callee doesn't expect a block parameter.");
 
         Block* callee = materialize_block(unit, lhs_block, lhs_parent, NO_VISIBILITY);
-        callee->materialized_code_block_parameter_parent = block;
-        callee->materialized_code_block_parameter_index  = expr->call.block;
+        callee->materialized_block_parameter_parent = block;
+        callee->materialized_block_parameter_index  = expr->call.block;
         infer->called_block = callee;
 
         // @Incomplete
+        Infer(TYPE_VOID);
+    } break;
+
+    case EXPRESSION_DEBUG:
+    {
+        Inferred_Expression* op_infer = &block->inferred_expressions[expr->unary_operand];
+        if (op_infer->type == INVALID_TYPE) Wait();
         Infer(TYPE_VOID);
     } break;
 
