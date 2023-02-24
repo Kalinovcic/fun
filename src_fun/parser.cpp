@@ -99,7 +99,7 @@ struct Block_Builder
 {
     Block* block;
     Dynamic_Array<Parsed_Expression> expressions;
-    Concatenator <Parsed_Statement>  statements;
+    Dynamic_Array<Expression> imperative_order;
 };
 
 static void finish_building(Compiler* ctx, Block_Builder* builder)
@@ -108,8 +108,9 @@ static void finish_building(Compiler* ctx, Block_Builder* builder)
     Region* memory = &ctx->parser_memory;
 
     block->parsed_expressions = const_array(allocate_array(memory, &builder->expressions));
-    block->parsed_statements  = const_array(resolve_to_array_and_free(&builder->statements, memory));
+    block->imperative_order   = const_array(allocate_array(memory, &builder->imperative_order));
     free_heap_array(&builder->expressions);
+    free_heap_array(&builder->imperative_order);
 }
 
 // IMPORTANT! Make sure to not use the returned pointer after calling add_expression() again!
@@ -121,20 +122,8 @@ static Parsed_Expression* add_expression(Block_Builder* builder, Expression_Kind
     result->flags = 0;
     result->from  = *from;
     result->to    = *to;
-    result->visibility_limit = (Statement) builder->statements.count;
+    result->visibility_limit = (Statement) builder->imperative_order.count;
     return result;
-}
-
-static void add_expression_statement(Block_Builder* builder, Expression id, flags32 flags)
-{
-    auto* expr = &builder->expressions[id];
-
-    Parsed_Statement* stmt = reserve_item(&builder->statements);
-    stmt->kind       = STATEMENT_EXPRESSION;
-    stmt->flags      = flags;
-    stmt->from       = expr->from;
-    stmt->to         = expr->to;
-    stmt->expression = id;
 }
 
 static Parsed_Expression* add_expression(Block_Builder* builder, Expression_Kind kind, Token* from, Expression to, Expression* out_id)
@@ -278,7 +267,7 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
                     decl_expr->variable_declaration.name  = *name;
                     decl_expr->variable_declaration.type  = type;
                     decl_expr->variable_declaration.value = NO_EXPRESSION;
-                    add_expression_statement(&parameter_builder, decl_expr_id, 0);
+                    add_item(&builder->imperative_order, &decl_expr_id);
                 }
                 parameter_block->to = *(stream->cursor - 1);
 
@@ -292,7 +281,7 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
                 Expression call;
                 if (!parse_child_block(stream, &parameter_builder, &call))
                     return false;
-                add_expression_statement(&parameter_builder, call, 0);
+                add_item(&builder->imperative_order, &call);
             }
 
             Parsed_Expression* expr = add_expression(builder, EXPRESSION_BLOCK, start, stream->cursor - 1, out_expression);
@@ -606,16 +595,10 @@ static bool parse_expression(Token_Stream* stream, Block_Builder* builder, Expre
 
 static bool parse_statement(Token_Stream* stream, Block_Builder* builder)
 {
-    Token*  statement_start = stream->cursor;
-    flags32 statement_flags = 0;
-    // if (maybe_take_atom(stream, ATOM_DEFER))
-    //     statement_flags |= STATEMENT_IS_DEFERRED;
-
     Expression expression;
     if (!parse_expression(stream, builder, &expression))
         return false;
-    add_expression_statement(builder, expression, statement_flags);
-
+    add_item(&builder->imperative_order, &expression);
     return true;
 }
 

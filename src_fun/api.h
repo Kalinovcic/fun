@@ -214,8 +214,7 @@ enum Expression:  u32 {};
 enum Statement:   u32 {};
 
 static constexpr Expression NO_EXPRESSION = (Expression) 0xFFFFFFFF;
-
-static constexpr Statement NO_VISIBILITY = (Statement) 0xFFFFFFFF;
+static constexpr Statement  NO_VISIBILITY = (Statement)  0xFFFFFFFF;
 
 
 enum: flags32
@@ -232,7 +231,7 @@ struct Block
     Token   to;
 
     Array<struct Parsed_Expression const> parsed_expressions;
-    Array<struct Parsed_Statement  const> parsed_statements;
+    Array<Expression const> imperative_order;
 
     // Filled out in typechecking:
     Block* materialized_from;
@@ -349,12 +348,6 @@ struct Parsed_Expression
 
         struct
         {
-            Token  name;
-            Block* parsed_block;
-        } block_declaration;
-
-        struct
-        {
             Expression lhs;
             Expression rhs;
         } binary;
@@ -410,29 +403,13 @@ enum Statement_Kind: u16
     STATEMENT_EXPRESSION,
 };
 
-enum: flags16
-{
-    STATEMENT_IS_DEFERRED = 0x0001,
-};
-
 struct Parsed_Statement
 {
     Statement_Kind kind;
-    flags16        flags;
     Token          from;
     Token          to;
     Expression     expression;
-    union
-    {
-        struct
-        {
-            Expression if_true;
-            Expression if_false;
-        };
-    };
 };
-
-CompileTimeAssert(sizeof(Parsed_Statement) == 32);
 
 
 struct Run

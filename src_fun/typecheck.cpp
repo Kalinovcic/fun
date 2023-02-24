@@ -16,7 +16,7 @@ static Block* materialize_block(Unit* unit, Block* materialize_from,
 
     block->materialized_from  = materialize_from;
     block->parsed_expressions = materialize_from->parsed_expressions;
-    block->parsed_statements  = materialize_from->parsed_statements;
+    block->imperative_order   = materialize_from->imperative_order;
 
     block->inferred_expressions = allocate_array<Inferred_Expression>(&unit->memory, block->parsed_expressions.count);
     For (block->inferred_expressions)

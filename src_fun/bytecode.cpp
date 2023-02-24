@@ -278,20 +278,9 @@ static Memory* run_expression(Unit* unit, byte* storage, Block* block, Expressio
 
 static void run_block(Unit* unit, byte* storage, Block* block)
 {
-    For (block->parsed_statements)
-    {
-        switch (it->kind)
-        {
-
-        case STATEMENT_EXPRESSION:
-        {
-            if (block->inferred_expressions[it->expression].constant_index == INVALID_CONSTANT_INDEX)
-                run_expression(unit, storage, block, it->expression);
-        } break;
-
-        IllegalDefaultCase;
-        }
-    }
+    For (block->imperative_order)
+        if (block->inferred_expressions[*it].constant_index == INVALID_CONSTANT_INDEX)
+            run_expression(unit, storage, block, *it);
 }
 
 
