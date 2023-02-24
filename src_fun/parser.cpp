@@ -100,7 +100,6 @@ struct Block_Builder
     Block* block;
     Dynamic_Array<Parsed_Expression> expressions;
     Concatenator <Parsed_Statement>  statements;
-    Concatenator <Child_Block>       children_blocks;
 };
 
 static void finish_building(Compiler* ctx, Block_Builder* builder)
@@ -110,7 +109,6 @@ static void finish_building(Compiler* ctx, Block_Builder* builder)
 
     block->parsed_expressions = const_array(allocate_array(memory, &builder->expressions));
     block->parsed_statements  = const_array(resolve_to_array_and_free(&builder->statements, memory));
-    block->children_blocks    = const_array(resolve_to_array_and_free(&builder->children_blocks, memory));
     free_heap_array(&builder->expressions);
 }
 
@@ -155,7 +153,6 @@ static Parsed_Expression* add_expression(Block_Builder* builder, Expression_Kind
 }
 
 static Block* parse_block(Token_Stream* stream, flags32 flags = 0);
-static bool parse_block(Token_Stream* stream, Block_Builder* builder, Block_Index* out_block, flags32 flags = 0);
 
 static Expression_List* make_expression_list(Region* memory, umm count)
 {
@@ -182,7 +179,7 @@ static bool parse_child_block(Token_Stream* stream, Block_Builder* builder, Expr
     Parsed_Expression* call_expr = add_expression(builder, EXPRESSION_CALL, &block->from, &block->to, &call_expr_id);
     call_expr->call.lhs       = block_expr_id;
     call_expr->call.arguments = make_expression_list(&stream->ctx->parser_memory, 0);
-    call_expr->call.block     = NO_BLOCK;
+    call_expr->call.block     = NO_EXPRESSION;
 
     *out_expression = call_expr_id;
     return true;
@@ -505,9 +502,9 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
             if (!take_atom(stream, ATOM_RIGHT_PARENTHESIS, "Expected ')' after the argument list."_s))
                 return false;
 
-            Block_Index block = NO_BLOCK;
+            Expression block = NO_EXPRESSION;
             if (lookahead_atom(stream, ATOM_EQUAL_GREATER, 0) || lookahead_atom(stream, ATOM_LEFT_BRACE, 0))
-                if (!parse_block(stream, builder, &block))
+                if (!parse_child_block(stream, builder, &block))
                     return false;
 
             Expression_List* args = make_expression_list(&stream->ctx->parser_memory, 0);
@@ -604,21 +601,6 @@ static bool parse_expression(Token_Stream* stream, Block_Builder* builder, Expre
     while (ops.count) pop();
     assert(exprs.count == 1);
     *out_expression = exprs[0];
-    return true;
-}
-
-static bool parse_block(Token_Stream* stream, Block_Builder* builder, Block_Index* out_block, flags32 flags)
-{
-    Block* block = parse_block(stream, flags);
-    if (!block)
-        return false;
-
-    *out_block = (Block_Index) builder->children_blocks.count;
-
-    Child_Block child = {};
-    child.child = block;
-    child.visibility_limit = (Statement) builder->statements.count;
-    add_item(&builder->children_blocks, &child);
     return true;
 }
 

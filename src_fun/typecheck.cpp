@@ -31,8 +31,8 @@ static Block* materialize_block(Unit* unit, Block* materialize_from,
     block->parent_scope_visibility_limit = parent_scope_visibility_limit;
     if (parent_scope && parent_scope_visibility_limit != NO_VISIBILITY)
     {
-        block->materialized_block_parameter_parent = parent_scope->materialized_block_parameter_parent;
-        block->materialized_block_parameter_index  = parent_scope->materialized_block_parameter_index;
+        // block->materialized_block_parameter_parent = parent_scope->materialized_block_parameter_parent;
+        // block->materialized_block_parameter_index  = parent_scope->materialized_block_parameter_index;
     }
 
     Pipeline_Task task = {};
@@ -577,6 +577,8 @@ static Yield_Result check_expression(Pipeline_Task* task, Expression id)
         if (lhs_infer->type != TYPE_SOFT_BLOCK)
             Error("Expected a block on the left-hand side of the call expression.");
 
+        // @Incomplete - typecheck the block parameter and all of that
+
         if (expr->call.arguments->count)
             NotImplemented;
 
@@ -585,15 +587,15 @@ static Yield_Result check_expression(Pipeline_Task* task, Expression id)
         assert(lhs_block);
 
         bool expects_block = lhs_block->flags & BLOCK_HAS_BLOCK_PARAMETER;
-        bool have_block    = expr->call.block != NO_BLOCK;
+        bool have_block    = expr->call.block != NO_EXPRESSION;
         if (expects_block && !have_block)
             Error("Callee expects a block parameter.");
         else if (!expects_block && have_block)
             Error("Callee doesn't expect a block parameter.");
 
         Block* callee = materialize_block(unit, lhs_block, lhs_parent, NO_VISIBILITY);
-        callee->materialized_block_parameter_parent = block;
-        callee->materialized_block_parameter_index  = expr->call.block;
+        // callee->materialized_block_parameter_parent = block;
+        // callee->materialized_block_parameter_index  = expr->call.block;
         infer->called_block = callee;
 
         // @Incomplete
@@ -621,10 +623,30 @@ static Yield_Result check_block(Pipeline_Task* task)
     Unit*  unit  = task->unit;
     Block* block = task->block;
 
+#define STRESS_TEST 1
+
+#if STRESS_TEST
+    static Random rng = {};
+    OnlyOnce seed(&rng);
+
+    Array<Expression> visit_order = allocate_array<Expression>(NULL, block->parsed_expressions.count);
+    for (umm i = 0; i < visit_order.count; i++)
+        visit_order[i] = (Expression) i;
+    shuffle_array(&rng, visit_order);
+#endif
+
     bool made_progress = false;
     bool waiting       = false;
-    for (Expression id = (Expression) 0; id < block->parsed_expressions.count; id = (Expression)(id + 1)) Loop(expression_loop)
+
+#if STRESS_TEST
+    for (Expression* id_ptr : visit_order)
     {
+        Expression id = *id_ptr;
+#else
+    for (Expression id = (Expression) 0; id < block->parsed_expressions.count; id = (Expression)(id + 1))
+    {
+#endif
+
         if (block->inferred_expressions[id].type != INVALID_TYPE) continue;
 
         Yield_Result result = check_expression(task, id);
@@ -635,24 +657,15 @@ static Yield_Result check_block(Pipeline_Task* task)
         else if (result == YIELD_ERROR)
             return YIELD_ERROR;
         else Unreachable;
+
+#if STRESS_TEST
+        if (made_progress)
+            return YIELD_MADE_PROGRESS;
+#endif
     }
 
     if (waiting)
         return made_progress ? YIELD_MADE_PROGRESS : YIELD_NO_PROGRESS;
-
-    // typecheck statements
-    // @Incomplete
-
-    // materialize children blocks
-    auto parsed_children = block->materialized_from->children_blocks;
-    Array<Child_Block> children = allocate_array<Child_Block>(&unit->memory, parsed_children.count);
-    for (umm i = 0; i < children.count; i++)
-    {
-        children[i]       = parsed_children[i];
-        children[i].child = materialize_block(unit, children[i].child, block, children[i].visibility_limit);
-    }
-    block->children_blocks = const_array(children);
-
     return YIELD_COMPLETED;
 }
 
@@ -690,7 +703,7 @@ bool pump_pipeline(Compiler* ctx)
             switch (result)
             {
             case YIELD_COMPLETED:       ctx->pipeline[it_index].block = NULL;  // fallthrough
-            case YIELD_MADE_PROGRESS:   made_progress = true;                   // fallthrough
+            case YIELD_MADE_PROGRESS:   made_progress = true;                  // fallthrough
             case YIELD_NO_PROGRESS:     break;
             case YIELD_ERROR:           return false;
             IllegalDefaultCase;

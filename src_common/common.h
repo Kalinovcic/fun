@@ -4402,6 +4402,7 @@ double next_double    (Random* random, double low, double high);  // [ low, high
 template <typename T>
 void shuffle_array(Random* rng, Array<T> a)
 {
+    if (!a.count) return;
     for (umm i = 0; i < a.count - 1; i++)
     {
         umm j = next_u64(rng, i, a.count);

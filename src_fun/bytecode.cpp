@@ -308,9 +308,6 @@ static void allocate_remaining_unit_storage(Unit* unit, Block* block)
         if (is_soft_type(infer->type)) continue;  // soft types don't have a runtime address
         allocate_unit_storage(unit, infer->type, &infer->size, &infer->offset);
     }
-
-    For (block->children_blocks)
-        allocate_remaining_unit_storage(unit, it->child);
 }
 
 void run_unit(Unit* unit)

@@ -217,9 +217,6 @@ static constexpr Expression NO_EXPRESSION = (Expression) 0xFFFFFFFF;
 
 static constexpr Statement NO_VISIBILITY = (Statement) 0xFFFFFFFF;
 
-enum Block_Index: u32 {};
-static constexpr Block_Index NO_BLOCK = (Block_Index) 0xFFFFFFFF;
-
 
 enum: flags32
 {
@@ -236,7 +233,6 @@ struct Block
 
     Array<struct Parsed_Expression const> parsed_expressions;
     Array<struct Parsed_Statement  const> parsed_statements;
-    Array<struct Child_Block       const> children_blocks;
 
     // Filled out in typechecking:
     Block* materialized_from;
@@ -246,8 +242,8 @@ struct Block
     Block*    parent_scope;
     Statement parent_scope_visibility_limit;
 
-    Block*      materialized_block_parameter_parent;
-    Block_Index materialized_block_parameter_index;
+    // Block*      materialized_block_parameter_parent;
+    // Block_Index materialized_block_parameter_index;
 };
 
 struct Child_Block
@@ -365,8 +361,8 @@ struct Parsed_Expression
 
         struct
         {
-            Expression  lhs;
-            Block_Index block;
+            Expression lhs;
+            Expression block;
             Expression_List const* arguments;
         } call;
 
@@ -411,7 +407,7 @@ CompileTimeAssert(sizeof(Inferred_Expression) == 48);
 
 enum Statement_Kind: u16
 {
-    STATEMENT_EXPRESSION
+    STATEMENT_EXPRESSION,
 };
 
 enum: flags16
