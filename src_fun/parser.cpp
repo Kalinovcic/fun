@@ -558,18 +558,19 @@ static bool parse_expression(Token_Stream* stream, Block_Builder* builder, Expre
         {
             switch (kind)
             {
-            case EXPRESSION_ASSIGNMENT:       return 0;
-            case EXPRESSION_EQUAL:            return 1;
-            case EXPRESSION_NOT_EQUAL:        return 1;
-            case EXPRESSION_GREATER_THAN:     return 2;
-            case EXPRESSION_GREATER_OR_EQUAL: return 2;
-            case EXPRESSION_LESS_THAN:        return 2;
-            case EXPRESSION_LESS_OR_EQUAL:    return 2;
-            case EXPRESSION_ADD:              return 3;
-            case EXPRESSION_SUBTRACT:         return 3;
-            case EXPRESSION_MULTIPLY:         return 4;
-            case EXPRESSION_DIVIDE:           return 4;
-            default:                          return U32_MAX;
+            case EXPRESSION_ASSIGNMENT:        return 0;
+            case EXPRESSION_EQUAL:             return 1;
+            case EXPRESSION_NOT_EQUAL:         return 1;
+            case EXPRESSION_GREATER_THAN:      return 2;
+            case EXPRESSION_GREATER_OR_EQUAL:  return 2;
+            case EXPRESSION_LESS_THAN:         return 2;
+            case EXPRESSION_LESS_OR_EQUAL:     return 2;
+            case EXPRESSION_ADD:               return 3;
+            case EXPRESSION_SUBTRACT:          return 3;
+            case EXPRESSION_MULTIPLY:          return 4;
+            case EXPRESSION_DIVIDE_WHOLE:      return 4;
+            case EXPRESSION_DIVIDE_FRACTIONAL: return 4;
+            default:                           return U32_MAX;
             }
         };
 
@@ -602,13 +603,20 @@ static bool parse_expression(Token_Stream* stream, Block_Builder* builder, Expre
         else if (maybe_take_atom(stream, ATOM_PLUS))          op = EXPRESSION_ADD;
         else if (maybe_take_atom(stream, ATOM_MINUS))         op = EXPRESSION_SUBTRACT;
         else if (maybe_take_atom(stream, ATOM_STAR))          op = EXPRESSION_MULTIPLY;
-        else if (maybe_take_atom(stream, ATOM_SLASH))         op = EXPRESSION_DIVIDE;
+        else if (maybe_take_atom(stream, ATOM_BANG_SLASH))    op = EXPRESSION_DIVIDE_WHOLE;
+        else if (maybe_take_atom(stream, ATOM_PERCENT_SLASH)) op = EXPRESSION_DIVIDE_FRACTIONAL;
         else if (maybe_take_atom(stream, ATOM_EQUAL))         op = EXPRESSION_EQUAL;
         else if (maybe_take_atom(stream, ATOM_BANG_EQUAL))    op = EXPRESSION_NOT_EQUAL;
         else if (maybe_take_atom(stream, ATOM_GREATER))       op = EXPRESSION_GREATER_THAN;
         else if (maybe_take_atom(stream, ATOM_GREATER_EQUAL)) op = EXPRESSION_GREATER_OR_EQUAL;
         else if (maybe_take_atom(stream, ATOM_LESS))          op = EXPRESSION_LESS_THAN;
         else if (maybe_take_atom(stream, ATOM_LESS_EQUAL))    op = EXPRESSION_LESS_OR_EQUAL;
+        else if (maybe_take_atom(stream, ATOM_SLASH))
+        {
+            return ReportError(stream->ctx, stream->cursor - 1,
+                "For your own safety, and the safety of others, you can't use '/' as a division operator.\n"
+                "Use '!/' if you want whole number division, or '%/' for fractional division."_s);
+        }
         else break;
 
         Expression rhs;

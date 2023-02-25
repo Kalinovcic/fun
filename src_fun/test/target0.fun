@@ -6,10 +6,6 @@
 import "proc.fun"();
 
 
-debug 0b1e+10; // 1 * 2^10 = 1024
-debug 0x1p+8;  // 1 * 16^8 = 4294967296
-
-
 test :: ($T: type, v: u64)
 {
     x: T = cast(T, v);

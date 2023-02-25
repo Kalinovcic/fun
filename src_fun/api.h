@@ -80,6 +80,8 @@ enum Atom: u32
     ATOM_MINUS,                 // -
     ATOM_STAR,                  // *
     ATOM_SLASH,                 // /
+    ATOM_BANG_SLASH,            // !/
+    ATOM_PERCENT_SLASH,         // %/
     ATOM_PERCENT,               // %
     ATOM_AMPERSAND,             // &
     ATOM_BANG,                  // !
@@ -263,7 +265,8 @@ enum Expression_Kind: u16
     EXPRESSION_ADD,
     EXPRESSION_SUBTRACT,
     EXPRESSION_MULTIPLY,
-    EXPRESSION_DIVIDE,
+    EXPRESSION_DIVIDE_WHOLE,
+    EXPRESSION_DIVIDE_FRACTIONAL,
     EXPRESSION_EQUAL,
     EXPRESSION_NOT_EQUAL,
     EXPRESSION_GREATER_THAN,

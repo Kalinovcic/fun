@@ -636,12 +636,17 @@ bool lex_from_memory(Compiler* ctx, String name, String code, Array<Token>* out_
                 return false;
             }
         }
-        else if (c == '%') cursor++, atom = ATOM_PERCENT;
+        else if (c == '%')
+        {
+            cursor++, atom = ATOM_PERCENT;
+            if (cursor < end && *cursor == '/') cursor++, atom = ATOM_PERCENT_SLASH;
+        }
         else if (c == '&') cursor++, atom = ATOM_AMPERSAND;
         else if (c == '!')
         {
             cursor++, atom = ATOM_BANG;
-            if (cursor < end && *cursor == '=') cursor++, atom = ATOM_BANG_EQUAL;
+                 if (cursor < end && *cursor == '=') cursor++, atom = ATOM_BANG_EQUAL;
+            else if (cursor < end && *cursor == '/') cursor++, atom = ATOM_BANG_SLASH;
         }
         else if (c == '=')
         {

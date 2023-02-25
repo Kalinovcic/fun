@@ -153,10 +153,11 @@ static Memory* run_expression(Unit* unit, byte* storage, Block* block, Expressio
         memcpy(address, lhs, size);
     } break;
 
-    case EXPRESSION_ADD:      specialize_numeric_binary([](auto* v, auto* l, auto* r) { *v = *l + *r; }); break;
-    case EXPRESSION_SUBTRACT: specialize_numeric_binary([](auto* v, auto* l, auto* r) { *v = *l - *r; }); break;
-    case EXPRESSION_MULTIPLY: specialize_numeric_binary([](auto* v, auto* l, auto* r) { *v = *l * *r; }); break;
-    case EXPRESSION_DIVIDE:   specialize_numeric_binary([](auto* v, auto* l, auto* r) { *v = *l / *r; }); break;
+    case EXPRESSION_ADD:               specialize_numeric_binary([](auto* v, auto* l, auto* r) { *v = *l + *r; }); break;
+    case EXPRESSION_SUBTRACT:          specialize_numeric_binary([](auto* v, auto* l, auto* r) { *v = *l - *r; }); break;
+    case EXPRESSION_MULTIPLY:          specialize_numeric_binary([](auto* v, auto* l, auto* r) { *v = *l * *r; }); break;
+    case EXPRESSION_DIVIDE_WHOLE:      specialize_numeric_binary([](auto* v, auto* l, auto* r) { *v = *l / *r; }); break;
+    case EXPRESSION_DIVIDE_FRACTIONAL: specialize_numeric_binary([](auto* v, auto* l, auto* r) { *v = *l / *r; }); break;
 
     case EXPRESSION_EQUAL:            specialize_logic_binary([](auto* v, auto* l, auto* r) { *v = *l == *r; }); break;
     case EXPRESSION_NOT_EQUAL:        specialize_logic_binary([](auto* v, auto* l, auto* r) { *v = *l != *r; }); break;

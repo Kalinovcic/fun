@@ -575,7 +575,7 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
     case EXPRESSION_ADD:
     case EXPRESSION_SUBTRACT:
     case EXPRESSION_MULTIPLY:
-    case EXPRESSION_DIVIDE:
+    case EXPRESSION_DIVIDE_WHOLE:
     {
         Type lhs_type = block->inferred_expressions[expr->binary.lhs].type;
         Type rhs_type = block->inferred_expressions[expr->binary.rhs].type;
@@ -598,7 +598,7 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
                  if (expr->kind == EXPRESSION_ADD)      int_add(&result, rhs_int);
             else if (expr->kind == EXPRESSION_SUBTRACT) int_sub(&result, rhs_int);
             else if (expr->kind == EXPRESSION_MULTIPLY) int_mul(&result, rhs_int);
-            else if (expr->kind == EXPRESSION_DIVIDE)
+            else if (expr->kind == EXPRESSION_DIVIDE_WHOLE)
             {
                 if (!int_div(&result, rhs_int, NULL))
                     Error("Division by zero!");
@@ -613,6 +613,8 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
 
         Infer(lhs_type);
     } break;
+
+    case EXPRESSION_DIVIDE_FRACTIONAL: NotImplemented;
 
     case EXPRESSION_EQUAL:            NotImplemented;
     case EXPRESSION_NOT_EQUAL:        NotImplemented;
