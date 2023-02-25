@@ -262,10 +262,34 @@ static Memory* run_expression(Unit* unit, byte* storage, Block* block, Expressio
 
     case EXPRESSION_CALL:
     {
-        if (expr->call.arguments->count)
-            ; // NotImplemented;
-        assert(infer->called_block);
-        run_block(unit, storage, infer->called_block);
+        Block* callee = infer->called_block;
+        assert(callee);
+
+        Expression_List const* args = expr->call.arguments;
+        assert(args);
+
+        umm parameter_index = 0;
+        For (callee->imperative_order)
+        {
+            auto* param_expr  = &callee->parsed_expressions  [*it];
+            auto* param_infer = &callee->inferred_expressions[*it];
+            if (!(param_expr->flags & EXPRESSION_DECLARATION_IS_PARAMETER)) continue;
+            Defer(parameter_index++);
+
+            if (param_expr->flags & EXPRESSION_DECLARATION_IS_ALIAS) continue;
+
+            assert(parameter_index < args->count);
+            Expression arg_expression = args->expressions[parameter_index];
+            umm size = block->inferred_expressions[arg_expression].size;
+            assert(size == param_infer->size);
+            assert(param_infer->offset != INVALID_STORAGE_OFFSET);
+
+            Memory* arg = run_expression(unit, storage, block, arg_expression);
+            Memory* param = (Memory*)(storage + param_infer->offset);
+            memcpy(param, arg, size);
+        }
+
+        run_block(unit, storage, callee);
     } break;
 
     case EXPRESSION_DECLARATION:
