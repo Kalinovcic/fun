@@ -3,45 +3,6 @@
 // debug a + b;
 
 
-
-// A "" string works the same as in C
-
-/*
-// A `` string doesn't do escaping and allows any bytes inside it.
-
-`poo poo \\\\\\?"#)#=!#whatever`
-
-// If the ` string contains newlines, or you need ` inside it, then it must be of the format
-//
-//          `<ending characters>
-//          content
-//          ...
-//          ...
-//          <ending characters>`
-// 
-// All lines must start at the same column, and everything in front of that column
-// must be whitespace, which is not included in the string literal.
-
-json := `JSON
-        { "menu": {
-            "id": "file",
-            "value": "File",
-            "popup": {
-                "menuitem": [
-                    {"value": "New", "onclick": "CreateNewDoc()"},
-                    {"value": "Open", "onclick": "OpenDoc()"},
-                    {"value": "Close", "onclick": "CloseDoc()"}
-                ]
-            }
-        } }
-        JSON`;
-
-^^^^^^^^ must be whitespace, because that's the indentation of the string...
-         the actual literal above starts with a '{' character and ends with a '}'
-*/
-
-
-
 import "proc.fun"();
 
 

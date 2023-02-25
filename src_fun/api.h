@@ -70,7 +70,6 @@ enum Atom: u32
     ATOM_SEMICOLON,             // ;
     ATOM_COLON,                 // :
     ATOM_EQUAL,                 // =
-    ATOM_BACKTICK,              // `
     ATOM_LEFT_PARENTHESIS,      // (
     ATOM_RIGHT_PARENTHESIS,     // )
     ATOM_LEFT_BRACKET,          // [

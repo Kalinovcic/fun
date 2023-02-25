@@ -82,10 +82,10 @@ bool lex_from_memory(Compiler* ctx, String name, String code, Array<Token>* out_
         32, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,30,30,26,26,26,26,26,26,26,26, 0, 0, 0, 0, 0, 0,
          0,19,19,19,19,19,19, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 0, 0, 0, 0, 3,
          0,19,19,19,19,19,19, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 0, 0, 0, 0, 0,
-         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+         3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
+         3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
+         3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
+         3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
     };
     static const constexpr u8 DIGIT_VALUE[256] =
     {
@@ -180,6 +180,9 @@ bool lex_from_memory(Compiler* ctx, String name, String code, Array<Token>* out_
             *reserve_item(&line_offsets) = cursor - start;
             continue;
         }
+
+        if (c == '\t')
+            LexError("Tab characters are not allowed as whitespace.")
 
         if (cc & CHARACTER_WHITE)
         {
@@ -315,6 +318,7 @@ bool lex_from_memory(Compiler* ctx, String name, String code, Array<Token>* out_
                 c = *(cursor++);
                 if (c == '"') break;
                 else if (c == '\n') LexError("Unexpected newline in string literal.")
+                else if (c == '\r') LexError("Unexpected CR character in string literal.")
                 else if (c == '\\')
                 {
                     if (cursor >= end) LexError("Unexpected EOF in string literal.")
@@ -397,9 +401,111 @@ bool lex_from_memory(Compiler* ctx, String name, String code, Array<Token>* out_
             Token_Info_String* info = reserve_item(&ctx->token_info_string);
             info->source_index = source_index;
             info->offset       = start_cursor - start;
-            info->length       = cursor - start;
+            info->length       = cursor - start_cursor;
             info->value        = literal;
 
+            continue;
+        }
+
+        if (c == '`')
+        {
+            u8* start_cursor = cursor++;
+
+            u32 line_offset = line_offsets.base[line_offsets.count - 1];
+            u32 indentation = (start_cursor - start) - line_offset;
+            u32 literal_newlines = 0;
+            u32 literal_cr_bytes = 0;
+            u32 delimiter_length = 1;
+
+            while (true) Loop(backtick_string)
+            {
+                while (cursor < end)
+                {
+                    c = *cursor;
+                    if (c == '\n') break;
+                    cursor++;
+                    if (c == '\r')
+                    {
+                        if (cursor < end && *cursor == '\n')
+                        {
+                            printf("yep!");
+                            literal_cr_bytes++;
+                            break;
+                        }
+                        LexError("Unexpected CR character in string literal.")
+                    }
+                    if (!literal_newlines && c == '`')
+                        BreakLoop(backtick_string);
+                }
+                if (cursor >= end) LexError("Unexpected EOF in string literal")
+
+                if (!literal_newlines)
+                    delimiter_length = cursor - start_cursor - literal_cr_bytes;
+                literal_newlines++;
+
+                assert(*cursor == '\n');
+                cursor++;
+                *reserve_item(&line_offsets) = cursor - start;
+
+                for (u32 i = 0; i < indentation; i++)
+                {
+                    if (cursor >= end) LexError("Unexpected EOF in string literal")
+                    if (*cursor != ' ')
+                        LexError("Only space characters are allowed in the multiline string literal indentation.")
+                    cursor++;
+                }
+
+                if (cursor + delimiter_length <= end &&
+                    memcmp(start_cursor + 1, cursor, delimiter_length -1) == 0 &&
+                    cursor[delimiter_length - 1] == '`')
+                {
+                    cursor += delimiter_length;
+                    BreakLoop(backtick_string);
+                }
+            }
+
+            u32 literal_length = cursor - start_cursor;
+            literal_length -= 2 * delimiter_length;
+            if (literal_newlines)
+                literal_length -= literal_newlines * indentation + 2;
+            literal_length -= literal_cr_bytes;
+
+            String literal;
+            if (literal_newlines == 0)
+            {
+                assert(literal_newlines == 0);
+                assert(literal_cr_bytes == 0);
+                assert(delimiter_length == 1);
+                literal = { literal_length, start_cursor + 1 };
+                assert(literal.data + literal.length + 1 == cursor);
+            }
+            else
+            {
+                literal = allocate_uninitialized_string(&ctx->lexer_memory, literal_length);
+
+                byte* read  = start_cursor + delimiter_length;
+                byte* write = literal.data;
+                for (u32 line = 1; line < literal_newlines; line++)
+                {
+                    if (line > 1) *(write++) = '\n';
+                    if (*read == '\r') read++;
+                    assert(*read == '\n');
+                    read += indentation + 1;
+                    while (*read != '\r' && *read != '\n')
+                        *(write++) = *(read++);
+                }
+                assert(write - literal.data == literal_length);
+            }
+
+            Token* token = reserve_item(&tokens);
+            token->atom       = ATOM_STRING;
+            token->info_index = ctx->token_info_string.count;
+
+            Token_Info_String* info = reserve_item(&ctx->token_info_string);
+            info->source_index = source_index;
+            info->offset       = start_cursor - start;
+            info->length       = cursor - start_cursor;
+            info->value        = literal;
             continue;
         }
 
@@ -409,7 +515,6 @@ bool lex_from_memory(Compiler* ctx, String name, String code, Array<Token>* out_
              if (c == ',') cursor++, atom = ATOM_COMMA;
         else if (c == ';') cursor++, atom = ATOM_SEMICOLON;
         else if (c == ':') cursor++, atom = ATOM_COLON;
-        else if (c == '`') cursor++, atom = ATOM_BACKTICK;
         else if (c == '(') cursor++, atom = ATOM_LEFT_PARENTHESIS;
         else if (c == ')') cursor++, atom = ATOM_RIGHT_PARENTHESIS;
         else if (c == '[') cursor++, atom = ATOM_LEFT_BRACKET;
