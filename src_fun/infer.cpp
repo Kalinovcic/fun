@@ -31,6 +31,9 @@ static Block* materialize_block(Unit* unit, Block* materialize_from,
     block->parent_scope                  = parent_scope;
     block->parent_scope_visibility_limit = parent_scope_visibility_limit;
 
+    unit->materialized_block_count++;
+    unit->most_recent_materialized_block = block;
+
     Pipeline_Task task = {};
     task.unit  = unit;
     task.block = block;
@@ -989,8 +992,10 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
 
     IllegalDefaultCase;
     }
+
 #undef Infer
 #undef Wait
+#undef WaitOperand
 #undef Error
 
     Unreachable;
@@ -1048,7 +1053,7 @@ static Yield_Result infer_block(Pipeline_Task* task)
 }
 
 
-Unit* materialize_unit(Compiler* ctx, Run* initiator)
+Unit* materialize_unit(Compiler* ctx, Block* initiator)
 {
     Unit* unit;
     {
@@ -1060,12 +1065,11 @@ Unit* materialize_unit(Compiler* ctx, Run* initiator)
     unit->ctx            = ctx;
     unit->initiator_from = initiator->from;
     unit->initiator_to   = initiator->to;
-    unit->initiator_run  = initiator;
 
     unit->pointer_size      = sizeof(void*);
     unit->pointer_alignment = alignof(void*);
 
-    unit->entry_block    = materialize_block(unit, initiator->entry_block, NULL, NO_VISIBILITY);
+    unit->entry_block = materialize_block(unit, initiator, NULL, NO_VISIBILITY);
     return unit;
 }
 
@@ -1090,6 +1094,16 @@ bool pump_pipeline(Compiler* ctx)
             case YIELD_ERROR:           return false;
             IllegalDefaultCase;
             }
+
+            Unit* unit = ctx->pipeline[it_index].unit;
+            if (unit->materialized_block_count >= MAX_BLOCKS_PER_UNIT)
+            {
+                report_error(ctx, &unit->initiator_from,
+                    Format(temp, "Too many blocks instantiated in this unit. Maximum is %.", MAX_BLOCKS_PER_UNIT),
+                    &unit->most_recent_materialized_block->from,
+                    "The most recent instantiated block is here. It may or may not be part of the problem."_s);
+                return false;
+            }
         }
 
         if (!tried_to_make_progress)
@@ -1102,7 +1116,7 @@ bool pump_pipeline(Compiler* ctx)
             String highlight = supports_color ? "\x1b[31;1m"_s : ""_s;
             String reset     = supports_color ? "\x1b[m"_s     : ""_s;
 
-            report_error_locationless(ctx, "Can't progress typechecking."_s);
+            report_error_locationless(ctx, "Can't progress inference."_s);
             For (ctx->pipeline)
             {
                 Block* block = it->block;

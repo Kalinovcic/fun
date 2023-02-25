@@ -22,36 +22,26 @@ void free_compiler(Compiler* ctx)
 
 extern "C" int main(int argc, char** argv)
 {
-    if (argc != 2)
+    if (argc != 2 && argc != 3)
     {
-        fprintf(stderr, "Usage: %s file.fun\n", argv[0]);
+        fprintf(stderr, "Usage: %s file.fun [argument_list]\n", argv[0]);
         return 1;
     }
 
     Compiler compiler = {};
-
     Compiler* ctx = &compiler;
     Defer(free_compiler(ctx));
 
-    Array<Token> tokens = {};
-    bool ok = lex_file(ctx, make_string(argv[1]), &tokens);
-    if (!ok)
-        return 1;
-
-    if (!parse_top_level(ctx, tokens))
-        return 1;
-
-    printf("parsed\n");
-    For (ctx->runs)
-    {
-        Unit* unit = materialize_unit(ctx, *it);
-        if (!unit) return 1;
-        if (!pump_pipeline(ctx)) return 1;
-        printf("pumped\n");
-        printf("executing:\n\n");
-        run_unit(unit);
-    }
-
+    Block* main;
+    if (argc == 3)
+        main = parse_top_level_from_memory(ctx, "<string>"_s, concatenate(temp, "debug "_s, make_string(argv[2]), ";"_s));
+    else
+        main = parse_top_level_from_file(ctx, make_string(argv[1]));
+    if (!main) return 1;
+    Unit* unit = materialize_unit(ctx, main);
+    if (!unit) return 1;
+    if (!pump_pipeline(ctx)) return 1;
+    run_unit(unit);
     printf("\ndone\n");
     return 0;
 }

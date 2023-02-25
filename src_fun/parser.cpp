@@ -20,6 +20,7 @@ struct Token_Stream
     Token* start;
     Token* cursor;
     Token* end;
+    String imports_relative_to_path;
 };
 
 static void set_nonempty_token_stream(Token_Stream* stream, Compiler* ctx, Array<Token> tokens)
@@ -308,6 +309,23 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
                 return false;
             builder->expressions[*out_expression].flags |= EXPRESSION_IS_IN_PARENTHESES;
         }
+    }
+    else if (maybe_take_atom(stream, ATOM_IMPORT))
+    {
+        Token* name = stream->cursor;
+        if (!take_atom(stream, ATOM_STRING, "Expected a string literal as the import path after 'import'."_s))
+            return false;
+
+        Token_Info_String* info = (Token_Info_String*) get_token_info(stream->ctx, name);
+        // @Reconsider - check if path seems malicious
+        String path = concatenate_path(temp, stream->imports_relative_to_path, info->value);
+
+        Block* imported_block = parse_top_level_from_file(stream->ctx, path);
+        if (!imported_block)
+            return false;
+
+        Parsed_Expression* expr = add_expression(builder, EXPRESSION_BLOCK, start, stream->cursor - 1, out_expression);
+        expr->parsed_block = imported_block;
     }
     else if (maybe_take_atom(stream, ATOM_MINUS))     { if (!make_unary(EXPRESSION_NEGATE))      return false; }
     else if (maybe_take_atom(stream, ATOM_AMPERSAND)) { if (!make_unary(EXPRESSION_ADDRESS))     return false; }
@@ -664,46 +682,52 @@ static Block* parse_block(Token_Stream* stream, flags32 flags)
     }
 }
 
-Run* parse_run(Compiler* ctx, Token_Stream* stream)
+Block* parse_top_level(Compiler* ctx, String imports_relative_to_path, Array<Token> tokens)
 {
-    Token* start = stream->cursor++;  // take RUN
+    Block* block = PushValue(&ctx->parser_memory, Block);
+    block->flags |= BLOCK_IS_TOP_LEVEL;
 
-    Block* block = parse_block(stream);
-    if (!block)
-        return NULL;
+    Block_Builder builder = {};
+    builder.block = block;
+    Defer(finish_building(ctx, &builder));
 
-    Run* run = PushValue(&ctx->parser_memory, Run);
-    run->from = *start;
-    run->to = *(stream->cursor - 1);
-    run->entry_block = block;
-    return run;
+    if (tokens.count)
+    {
+        Token_Stream stream;
+        assert(tokens.count > 0);  // checked above
+        set_nonempty_token_stream(&stream, ctx, tokens);
+        stream.imports_relative_to_path = imports_relative_to_path;
+
+        block->from = *next_token_or_eof(&stream);
+        while (stream.cursor < stream.end)
+        {
+            if (!parse_statement(&stream, &builder)) return NULL;
+            if (!semicolon_after_statement(&stream)) return NULL;
+        }
+        block->to = *next_token_or_eof(&stream);
+    }
+
+    return block;
 }
 
-
-bool parse_top_level(Compiler* ctx, Array<Token> tokens)
+Block* parse_top_level_from_file(Compiler* ctx, String path)
 {
-    if (!tokens.count)
-        return true;
+    Array<Token> tokens = {};
+    bool ok = lex_file(ctx, path, &tokens);
+    if (!ok)
+        return NULL;
 
-    Token_Stream stream;
-    assert(tokens.count > 0);  // checked above
-    set_nonempty_token_stream(&stream, ctx, tokens);
+    // @Incomplete - normalize path and all that stuff
+    String import_path = get_parent_directory_path(path);
+    return parse_top_level(ctx, import_path, tokens);
+}
 
-    while (stream.cursor < stream.end)
-    {
-        if (stream.cursor->atom == ATOM_RUN)
-        {
-            Run* run = parse_run(ctx, &stream);
-            if (!run)
-                return false;
-            add_item(&ctx->runs, &run);
-        }
-        else
-        {
-            return ReportError(ctx, stream.cursor, "Unexpected token in top-level scope."_s);
-        }
-    }
-    return true;
+Block* parse_top_level_from_memory(Compiler* ctx, String name, String code)
+{
+    Array<Token> tokens = {};
+    bool ok = lex_from_memory(ctx, name, code, &tokens);
+    if (!ok) return NULL;
+    return parse_top_level(ctx, "."_s, tokens);
 }
 
 

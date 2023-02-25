@@ -41,6 +41,7 @@ static void lex_init(Compiler* ctx)
     AddKeyword(ATOM_BOOL32,       "bool32"_s);
     AddKeyword(ATOM_BOOL64,       "bool64"_s);
     AddKeyword(ATOM_STRUCT,       "struct"_s);
+    AddKeyword(ATOM_IMPORT,       "import"_s);
     AddKeyword(ATOM_TYPE,         "type"_s);
     AddKeyword(ATOM_BLOCK,        "block"_s);
     AddKeyword(ATOM_CODE_BLOCK,   "code_block"_s);
@@ -78,9 +79,20 @@ bool lex_from_memory(Compiler* ctx, String name, String code, Array<Token>* out_
     static const constexpr u8 CHARACTER_CLASS[256] =
     {
          0, 0, 0, 0, 0, 0, 0, 0, 0,32,32, 0, 0,32, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        32, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,14,14,10,10,10,10,10,10,10,10, 0, 0, 0, 0, 0, 0,
+        32, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,30,30,26,26,26,26,26,26,26,26, 0, 0, 0, 0, 0, 0,
          0,19,19,19,19,19,19, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 0, 0, 0, 0, 3,
          0,19,19,19,19,19,19, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 0, 0, 0, 0, 0,
+         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    };
+    static const constexpr u8 DIGIT_VALUE[256] =
+    {
+         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 0, 0, 0, 0, 0,
+         0,10,11,12,13,14,15, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+         0,10,11,12,13,14,15, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -193,7 +205,7 @@ bool lex_from_memory(Compiler* ctx, String name, String code, Array<Token>* out_
                 cc = CHARACTER_CLASS[c];
                 if (cc & CHARACTER_DIGIT_BASE10)
                 {
-                    int_set16(&integer_digit, c - '0');
+                    int_set16(&integer_digit, DIGIT_VALUE[c]);
                     int_mul(&value, &integer_ten);
                     int_add(&value, &integer_digit);
                 }
@@ -217,7 +229,7 @@ bool lex_from_memory(Compiler* ctx, String name, String code, Array<Token>* out_
                     {
                         found_at_least_one_digit = true;
 
-                        int_set16(&integer_digit, c - '0');
+                        int_set16(&integer_digit, DIGIT_VALUE[c]);
                         int_mul(&exponent, &integer_ten);
                         int_add(&exponent, &integer_digit);
                     }
@@ -288,6 +300,106 @@ bool lex_from_memory(Compiler* ctx, String name, String code, Array<Token>* out_
             info->source_index = source_index;
             info->length       = token_length;
             info->offset       = start_cursor - start;
+            continue;
+        }
+
+        if (c == '"')
+        {
+            u8* start_cursor = cursor;
+            cursor++;
+
+            umm literal_length = 0;
+            while (true)
+            {
+                if (cursor >= end) LexError("Unexpected EOF in string literal.")
+                c = *(cursor++);
+                if (c == '"') break;
+                else if (c == '\n') LexError("Unexpected newline in string literal.")
+                else if (c == '\\')
+                {
+                    if (cursor >= end) LexError("Unexpected EOF in string literal.")
+                    switch (c = *(cursor++))
+                    {
+                    case '0': case 'a': case 'r': case 'e':
+                    case 'f': case 'n': case 't': case 'v':
+                        literal_length++;
+                        break;
+                    case 'x': case 'u': case 'U':
+                    {
+                        umm digits = (c == 'x') ? 2 : ((c == 'u') ? 4 : 8);
+                        u32 number = 0;
+                        while (digits--)
+                        {
+                            if (cursor >= end) LexError("Unexpected EOF in string literal")
+                            cc = CHARACTER_CLASS[c = *(cursor++)];
+                            if (!(cc & CHARACTER_DIGIT_BASE16)) LexError("Expected a hexadecimal digit in escape sequence.");
+                            number = (number << 4) | DIGIT_VALUE[c];
+                        }
+                        literal_length += (c == 'x') ? 1 : get_utf8_sequence_length(number);
+                    } break;
+                    default:
+                        LexError("Unrecognized escape sequence in string literal.")
+                    }
+                }
+                else literal_length++;
+            }
+
+            umm token_length = cursor - start_cursor;
+            assert(token_length >= 2);  // opening and closing "
+            String literal = { token_length - 2, start_cursor + 1 };
+            if (token_length != literal_length + 2)
+            {
+                literal = allocate_uninitialized_string(&ctx->lexer_memory, literal_length);
+                umm j = 0;
+                for (umm i = 1; i < token_length - 1; i++)
+                {
+                    if (start_cursor[i] != '\\')
+                    {
+                        literal[j++] = start_cursor[i];
+                        continue;
+                    }
+                    switch (c = start_cursor[++i])
+                    {
+                    case '0': literal[j++] = 0;    break;
+                    case 'a': literal[j++] = '\a'; break;
+                    case 'r': literal[j++] = '\r'; break;
+                    case 'e': literal[j++] = '\e'; break;
+                    case 'f': literal[j++] = '\f'; break;
+                    case 'n': literal[j++] = '\n'; break;
+                    case 't': literal[j++] = '\t'; break;
+                    case 'v': literal[j++] = '\v'; break;
+                    case 'x': case 'u': case 'U':
+                    {
+                        umm digits = (c == 'x') ? 2 : ((c == 'u') ? 4 : 8);
+                        u32 number = 0;
+                        while (digits--)
+                            number = (number << 4) | DIGIT_VALUE[start_cursor[++i]];
+                        if (c == 'x')
+                            literal[j++] = number;
+                        else
+                        {
+                            u32 length = get_utf8_sequence_length(number);
+                            assert(literal.length - j >= length);
+                            encode_utf8_sequence(number, &literal[j], length);
+                            j += length;
+                        }
+                    } break;
+                    IllegalDefaultCase;
+                    }
+                }
+                assert(j == literal_length);
+            }
+
+            Token* token = reserve_item(&tokens);
+            token->atom       = ATOM_STRING;
+            token->info_index = ctx->token_info_string.count;
+
+            Token_Info_String* info = reserve_item(&ctx->token_info_string);
+            info->source_index = source_index;
+            info->offset       = start_cursor - start;
+            info->length       = cursor - start;
+            info->value        = literal;
+
             continue;
         }
 
@@ -405,7 +517,10 @@ bool lex_file(Compiler* ctx, String path, Array<Token>* out_tokens)
 
     String code;
     if (!read_entire_file(path, &code, &ctx->lexer_memory))
+    {
+        fprintf(stderr, "Failed to read file %.*s\n", StringArgs(path));
         return false;
+    }
 
     return lex_from_memory(ctx, get_file_name(path), code, out_tokens);
 }

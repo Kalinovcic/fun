@@ -10,6 +10,9 @@ EnterApplicationNamespace
 
 
 
+#define TRACE 0
+
+
 template <typename Base>
 struct Boolean
 {
@@ -47,8 +50,7 @@ static Memory* run_expression(Unit* unit, byte* storage, Block* block, Expressio
     Memory* address = (Memory*)(storage + infer->offset);
     assert(!(infer->flags & INFERRED_EXPRESSION_IS_NOT_EVALUATED_AT_RUNTIME));
 
-
-    if (0)
+#if TRACE
     {
         Token_Info info = dummy_token_info_for_expression(unit->ctx, expr);
         String location = location_report_part(unit->ctx, &info, 5, 5);
@@ -64,7 +66,7 @@ static Memory* run_expression(Unit* unit, byte* storage, Block* block, Expressio
         printf("\x1b[0K");
         rough_sleep(0.2);
     }
-
+#endif
 
     // report_error(unit->ctx, expr, Format(temp, "block: %, kind: %", block, expr->kind));
 
@@ -116,6 +118,7 @@ static Memory* run_expression(Unit* unit, byte* storage, Block* block, Expressio
     case EXPRESSION_FALSE:                  Unreachable;
     case EXPRESSION_INTEGER_LITERAL:        Unreachable;
     case EXPRESSION_FLOATING_POINT_LITERAL: Unreachable;
+    case EXPRESSION_BLOCK:                  Unreachable;
 
     case EXPRESSION_NAME: break;
 
@@ -349,13 +352,14 @@ void run_unit(Unit* unit)
     allocate_remaining_unit_storage(unit, unit->entry_block);
     byte* storage = alloc<byte>(NULL, unit->next_storage_offset);
     Defer(free(storage));
-    printf("Unit storage is %d bytes\n", (int) unit->next_storage_offset);
 
     run_block(unit, storage, unit->entry_block);
 
+#if TRACE
     for (int i = 0; i < 20; i++)
         printf("\x1b[0K\n");
     printf("\x1b[20A");
+#endif
 }
 
 

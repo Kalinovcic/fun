@@ -41,6 +41,8 @@ enum Atom: u32
     ATOM_STRUCT,                // struct
 
     // keywords
+    ATOM_IMPORT,                // import
+    ATOM_USING,                 // using
     ATOM_TYPE,                  // type
     ATOM_BLOCK,                 // block
     ATOM_CODE_BLOCK,            // code_block
@@ -128,6 +130,13 @@ struct Token_Info_Integer: Token_Info
 };
 
 CompileTimeAssert(sizeof(Token_Info_Integer) == 40);
+
+struct Token_Info_String: Token_Info
+{
+    String value;
+};
+
+CompileTimeAssert(sizeof(Token_Info_String) == 24);
 
 struct Token
 {
@@ -242,6 +251,7 @@ enum Expression_Kind: u16
     EXPRESSION_FLOATING_POINT_LITERAL,
     EXPRESSION_TYPE_LITERAL,
     EXPRESSION_BLOCK,
+
     EXPRESSION_NAME,
 
     // unary operators
@@ -392,6 +402,7 @@ enum: flags32
     BLOCK_IS_PARAMETER_BLOCK  = 0x0002,
     BLOCK_HAS_BLOCK_PARAMETER = 0x0004,
     BLOCK_RUNTIME_ALLOCATED   = 0x0008,
+    BLOCK_IS_TOP_LEVEL        = 0x0010,
 };
 
 struct Block
@@ -417,27 +428,33 @@ struct Block
 
 
 
-struct Run
+/*struct Run
 {
     Token  from;
     Token  to;
     Block* entry_block;
-};
+};*/
 
+
+static constexpr umm MAX_BLOCKS_PER_UNIT = 10000;
 
 struct Unit
 {
     Region memory;
     Compiler* ctx;
 
-    Token initiator_from;
-    Token initiator_to;
-    Run*  initiator_run;
+    Token  initiator_from;
+    Token  initiator_to;
+    Block* initiator_block;
 
     Block* entry_block;
 
     umm pointer_size;
     umm pointer_alignment;
+
+    umm    materialized_block_count;
+    Block* most_recent_materialized_block;
+
     u64 next_storage_offset;
 };
 
@@ -462,6 +479,7 @@ struct Compiler
     Dynamic_Array<Source_Info,        false> sources;
     Dynamic_Array<Token_Info,         false> token_info_other;
     Dynamic_Array<Token_Info_Integer, false> token_info_integer;
+    Dynamic_Array<Token_Info_String,  false> token_info_string;
     Dynamic_Array<String,             false> identifiers;
 
     Atom next_identifier_atom;
@@ -469,7 +487,6 @@ struct Compiler
 
     // Parser
     Region parser_memory;
-    Dynamic_Array<Run*, false> runs;
 
     // Inference
     Dynamic_Array<Pipeline_Task> pipeline;
@@ -498,6 +515,8 @@ inline Token_Info* get_token_info(Compiler* ctx, Token const* token)
 {
     if (token->atom == ATOM_INTEGER)
         return &ctx->token_info_integer[token->info_index];
+    if (token->atom == ATOM_STRING)
+        return &ctx->token_info_string[token->info_index];
     return &ctx->token_info_other[token->info_index];
 }
 
@@ -531,13 +550,15 @@ bool report_error(Compiler* ctx, Parsed_Expression const* at, String message);
 ////////////////////////////////////////////////////////////////////////////////
 // Parser
 
-bool parse_top_level(Compiler* ctx, Array<Token> tokens);
+Block* parse_top_level(Compiler* ctx, String imports_relative_to_path, Array<Token> tokens);
+Block* parse_top_level_from_file(Compiler* ctx, String path);
+Block* parse_top_level_from_memory(Compiler* ctx, String name, String code);
 
 
 ////////////////////////////////////////////////////////////////////////////////
 // Inference
 
-Unit* materialize_unit(Compiler* ctx, Run* initiator);
+Unit* materialize_unit(Compiler* ctx, Block* initiator);
 
 String int_base10(Integer const* integer, Region* memory);
 String vague_type_description(Unit* unit, Type type, bool point_out_soft_types = false);
