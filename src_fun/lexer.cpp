@@ -378,6 +378,7 @@ bool lex_from_memory(Compiler* ctx, String name, String code, Array<Token>* out_
             cursor++, atom = ATOM_GREATER;
             if (cursor < end && *cursor == '=') cursor++, atom = ATOM_GREATER_EQUAL;
         }
+        else if (c == '$') cursor++, atom = ATOM_DOLLAR;
         else
         {
             LexError("Unrecognized token.")

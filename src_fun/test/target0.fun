@@ -18,11 +18,20 @@ run
     wrap(block);  // this will make wrap() not compile, because the call to inner() is wrong
 */
 
-    print :: (b: u32)
-     => debug 123;
+    test :: ($T: type, $v: u64)
+    {
+        x: T = cast(T, v);
+        debug x;
+    }
+
+    test(u32, 42069);
+
+
+    print :: ($b: u32, $c: bool8)
+     => debug b;
 
     if (cast(u64, 1))
-     => print();
+     => print(123, true);
     else
      => debug 420;
 
@@ -32,19 +41,19 @@ run
 
     foo :: () => debug M;
 
-    repeat :: (a: block)
+    repeat :: ($N: u32, $a: block)
     {
         foo();
         n := cast(u8, N);
         while (n)
         {
-            debug 69;
+            a();
             n = n - cast(u8, 1);
         }
         foo();
     }
 
-    repeat()
+    repeat(10)
      => debug 69;
 
     a := cast(s64, POO :: 123); debug -a;

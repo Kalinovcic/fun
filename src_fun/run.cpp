@@ -263,7 +263,7 @@ static Memory* run_expression(Unit* unit, byte* storage, Block* block, Expressio
     case EXPRESSION_CALL:
     {
         if (expr->call.arguments->count)
-            NotImplemented;
+            ; // NotImplemented;
         assert(infer->called_block);
         run_block(unit, storage, infer->called_block);
     } break;

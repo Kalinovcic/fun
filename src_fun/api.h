@@ -89,6 +89,7 @@ enum Atom: u32
     ATOM_LESS_EQUAL,            // <=
     ATOM_GREATER,               // >
     ATOM_GREATER_EQUAL,         // >=
+    ATOM_DOLLAR,                // $
 
     ATOM_ONE_PAST_LAST_FIXED_ATOM,
 

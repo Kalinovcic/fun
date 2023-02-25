@@ -170,7 +170,9 @@ static Yield_Result check_expression(Pipeline_Task* task, Expression id)
     Unit*  unit  = task->unit;
     Block* block = task->block;
 
-    auto add_constant_integer = [&](Integer* integer) -> u32
+    bool override_made_progress = false;
+
+    auto add_constant_integer = [](Block* block, Integer* integer) -> u32
     {
         u32 index = block->constants.count;
         add_item(&block->constants, integer);
@@ -199,7 +201,7 @@ static Yield_Result check_expression(Pipeline_Task* task, Expression id)
         return YIELD_COMPLETED;                                                 \
     }
 
-    #define Wait() return YIELD_NO_PROGRESS;
+    #define Wait() return override_made_progress ? YIELD_MADE_PROGRESS : YIELD_NO_PROGRESS;
 
     #define Error(...) return (report_error(unit->ctx, expr, Format(temp, ##__VA_ARGS__)), YIELD_ERROR)
 
@@ -207,14 +209,14 @@ static Yield_Result check_expression(Pipeline_Task* task, Expression id)
     {
 
     case EXPRESSION_ZERO:                   Infer(TYPE_SOFT_ZERO);
-    case EXPRESSION_TRUE:                   Infer(TYPE_SOFT_BOOL);
-    case EXPRESSION_FALSE:                  Infer(TYPE_SOFT_BOOL);
+    case EXPRESSION_TRUE:                   infer->constant_bool = true;  Infer(TYPE_SOFT_BOOL);
+    case EXPRESSION_FALSE:                  infer->constant_bool = false; Infer(TYPE_SOFT_BOOL);
     case EXPRESSION_INTEGER_LITERAL:
     {
         Token_Info_Integer* token_info = (Token_Info_Integer*) get_token_info(unit->ctx, &expr->literal);
 
         Integer integer = int_clone(&token_info->value);
-        infer->constant_index = add_constant_integer(&integer);
+        infer->constant_index = add_constant_integer(block, &integer);
         Infer(TYPE_SOFT_INTEGER);
     } break;
 
@@ -297,7 +299,7 @@ static Yield_Result check_expression(Pipeline_Task* task, Expression id)
         if (decl_infer->type == TYPE_SOFT_INTEGER)
         {
             Integer copy = int_clone(&decl_scope->constants[decl_infer->constant_index]);
-            infer->constant_index = add_constant_integer(&copy);
+            infer->constant_index = add_constant_integer(block, &copy);
         }
         else if (decl_infer->type == TYPE_SOFT_FLOATING_POINT)
         {
@@ -339,7 +341,7 @@ static Yield_Result check_expression(Pipeline_Task* task, Expression id)
         {
             Integer integer = int_clone(&block->constants[op_infer->constant_index]);
             int_negate(&integer);
-            infer->constant_index = add_constant_integer(&integer);
+            infer->constant_index = add_constant_integer(block, &integer);
         }
         else if (op_infer->type == TYPE_SOFT_FLOATING_POINT)
         {
@@ -453,7 +455,7 @@ static Yield_Result check_expression(Pipeline_Task* task, Expression id)
                 if (!int_div(&result, rhs_int, &mod))
                     Error("Division by zero!");
             }
-            infer->constant_index = add_constant_integer(&result);
+            infer->constant_index = add_constant_integer(block, &result);
         }
         else if (lhs_type == TYPE_SOFT_FLOATING_POINT)
         {
@@ -516,7 +518,7 @@ static Yield_Result check_expression(Pipeline_Task* task, Expression id)
             }
 
             Integer copy = int_clone(integer);
-            infer->constant_index = add_constant_integer(&copy);
+            infer->constant_index = add_constant_integer(block, &copy);
         }
         else if (rhs_infer->type == TYPE_SOFT_FLOATING_POINT)
         {
@@ -564,34 +566,139 @@ static Yield_Result check_expression(Pipeline_Task* task, Expression id)
 
     case EXPRESSION_CALL:
     {
+        // Make sure everything on our side is inferred.
         auto* lhs_infer = &block->inferred_expressions[expr->call.lhs];
         if (lhs_infer->type == INVALID_TYPE) Wait();
         if (lhs_infer->type != TYPE_SOFT_BLOCK)
             Error("Expected a block on the left-hand side of the call expression.");
 
-        // @Incomplete - typecheck the block parameter and all of that
+        Expression_List const* args = expr->call.arguments;
+        for (umm arg = 0; arg < args->count; arg++)
+            if (block->inferred_expressions[args->expressions[arg]].type == INVALID_TYPE)
+                Wait();
 
-        if (expr->call.arguments->count)
-            NotImplemented;
+        if (expr->call.block != NO_EXPRESSION)
+        {
+            auto* block_infer = &block->inferred_expressions[expr->call.block];
+            if (block_infer->type == INVALID_TYPE) Wait();
+            if (block_infer->type != TYPE_SOFT_BLOCK)
+                Error("Internal error: Expected a block as the baked block parameter. But this should always be the case?");
+        }
 
-        Block* lhs_parent = lhs_infer->constant_block.materialized_parent;
-        Block* lhs_block  = lhs_infer->constant_block.parsed_child;
-        assert(lhs_block);
+        // First stage: materializing the callee
+        if (!infer->called_block)
+        {
+            // First check against the parsed block that the argument count is correct.
+            Block* lhs_parent = lhs_infer->constant_block.materialized_parent;
+            Block* lhs_block  = lhs_infer->constant_block.parsed_child;
+            assert(lhs_block);
 
-        bool expects_block = lhs_block->flags & BLOCK_HAS_BLOCK_PARAMETER;
-        bool have_block    = expr->call.block != NO_EXPRESSION;
-        if (expects_block && !have_block)
-            Error("Callee expects a block parameter.");
-        else if (!expects_block && have_block)
-            Error("Callee doesn't expect a block parameter.");
+            bool expects_block = lhs_block->flags & BLOCK_HAS_BLOCK_PARAMETER;
+            bool have_block    = expr->call.block != NO_EXPRESSION;
+            if (expects_block && !have_block) Error("Callee expects a block parameter.");
+            if (!expects_block && have_block) Error("Callee doesn't expect a block parameter.");
 
-        Visibility visibility = (expr->flags & EXPRESSION_ALLOW_PARENT_SCOPE_VISIBILITY)
-                ? expr->visibility_limit
-                : NO_VISIBILITY;
-        Block* callee = materialize_block(unit, lhs_block, lhs_parent, visibility);
-        // callee->materialized_block_parameter_parent = block;
-        // callee->materialized_block_parameter_index  = expr->call.block;
-        infer->called_block = callee;
+            umm regular_parameter_count = 0;
+            For (lhs_block->imperative_order)
+                if (lhs_block->parsed_expressions[*it].flags & EXPRESSION_DECLARATION_IS_PARAMETER)
+                    regular_parameter_count++;
+            if (regular_parameter_count != args->count + (have_block ? 1 : 0))
+                Error("Callee expects % %, but you provided %.",
+                    regular_parameter_count, plural(regular_parameter_count, "parameter"_s, "parameters"_s),
+                    args->count);
+
+            // Now materialize the callee
+            Visibility visibility = (expr->flags & EXPRESSION_ALLOW_PARENT_SCOPE_VISIBILITY)
+                                  ? expr->visibility_limit
+                                  : NO_VISIBILITY;
+            Block* callee = materialize_block(unit, lhs_block, lhs_parent, visibility);
+            infer->called_block = callee;
+
+            override_made_progress = true;  // We made progress by materializing the callee.
+        }
+
+        // Second stage: checking the parameter types
+        Block* callee = infer->called_block;
+        umm parameter_index = 0;
+        For (callee->imperative_order)
+        {
+            auto* param_expr  = &callee->parsed_expressions  [*it];
+            auto* param_infer = &callee->inferred_expressions[*it];
+            if (!(param_expr->flags & EXPRESSION_DECLARATION_IS_PARAMETER)) continue;
+            Defer(parameter_index++);
+            assert(param_expr->declaration.type != NO_EXPRESSION);
+            assert(param_expr->declaration.value == NO_EXPRESSION);
+
+            auto* type_infer = &callee->inferred_expressions[param_expr->declaration.type];
+            if (type_infer->type == INVALID_TYPE) Wait();
+            if (type_infer->type != TYPE_SOFT_TYPE) Wait();  // let the callee report this error
+            Type param_type = type_infer->constant_type;
+
+            if (args->count == parameter_index)
+            {
+                // The last parameter, which isn't in our expression list but is in the callee's
+                // parameter scope, is the block parameter.
+                assert(param_type == TYPE_SOFT_BLOCK);
+                assert(param_expr->flags & EXPRESSION_DECLARATION_IS_ALIAS);
+                assert(expr->call.block != NO_EXPRESSION);
+                assert(block->inferred_expressions[expr->call.block].type == TYPE_SOFT_BLOCK);
+
+                Soft_Block soft = block->inferred_expressions[expr->call.block].constant_block;
+                type_infer->constant_block = soft;
+
+                param_infer->flags |= INFERRED_EXPRESSION_IS_NOT_EVALUATED_AT_RUNTIME;
+                param_infer->constant_block = soft;
+                param_infer->type = TYPE_SOFT_BLOCK;
+                override_made_progress = true;  // We made progress by inferring the callee's param type.
+            }
+            else
+            {
+                assert(args->count > parameter_index);
+                auto* arg_infer = &block->inferred_expressions[args->expressions[parameter_index]];
+                if (param_expr->flags & EXPRESSION_DECLARATION_IS_ALIAS)
+                {
+                    if (is_integer_type(param_type))
+                    {
+                        if (arg_infer->type != TYPE_SOFT_INTEGER)
+                            Error("Argument #% is expected to be a compile-time integer.", parameter_index + 1);
+                        // @Incomplete - check if the value fits in the actual type
+                        Integer copy = int_clone(&block->constants[arg_infer->constant_index]);
+                        param_infer->flags |= INFERRED_EXPRESSION_IS_NOT_EVALUATED_AT_RUNTIME;
+                        param_infer->constant_index = add_constant_integer(callee, &copy);
+                        param_infer->type = TYPE_SOFT_INTEGER;
+                        override_made_progress = true;  // We made progress by inferring the callee's param type.
+                    }
+                    else if (is_floating_point_type(param_type))
+                    {
+                        NotImplemented;
+                    }
+                    else if (is_bool_type(param_type))
+                    {
+                        if (arg_infer->type != TYPE_SOFT_BOOL)
+                            Error("Argument #% is expected to be a compile-time boolean.", parameter_index + 1);
+                        param_infer->flags |= INFERRED_EXPRESSION_IS_NOT_EVALUATED_AT_RUNTIME;
+                        param_infer->constant_bool = arg_infer->constant_bool;
+                        param_infer->type = TYPE_SOFT_BOOL;
+                        override_made_progress = true;  // We made progress by inferring the callee's param type.
+                    }
+                    else if (param_type == TYPE_TYPE)
+                    {
+                        if (arg_infer->type != TYPE_SOFT_TYPE)
+                            Error("Argument #% is expected to be a compile-time type.", parameter_index + 1);
+                        param_infer->flags |= INFERRED_EXPRESSION_IS_NOT_EVALUATED_AT_RUNTIME;
+                        param_infer->constant_type = arg_infer->constant_type;
+                        param_infer->type = TYPE_SOFT_TYPE;
+                        override_made_progress = true;  // We made progress by inferring the callee's param type.
+                    }
+                    else Unreachable;
+                }
+                else
+                {
+                    if (param_type != arg_infer->type)
+                        Error("Argument #% doesn't match the parameter type.", parameter_index + 1);
+                }
+            }
+        }
 
         // @Incomplete
         Infer(TYPE_VOID);
@@ -604,12 +711,18 @@ static Yield_Result check_expression(Pipeline_Task* task, Expression id)
 
         if (expr->flags & EXPRESSION_DECLARATION_IS_ALIAS)
         {
+            if (expr->declaration.value == NO_EXPRESSION)
+            {
+                assert(expr->flags & EXPRESSION_DECLARATION_IS_PARAMETER);
+                Wait();  // we can't infer this ourself, we're waiting for the callee to infer it for us
+            }
+
             auto* value_infer = &block->inferred_expressions[expr->declaration.value];
             if (value_infer->type == INVALID_TYPE) Wait();
             if (value_infer->type == TYPE_SOFT_INTEGER)
             {
                 Integer copy = int_clone(&block->constants[value_infer->constant_index]);
-                infer->constant_index = add_constant_integer(&copy);
+                infer->constant_index = add_constant_integer(block, &copy);
             }
             else if (value_infer->type == TYPE_SOFT_FLOATING_POINT)
             {
