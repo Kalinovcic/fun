@@ -190,6 +190,7 @@ enum Type: u32
     TYPE_FIRST_USER_TYPE = TYPE_ONE_PAST_LAST_PRIMITIVE_TYPE,
 };
 
+inline Type get_base_type  (Type type)                  { return (Type)(type & TYPE_BASE_MASK); }
 inline u32  get_indirection(Type type)                  { return type >> TYPE_POINTER_SHIFT; }
 inline Type set_indirection(Type type, u32 indirection) { return (Type)((type & TYPE_BASE_MASK) | (indirection << TYPE_POINTER_SHIFT)); }
 
@@ -369,6 +370,22 @@ struct Inferred_Expression
 CompileTimeAssert(sizeof(Inferred_Expression) == 48);
 
 
+enum Wait_Reason: u32
+{
+    WAITING_ON_OPERAND,              // most boring wait reason, skipped in chain reporting because it's obvious
+    WAITING_ON_DECLARATION,          // a name expression can wait for the declaration to infer
+    WAITING_ON_PARAMETER_INFERENCE,  // a call expression can wait for the callee to infer its parameter types
+    WAITING_ON_BAKE_INFERENCE,       // an alias parameter declaration can wait for the caller to infer it
+};
+
+struct Wait_Info
+{
+    Wait_Reason why;
+    Expression  on_expression;
+    Block*      on_block;
+};
+
+
 enum: flags32
 {
     BLOCK_IS_MATERIALIZED     = 0x0001,
@@ -391,6 +408,8 @@ struct Block
     Block* materialized_from;
     Array<struct Inferred_Expression> inferred_expressions;  // parallel to parsed_expressions
     Dynamic_Array<struct Integer> constants;
+
+    Table(Expression, Wait_Info, hash_u32) waiting_expressions;
 
     Block*     parent_scope;
     Visibility parent_scope_visibility_limit;
@@ -498,7 +517,11 @@ inline String get_identifier(Compiler* ctx, Token const* token)
 }
 
 
+bool enable_color_output();
+
 String location_report_part(Compiler* ctx, Token_Info const* info, umm lines_before = 2, umm lines_behind = 0);
+String location_report_part(Compiler* ctx, Token const* token, umm lines_before = 2, umm lines_behind = 0);
+
 bool report_error_locationless(Compiler* ctx, String message);
 bool report_error(Compiler* ctx, Token const* at, String message);
 bool report_error(Compiler* ctx, Token const* at1, String message1, Token const* at2, String message2);
@@ -515,6 +538,11 @@ bool parse_top_level(Compiler* ctx, Array<Token> tokens);
 // Inference
 
 Unit* materialize_unit(Compiler* ctx, Run* initiator);
+
+String int_base10(Integer const* integer, Region* memory);
+String vague_type_description(Unit* unit, Type type, bool point_out_soft_types = false);
+String vague_type_description_in_compile_time_context(Unit* unit, Type type);
+String exact_type_description(Unit* unit, Type type);
 
 bool find_declaration(Unit* unit, Token const* name,
                       Block* scope, Visibility visibility_limit,

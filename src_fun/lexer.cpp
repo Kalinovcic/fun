@@ -474,7 +474,7 @@ Token_Info dummy_token_info_for_expression(Compiler* ctx, Parsed_Expression cons
 
 
 
-static bool enable_color_output();
+bool enable_color_output();
 
 String location_report_part(Compiler* ctx, Token_Info const* info, umm lines_before, umm lines_after)
 {
@@ -515,6 +515,12 @@ String location_report_part(Compiler* ctx, Token_Info const* info, umm lines_bef
         FormatAdd(&cat, "%~% >% %\n", lowlight, s64_format(source_line++, digits),
             reset, consume_line_preserve_whitespace(&source));
     return resolve_to_string_and_free(&cat, temp);
+}
+
+String location_report_part(Compiler* ctx, Token const* token, umm lines_before, umm lines_behind)
+{
+    Token_Info* info = get_token_info(ctx, token);
+    return location_report_part(ctx, info, lines_before, lines_behind);
 }
 
 bool report_error_locationless(Compiler* ctx, String message)
@@ -640,7 +646,7 @@ ExitApplicationNamespace
 EnterApplicationNamespace
 
 
-static bool enable_color_output()
+bool enable_color_output()
 {
     OnlyOnce
     {
@@ -657,7 +663,7 @@ static bool enable_color_output()
 
 #else
 
-static bool enable_color_output()
+bool enable_color_output()
 {
     // @Incomplete - check color support
     return true;

@@ -9,46 +9,6 @@ EnterApplicationNamespace
 
 
 
-static String int_base10(Integer const* integer, Region* memory)
-{
-    Integer i = int_clone(integer);
-    Defer(int_free(&i));
-    if (i.negative)
-        int_negate(&i);
-
-    Integer ten = {};
-    int_set16(&ten, 10);
-    Defer(int_free(&ten));
-
-    String_Concatenator cat = {};
-    if (int_is_zero(&i))
-        add(&cat, "0"_s);
-    else while (!int_is_zero(&i))
-    {
-        Integer mod = {};
-        Defer(int_free(&mod));
-        int_div(&i, &ten, &mod);
-
-        u32 number = mod.size ? mod.digit[0] : 0;
-        assert(number < 10);
-        char c = '0' + number;
-        add(&cat, &c, 1);
-    }
-
-    if (integer->negative)
-        add(&cat, "-"_s);
-
-    String str = resolve_to_string_and_free(&cat, memory);
-    for (umm i = 0; i < str.length - i - 1; i++)
-    {
-        u8 temp = str[i];
-        str[i] = str[str.length - i - 1];
-        str[str.length - i - 1] = temp;
-    }
-    return str;
-}
-
-
 
 template <typename Base>
 struct Boolean
