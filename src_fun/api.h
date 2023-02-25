@@ -394,7 +394,6 @@ struct Block
 
     Block*     parent_scope;
     Visibility parent_scope_visibility_limit;
-    Soft_Block block_parameter;
 };
 
 

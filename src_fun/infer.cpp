@@ -30,8 +30,6 @@ static Block* materialize_block(Unit* unit, Block* materialize_from,
 
     block->parent_scope                  = parent_scope;
     block->parent_scope_visibility_limit = parent_scope_visibility_limit;
-    if (parent_scope && parent_scope_visibility_limit != NO_VISIBILITY)
-        block->block_parameter = parent_scope->block_parameter;
 
     Pipeline_Task task = {};
     task.unit  = unit;
