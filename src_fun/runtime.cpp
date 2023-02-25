@@ -60,18 +60,18 @@ struct Boolean
 
 union Memory
 {
-    byte    base[0];
-    Memory* as_address;
-    u8      as_u8;
-    u16     as_u16;
-    u32     as_u32;
-    u64     as_u64;
-    s8      as_s8;
-    s16     as_s16;
-    s32     as_s32;
-    s64     as_s64;
-    f32     as_f32;
-    f64     as_f64;
+    byte  base[0];
+    byte* as_address;
+    u8    as_u8;
+    u16   as_u16;
+    u32   as_u32;
+    u64   as_u64;
+    s8    as_s8;
+    s16   as_s16;
+    s32   as_s32;
+    s64   as_s64;
+    f32   as_f32;
+    f64   as_f64;
     Boolean<u8>  as_bool8;
     Boolean<u16> as_bool16;
     Boolean<u32> as_bool32;
@@ -169,7 +169,7 @@ static Memory* run_expression(Unit* unit, byte* storage, Block* block, Expressio
     case EXPRESSION_ADDRESS:
     {
         assert(infer->size == sizeof(void*));
-        address->as_address = run_expression(unit, storage, block, expr->unary_operand);
+        address->as_address = (byte*) run_expression(unit, storage, block, expr->unary_operand);
     } break;
 
     case EXPRESSION_DEREFERENCE:
@@ -288,6 +288,8 @@ static Memory* run_expression(Unit* unit, byte* storage, Block* block, Expressio
         auto* op_infer = &block->inferred_expressions[expr->unary_operand];
         switch (op_infer->type)
         {
+        case TYPE_VOID:                 printf("void\n"); break;
+        case TYPE_SOFT_ZERO:            printf("zero\n"); break;
         case TYPE_SOFT_INTEGER:
         {
             String str = int_base10(&block->constants[op_infer->constant_index], temp);
