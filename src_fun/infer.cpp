@@ -617,6 +617,8 @@ static Yield_Result check_expression(Pipeline_Task* task, Expression id)
             override_made_progress = true;  // We made progress by materializing the callee.
         }
 
+        bool waiting_on_a_parameter = false;
+
         // Second stage: checking the parameter types
         Block* callee = infer->called_block;
         umm parameter_index = 0;
@@ -630,12 +632,19 @@ static Yield_Result check_expression(Pipeline_Task* task, Expression id)
             assert(param_expr->declaration.value == NO_EXPRESSION);
 
             auto* type_infer = &callee->inferred_expressions[param_expr->declaration.type];
-            if (type_infer->type == INVALID_TYPE) Wait();
+            if (type_infer->type == INVALID_TYPE)
+            {
+                // We don't immediately Wait(), to enable out of order parameter inference.
+                waiting_on_a_parameter = true;
+                continue;
+            }
             if (type_infer->type != TYPE_SOFT_TYPE) Wait();  // let the callee report this error
             Type param_type = type_infer->constant_type;
 
             if (args->count == parameter_index)
             {
+                if (param_infer->type != INVALID_TYPE) continue;  // already inferred
+
                 // The last parameter, which isn't in our expression list but is in the callee's
                 // parameter scope, is the block parameter.
                 assert(param_type == TYPE_SOFT_BLOCK);
@@ -657,6 +666,8 @@ static Yield_Result check_expression(Pipeline_Task* task, Expression id)
                 auto* arg_infer = &block->inferred_expressions[args->expressions[parameter_index]];
                 if (param_expr->flags & EXPRESSION_DECLARATION_IS_ALIAS)
                 {
+                    if (param_infer->type != INVALID_TYPE) continue;  // already inferred
+
                     if (is_integer_type(param_type))
                     {
                         if (arg_infer->type != TYPE_SOFT_INTEGER)
@@ -700,7 +711,10 @@ static Yield_Result check_expression(Pipeline_Task* task, Expression id)
             }
         }
 
-        // @Incomplete
+        if (waiting_on_a_parameter)
+            Wait();
+
+        // @Incomplete - yield type
         Infer(TYPE_VOID);
     } break;
 
