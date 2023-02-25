@@ -600,9 +600,7 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
             else if (expr->kind == EXPRESSION_MULTIPLY) int_mul(&result, rhs_int);
             else if (expr->kind == EXPRESSION_DIVIDE)
             {
-                Integer mod = {};
-                Defer(int_free(&mod));
-                if (!int_div(&result, rhs_int, &mod))
+                if (!int_div(&result, rhs_int, NULL))
                     Error("Division by zero!");
             }
             infer->constant_index = add_constant_integer(block, &result);

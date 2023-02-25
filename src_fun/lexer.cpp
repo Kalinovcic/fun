@@ -73,15 +73,16 @@ bool lex_from_memory(Compiler* ctx, String name, String code, Array<Token>* out_
     static const constexpr u8 CHARACTER_IDENTIFIER_START        =  1;
     static const constexpr u8 CHARACTER_IDENTIFIER_CONTINUATION =  2;
     static const constexpr u8 CHARACTER_DIGIT_BASE2             =  4;
-    static const constexpr u8 CHARACTER_DIGIT_BASE10            =  8;
-    static const constexpr u8 CHARACTER_DIGIT_BASE16            = 16;
-    static const constexpr u8 CHARACTER_WHITE                   = 32;
+    static const constexpr u8 CHARACTER_DIGIT_BASE8             =  8;
+    static const constexpr u8 CHARACTER_DIGIT_BASE10            = 16;
+    static const constexpr u8 CHARACTER_DIGIT_BASE16            = 32;
+    static const constexpr u8 CHARACTER_WHITE                   = 64;
     static const constexpr u8 CHARACTER_CLASS[256] =
     {
-         0, 0, 0, 0, 0, 0, 0, 0, 0,32,32, 0, 0,32, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        32, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,30,30,26,26,26,26,26,26,26,26, 0, 0, 0, 0, 0, 0,
-         0,19,19,19,19,19,19, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 0, 0, 0, 0, 3,
-         0,19,19,19,19,19,19, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 0, 0, 0, 0, 0,
+         0, 0, 0, 0, 0, 0, 0, 0, 0,64,64, 0, 0,64, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        64, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,62,62,58,58,58,58,58,58,50,50, 0, 0, 0, 0, 0, 0,
+         0,35,35,35,35,35,35, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 0, 0, 0, 0, 3,
+         0,35,35,35,35,35,35, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 0, 0, 0, 0, 0,
          3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
          3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
          3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
@@ -98,23 +99,6 @@ bool lex_from_memory(Compiler* ctx, String name, String code, Array<Token>* out_
          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
          0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     };
-
-    /*
-    for (umm i = 0; i < 256; i++)
-    {
-        int x = 0;
-        if (i >= 'a' && i <= 'z') x |= CHARACTER_IDENTIFIER_START | CHARACTER_IDENTIFIER_CONTINUATION;
-        if (i >= 'A' && i <= 'Z') x |= CHARACTER_IDENTIFIER_START | CHARACTER_IDENTIFIER_CONTINUATION;
-        if (i == '_') x |= CHARACTER_IDENTIFIER_START | CHARACTER_IDENTIFIER_CONTINUATION;
-        if (i >= '0' && i <= '9') x |= CHARACTER_DIGIT_BASE10 | CHARACTER_IDENTIFIER_CONTINUATION;
-        if (i >= '0' && i <= '1') x |= CHARACTER_DIGIT_BASE2;
-        if (i >= 'a' && i <= 'f') x |= CHARACTER_DIGIT_BASE16;
-        if (i >= 'A' && i <= 'F') x |= CHARACTER_DIGIT_BASE16;
-        if (i == ' ' || i == '\t' || i == '\r' || i == '\n') x |= CHARACTER_WHITE;
-        printf("%2d,", x);
-        if (i % 32 == 31) printf("\n");
-    }
-    */
 
 
     if (code.length >= U32_MAX)
@@ -164,9 +148,11 @@ bool lex_from_memory(Compiler* ctx, String name, String code, Array<Token>* out_
     if (cursor + 1 < end && cursor[0] == '#' && cursor[1] == '!')
         while (cursor < end && *cursor != '\n') cursor++;
 
-    Integer integer_ten = {};
-    Integer integer_digit = {};
+    Integer integer_ten     = {};
+    Integer integer_base    = {};
+    Integer integer_digit   = {};
     Defer(int_free(&integer_ten));
+    Defer(int_free(&integer_base));
     Defer(int_free(&integer_digit));
     int_set16(&integer_ten, 10);
 
@@ -192,36 +178,92 @@ bool lex_from_memory(Compiler* ctx, String name, String code, Array<Token>* out_
 
         if (cc & CHARACTER_DIGIT_BASE10)
         {
-            Token* token = reserve_item(&tokens);
-            token->atom       = ATOM_INTEGER;
-            token->info_index = ctx->token_info_integer.count;
+            u8* start_cursor = cursor;
 
-            Token_Info_Integer* info = reserve_item(&ctx->token_info_integer);
-            info->source_index = source_index;
-            info->offset       = cursor - start;
+            // parse 0b 0o 0x prefix
+            u32 base = 10;
+            u8 digit_class = CHARACTER_DIGIT_BASE10;
+            if (cursor + 1 < end && cursor[0] == '0')
+            {
+                c = cursor[1];
+                     if (c == 'b' || c == 'B') digit_class = CHARACTER_DIGIT_BASE2,  base =  2, cursor += 2;
+                else if (c == 'o' || c == 'O') digit_class = CHARACTER_DIGIT_BASE8,  base =  8, cursor += 2;
+                else if (c == 'x' || c == 'X') digit_class = CHARACTER_DIGIT_BASE16, base = 16, cursor += 2;
+            }
 
-            Integer value = {};
-            int_set_zero(&value);
+            int_set16(&integer_base, base);
+
+            // parse integer part
+            Integer numerator = {};
+            int_set_zero(&numerator);
+            Defer(int_free(&numerator));
             while (cursor < end)
             {
                 c  = *cursor;
                 cc = CHARACTER_CLASS[c];
-                if (cc & CHARACTER_DIGIT_BASE10)
+                if (cc & digit_class)
                 {
                     int_set16(&integer_digit, DIGIT_VALUE[c]);
-                    int_mul(&value, &integer_ten);
-                    int_add(&value, &integer_digit);
+                    int_mul(&numerator, &integer_base);
+                    int_add(&numerator, &integer_digit);
                 }
+                else if (cc & CHARACTER_DIGIT_BASE16 && c != 'e' && c != 'E')
+                    LexError("'%' is not a base % digit.", memory_as_string(&c), base)
                 else if (c != '_')
                     break;
                 cursor++;
             }
 
-            if (cursor < end && (*cursor == 'e' || *cursor == 'E'))
+            // parse fractional part if it exists
+            bool has_denominator = false;
+            Integer denominator = {};
+            Defer(int_free(&denominator));
+            if (cursor < end && *cursor == '.')
+            {
+                cursor++;
+                has_denominator = true;
+                int_set16(&denominator, 1);
+
+                while (cursor < end)
+                {
+                    c  = *cursor;
+                    cc = CHARACTER_CLASS[c];
+                    if (cc & digit_class)
+                    {
+                        int_set16(&integer_digit, DIGIT_VALUE[c]);
+                        int_mul(&numerator, &integer_base);
+                        int_add(&numerator, &integer_digit);
+                        int_mul(&denominator, &integer_base);
+                    }
+                    else if (cc & CHARACTER_DIGIT_BASE16 && c != 'e' && c != 'E')
+                        LexError("'%' is not a base % digit.", memory_as_string(&c), base)
+                    else if (c != '_')
+                        break;
+                    cursor++;
+                }
+            }
+
+            // parse exponent part if it exists
+            char exponent_char = (base == 16) ? 'p' : 'e';
+            if (cursor < end && (*cursor == exponent_char || *cursor == (exponent_char - 'a' + 'A')))
             {
                 cursor++;
 
+                if (cursor < end)
+                {
+                    if (*cursor == '+')
+                        cursor++;
+                    else if (*cursor == '-')
+                    {
+                        Integer temp = denominator;
+                        denominator = numerator;
+                        numerator = temp;
+                        cursor++;
+                    }
+                }
+
                 Integer exponent = {};
+                int_set_zero(&exponent);
                 Defer(int_free(&exponent));
                 bool found_at_least_one_digit = false;
                 while (cursor < end)
@@ -244,13 +286,35 @@ bool lex_from_memory(Compiler* ctx, String name, String code, Array<Token>* out_
                     LexError("Missing exponent in numeric literal.")
 
                 Integer multiplier = {};
-                int_pow(&multiplier, &integer_ten, &exponent);
-                int_mul(&value, &multiplier);
+                int_pow(&multiplier, &integer_base, &exponent);
+                int_mul(&numerator, &multiplier);
                 int_free(&multiplier);
             }
 
-            info->length = (cursor - start) - info->offset;
-            info->value = value;
+            if (!has_denominator)
+            {
+                Token* token = reserve_item(&tokens);
+                token->atom       = ATOM_INTEGER;
+                token->info_index = ctx->token_info_integer.count;
+
+                Token_Info_Integer* info = reserve_item(&ctx->token_info_integer);
+                info->source_index = source_index;
+                info->offset       = start_cursor - start;
+                info->length       = cursor - start_cursor;
+                info->value        = numerator;
+                numerator = {};  // don't free it
+            }
+            else
+            {
+                Integer gcd = {};
+                int_gcd(&gcd, &numerator, &denominator);
+                bool ok1 = int_div(&numerator,   &gcd, NULL);
+                bool ok2 = int_div(&denominator, &gcd, NULL);
+                assert(ok1 && ok2);
+
+                LexError("@Incomplete - floating point literals are not supported yet");
+            }
+
             continue;
         }
 
