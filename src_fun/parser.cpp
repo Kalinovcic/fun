@@ -373,7 +373,7 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
                         return false;
             }
 
-            Parsed_Expression* expr = add_expression(builder, EXPRESSION_DECLARATION, start, value, out_expression);
+            Parsed_Expression* expr = add_expression(builder, EXPRESSION_DECLARATION, start, stream->cursor - 1, out_expression);
             expr->flags |= alias ? EXPRESSION_DECLARATION_IS_ALIAS : EXPRESSION_DECLARATION_IS_ORDERED;
             expr->declaration.name  = *start;
             expr->declaration.type  = type;

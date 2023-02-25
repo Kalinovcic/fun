@@ -189,7 +189,9 @@ enum Type: u32
     TYPE_FIRST_USER_TYPE = TYPE_ONE_PAST_LAST_PRIMITIVE_TYPE,
 };
 
-inline u32  get_indirection         (Type type) { return type >> TYPE_POINTER_SHIFT; }
+inline u32  get_indirection(Type type)                  { return type >> TYPE_POINTER_SHIFT; }
+inline Type set_indirection(Type type, u32 indirection) { return (Type)((type & TYPE_BASE_MASK) | (indirection << TYPE_POINTER_SHIFT)); }
+
 inline bool is_integer_type         (Type type) { return type >= TYPE_U8    && type <= TYPE_SOFT_INTEGER;                 }
 inline bool is_unsigned_integer_type(Type type) { return type >= TYPE_U8    && type <= TYPE_U64;                          }
 inline bool is_signed_integer_type  (Type type) { return type >= TYPE_S8    && type <= TYPE_S64;                          }
@@ -201,6 +203,7 @@ inline bool is_user_defined_type    (Type type) { return type >= TYPE_FIRST_USER
 inline bool is_type_type            (Type type) { return type == TYPE_TYPE  || type == TYPE_SOFT_TYPE;                    }
 inline bool is_block_type           (Type type) { return type == TYPE_SOFT_BLOCK;                                         }
 inline bool is_soft_type            (Type type) { return type == TYPE_SOFT_ZERO || type == TYPE_SOFT_INTEGER || type == TYPE_SOFT_FLOATING_POINT || type == TYPE_SOFT_BOOL || type == TYPE_SOFT_TYPE || type == TYPE_SOFT_BLOCK; }
+inline bool is_pointer_type         (Type type) { return get_indirection(type) > 0; }
 
 
 
@@ -383,7 +386,7 @@ struct Block
     Array<struct Parsed_Expression const> parsed_expressions;
     Array<Expression const> imperative_order;
 
-    // Filled out in typechecking:
+    // Filled out in inference:
     Block* materialized_from;
     Array<struct Inferred_Expression> inferred_expressions;  // parallel to parsed_expressions
     Dynamic_Array<struct Integer> constants;
@@ -414,6 +417,8 @@ struct Unit
 
     Block* entry_block;
 
+    umm pointer_size;
+    umm pointer_alignment;
     u64 next_storage_offset;
 };
 
@@ -447,7 +452,7 @@ struct Compiler
     Region parser_memory;
     Dynamic_Array<Run*, false> runs;
 
-    // Typechecker
+    // Inference
     Dynamic_Array<Pipeline_Task> pipeline;
 };
 
@@ -461,10 +466,14 @@ void free_compiler(Compiler* compiler);
 bool lex_from_memory(Compiler* ctx, String name, String code, Array<Token>* out_tokens);
 bool lex_file(Compiler* ctx, String path, Array<Token>* out_tokens);
 
-void get_line_and_column(Compiler* ctx, Token_Info const* info,
-                         u32* out_line,
-                         u32* out_column = NULL,
-                         Array<String> out_source_lines = {});
+void get_line(Compiler* ctx, Token_Info const* info,
+              u32* out_line, u32* out_column = NULL, String* out_source_name = NULL);
+
+void get_source_code_slice(Compiler* ctx, Token_Info const* info,
+                           umm extra_lines_before, umm extra_lines_after,
+                           String* out_source, u32* out_source_offset, u32* out_source_line);
+
+Token_Info dummy_token_info_for_expression(Compiler* ctx, Parsed_Expression const* expr);
 
 inline Token_Info* get_token_info(Compiler* ctx, Token const* token)
 {
@@ -489,7 +498,7 @@ inline String get_identifier(Compiler* ctx, Token const* token)
 }
 
 
-String location_report_part(Compiler* ctx, Token_Info const* info, umm lines_ahead = 2);
+String location_report_part(Compiler* ctx, Token_Info const* info, umm lines_before = 2, umm lines_behind = 0);
 bool report_error_locationless(Compiler* ctx, String message);
 bool report_error(Compiler* ctx, Token const* at, String message);
 bool report_error(Compiler* ctx, Token const* at1, String message1, Token const* at2, String message2);
@@ -503,7 +512,7 @@ bool parse_top_level(Compiler* ctx, Array<Token> tokens);
 
 
 ////////////////////////////////////////////////////////////////////////////////
-// Typechecker
+// Inference
 
 Unit* materialize_unit(Compiler* ctx, Run* initiator);
 
@@ -517,7 +526,7 @@ bool pump_pipeline(Compiler* ctx);
 
 
 ////////////////////////////////////////////////////////////////////////////////
-// Execution
+// Runtime
 
 void run_unit(Unit* unit);
 

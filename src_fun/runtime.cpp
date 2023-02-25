@@ -87,6 +87,25 @@ static Memory* run_expression(Unit* unit, byte* storage, Block* block, Expressio
     Memory* address = (Memory*)(storage + infer->offset);
     assert(!(infer->flags & INFERRED_EXPRESSION_IS_NOT_EVALUATED_AT_RUNTIME));
 
+
+    if (0)
+    {
+        Token_Info info = dummy_token_info_for_expression(unit->ctx, expr);
+        String location = location_report_part(unit->ctx, &info, 5, 5);
+        int newlines = 1;
+        for (umm i = 0; i < location.length; i++)
+            if (location[i] == '\n')
+                newlines++;
+        for (int i = 0; i < 20; i++)
+            printf("\x1b[0K\n");
+        printf("\x1b[20A");
+        printf("\n%.*s\n", StringArgs(location));
+        printf("\x1b[%dA", newlines + 1);
+        printf("\x1b[0K");
+        rough_sleep(0.2);
+    }
+
+
     // report_error(unit->ctx, expr, Format(temp, "block: %, kind: %", block, expr->kind));
 
     auto specialize = [](Type type, Memory* memory, auto&& lambda)
@@ -144,20 +163,19 @@ static Memory* run_expression(Unit* unit, byte* storage, Block* block, Expressio
     {
         assert(block->inferred_expressions[expr->unary_operand].type == infer->type);
         Memory* op = run_expression(unit, storage, block, expr->unary_operand);
-        switch (infer->type)
-        {
-        case TYPE_U8:  address->as_u8  = -op->as_u8;
-        case TYPE_U16: address->as_u16 = -op->as_u16;
-        case TYPE_U32: address->as_u32 = -op->as_u32;
-        case TYPE_U64: address->as_u64 = -op->as_u64;
-        case TYPE_S8:  address->as_s8  = -op->as_s8;
-        case TYPE_S16: address->as_s16 = -op->as_s16;
-        case TYPE_S32: address->as_s32 = -op->as_s32;
-        case TYPE_S64: address->as_s64 = -op->as_s64;
-        case TYPE_F32: address->as_f32 = -op->as_f32;
-        case TYPE_F64: address->as_f64 = -op->as_f64;
-        IllegalDefaultCase;
-        }
+        specialize(infer->type, address, [&](auto* v) { *v = -*(decltype(v)) op; });
+    } break;
+
+    case EXPRESSION_ADDRESS:
+    {
+        assert(infer->size == sizeof(void*));
+        address->as_address = run_expression(unit, storage, block, expr->unary_operand);
+    } break;
+
+    case EXPRESSION_DEREFERENCE:
+    {
+        Memory* op = run_expression(unit, storage, block, expr->unary_operand);
+        memcpy(address, op->as_address, infer->size);
     } break;
 
     case EXPRESSION_ASSIGNMENT:
@@ -166,8 +184,8 @@ static Memory* run_expression(Unit* unit, byte* storage, Block* block, Expressio
         assert(size == block->inferred_expressions[expr->binary.lhs].size);
         assert(size == block->inferred_expressions[expr->binary.rhs].size);
 
-        Memory* lhs = run_expression(unit, storage, block, expr->binary.lhs);
         Memory* rhs = run_expression(unit, storage, block, expr->binary.rhs);
+        Memory* lhs = run_expression(unit, storage, block, expr->binary.lhs);
         memcpy(lhs, rhs, size);
         memcpy(address, lhs, size);
     } break;
@@ -292,11 +310,14 @@ static Memory* run_expression(Unit* unit, byte* storage, Block* block, Expressio
         } break;
         default:
             Memory* value = run_expression(unit, storage, block, expr->unary_operand);
-            specialize(op_infer->type, value, [](auto* v)
-            {
-                String text = Format(temp, "%", *v);
-                printf("%.*s\n", StringArgs(text));
-            });
+            if (is_pointer_type(op_infer->type))
+                printf("%p\n", value->as_address);
+            else
+                specialize(op_infer->type, value, [](auto* v)
+                {
+                    String text = Format(temp, "%", *v);
+                    printf("%.*s\n", StringArgs(text));
+                });
         }
     } break;
 
@@ -342,7 +363,13 @@ void run_unit(Unit* unit)
     allocate_remaining_unit_storage(unit, unit->entry_block);
     byte* storage = alloc<byte>(NULL, unit->next_storage_offset);
     Defer(free(storage));
+    printf("Unit storage is %d bytes\n", (int) unit->next_storage_offset);
+
     run_block(unit, storage, unit->entry_block);
+
+    for (int i = 0; i < 20; i++)
+        printf("\x1b[0K\n");
+    printf("\x1b[20A");
 }
 
 

@@ -15,10 +15,7 @@ void free_compiler(Compiler* ctx)
     free_heap_array(&ctx->token_info_integer);
     free_heap_array(&ctx->identifiers);
     free_table(&ctx->atom_table);
-
     lk_region_free(&ctx->parser_memory);
-    // free_heap_array(&ctx->declarations);
-    // free_table(&ctx->declaration_table);
 
     ZeroStruct(ctx);
 }

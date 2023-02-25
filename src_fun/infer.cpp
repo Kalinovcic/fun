@@ -74,7 +74,7 @@ bool find_declaration(Unit* unit, Token const* name,
 static u64 get_type_size(Unit* unit, Type type)
 {
     if (get_indirection(type))
-        NotImplemented;  // @Reconsider - how do we handle pointer sizes?
+        return unit->pointer_size;
 
     if (is_user_defined_type(type))
         NotImplemented;
@@ -110,7 +110,7 @@ static u64 get_type_size(Unit* unit, Type type)
 static u64 get_type_alignment(Unit* unit, Type type)
 {
     if (get_indirection(type))
-        NotImplemented;  // @Reconsider - how do we handle pointer sizes?
+        return unit->pointer_alignment;
 
     if (is_user_defined_type(type))
         NotImplemented;
@@ -348,6 +348,68 @@ static Yield_Result check_expression(Pipeline_Task* task, Expression id)
         else assert(!is_soft_type(op_infer->type));
 
         Infer(op_infer->type);
+    } break;
+
+    case EXPRESSION_ADDRESS:
+    {
+        Inferred_Expression* op_infer = &block->inferred_expressions[expr->unary_operand];
+        if (op_infer->type == INVALID_TYPE) Wait();
+
+        if (is_type_type(op_infer->type))
+        {
+            if (op_infer->type != TYPE_SOFT_TYPE)
+                Error("The operand to '&' is a type not known at compile-time.");
+
+            Type type = op_infer->constant_type;
+            u32 indirection = get_indirection(type) + 1;
+            if (indirection > TYPE_MAX_INDIRECTION)
+                Error("The operand to '&' is already at maximum indirection %!", TYPE_MAX_INDIRECTION);
+            infer->constant_type = set_indirection(type, indirection);
+            Infer(TYPE_SOFT_TYPE);
+        }
+        else if (is_soft_type(op_infer->type))
+        {
+            Error("Can't take an address of a compile-time value.");
+        }
+        else
+        {
+            Type type = op_infer->type;
+            u32 indirection = get_indirection(type) + 1;
+            if (indirection > TYPE_MAX_INDIRECTION)
+                Error("The operand to '&' is already at maximum indirection %!", TYPE_MAX_INDIRECTION);
+            Infer(set_indirection(type, indirection));
+        }
+    } break;
+
+    case EXPRESSION_DEREFERENCE:
+    {
+        Inferred_Expression* op_infer = &block->inferred_expressions[expr->unary_operand];
+        if (op_infer->type == INVALID_TYPE) Wait();
+
+        if (is_type_type(op_infer->type))
+        {
+            if (op_infer->type != TYPE_SOFT_TYPE)
+                Error("The operand to '*' is a type not known at compile-time.");
+
+            Type type = op_infer->constant_type;
+            u32 indirection = get_indirection(type);
+            if (!indirection)
+                Error("The operand to '*' is not a pointer!");
+            infer->constant_type = set_indirection(type, indirection - 1);
+            Infer(TYPE_SOFT_TYPE);
+        }
+        else if (is_soft_type(op_infer->type))
+        {
+            Error("Can't dereference a compile-time value.");
+        }
+        else
+        {
+            Type type = op_infer->type;
+            u32 indirection = get_indirection(type);
+            if (!indirection)
+                Error("The operand to '*' is not a pointer!");
+            Infer(set_indirection(type, indirection - 1));
+        }
     } break;
 
     case EXPRESSION_ASSIGNMENT:
@@ -601,11 +663,9 @@ static Yield_Result check_expression(Pipeline_Task* task, Expression id)
                 type = value_type;
             }
 
-            if (expr->declaration.value != NO_EXPRESSION)
-                if (type != value_type)
-                    Error("LHS and RHS types don't match.");
+            if (expr->declaration.value != NO_EXPRESSION && type != value_type)
+                Error("LHS and RHS types don't match.");
 
-            if (!is_primitive_type(type)) NotImplemented;
             allocate_unit_storage(unit, type, &infer->size, &infer->offset);
             Infer(type);
         }
@@ -634,7 +694,7 @@ static Yield_Result check_block(Pipeline_Task* task)
     Unit*  unit  = task->unit;
     Block* block = task->block;
 
-#define STRESS_TEST 0
+#define STRESS_TEST 1
 
 #if STRESS_TEST
     static Random rng = {};
@@ -694,6 +754,10 @@ Unit* materialize_unit(Compiler* ctx, Run* initiator)
     unit->initiator_from = initiator->from;
     unit->initiator_to   = initiator->to;
     unit->initiator_run  = initiator;
+
+    unit->pointer_size      = sizeof(void*);
+    unit->pointer_alignment = alignof(void*);
+
     unit->entry_block    = materialize_block(unit, initiator->entry_block, NULL, NO_VISIBILITY);
     return unit;
 }

@@ -47,8 +47,20 @@ run
     repeat()
      => debug 69;
 
-    a := cast(u64, POO :: 123); debug a;
-    b := cast(u64, POO * 2);    debug b;
-    c := cast(u64, POO * 3);    debug c;
+    a := cast(s64, POO :: 123); debug -a;
+    b := cast(s64, POO * 2);    debug -b;
+    c := cast(s64, POO * 3);    debug -c;
+
+
+    var := cast(u32, 1337);
+    ptr: &u32 = &var;
+    debug ptr;
+
+    T :: &u32;
+    var2: *T = *ptr;
+    debug var2;
+
+    // *ptr = *ptr + 1;
+    // debug var;
 }
 
