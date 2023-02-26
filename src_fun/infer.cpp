@@ -157,7 +157,7 @@ bool find_declaration(Unit* unit, Token const* name,
 
 
 
-static u64 get_type_size(Unit* unit, Type type)
+u64 get_type_size(Unit* unit, Type type)
 {
     if (get_indirection(type))
         return unit->pointer_size;
@@ -192,7 +192,7 @@ static u64 get_type_size(Unit* unit, Type type)
     }
 }
 
-static u64 get_type_alignment(Unit* unit, Type type)
+u64 get_type_alignment(Unit* unit, Type type)
 {
     if (get_indirection(type))
         return unit->pointer_alignment;
@@ -279,6 +279,7 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
         if (is_soft_type(t))                                                    \
         {                                                                       \
             infer->flags |= INFERRED_EXPRESSION_IS_NOT_EVALUATED_AT_RUNTIME;    \
+            infer->flags |= INFERRED_EXPRESSION_DOES_NOT_ALLOCATE_STORAGE;      \
             assert(infer->size   == INVALID_STORAGE_SIZE);                      \
             assert(infer->offset == INVALID_STORAGE_OFFSET);                    \
         }                                                                       \
@@ -398,6 +399,7 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
             assert(!is_soft_type(decl_infer->type));
             assert(decl_infer->size   != INVALID_STORAGE_SIZE);
             assert(decl_infer->offset != INVALID_STORAGE_OFFSET);
+            infer->flags |= INFERRED_EXPRESSION_DOES_NOT_ALLOCATE_STORAGE;
             infer->size   = decl_infer->size;
             infer->offset = decl_infer->offset;
         }
@@ -479,19 +481,24 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
             u32 indirection = get_indirection(type);
             if (!indirection)
                 Error("Expected a pointer as operand to '*', but got %.", exact_type_description(unit, type));
+
+            infer->flags |= INFERRED_EXPRESSION_DOES_NOT_ALLOCATE_STORAGE;
             Infer(set_indirection(type, indirection - 1));
         }
     } break;
 
     case EXPRESSION_ASSIGNMENT:
     {
-        if (block->parsed_expressions[expr->binary.lhs].kind != EXPRESSION_NAME)
-            Error("Expected a variable name on the left side of the assignment.");
+        if (block->parsed_expressions[expr->binary.lhs].kind != EXPRESSION_NAME &&
+            block->parsed_expressions[expr->binary.lhs].kind != EXPRESSION_DEREFERENCE)
+            Error("Expected a variable name or dereference expression on the left side of the assignment.");
 
         Type lhs_type = block->inferred_expressions[expr->binary.lhs].type;
         Type rhs_type = block->inferred_expressions[expr->binary.rhs].type;
         if (lhs_type == INVALID_TYPE) WaitOperand(expr->binary.lhs);
         if (rhs_type == INVALID_TYPE) WaitOperand(expr->binary.rhs);
+        if (is_soft_type(lhs_type))
+            Error("Can't assign to a constant expression.");
         if (lhs_type != rhs_type)
             Error("Types don't match.\n"
                   "    lhs: %\n"

@@ -189,10 +189,20 @@ static bool semicolon_after_statement(Token_Stream* stream)
     return true;
 }
 
+static bool expression_can_be_followed_by_operators(Parsed_Expression const* expr)
+{
+    if (expr->flags & EXPRESSION_IS_IN_PARENTHESES) return true;
+    if (expr->kind == EXPRESSION_BLOCK)       return false;
+    if (expr->kind == EXPRESSION_DECLARATION) return false;
+    return true;
+}
+
 static bool parse_expression(Token_Stream* stream, Block_Builder* builder, Expression* out_expression);
 
 static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, Expression* out_expression)
 {
+    *out_expression = NO_EXPRESSION;
+
     Token* start = stream->cursor;
     auto make_unary = [&](Expression_Kind kind) -> bool
     {
@@ -497,6 +507,10 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
         return ReportError(stream->ctx, next_token_or_eof(stream), "Expected an expression."_s);
     }
 
+    assert(*out_expression != NO_EXPRESSION);
+    if (!expression_can_be_followed_by_operators(&builder->expressions[*out_expression]))
+        return true;
+
     while (true)
     {
         if (maybe_take_atom(stream, ATOM_LEFT_PARENTHESIS))
@@ -546,6 +560,13 @@ static bool parse_expression(Token_Stream* stream, Block_Builder* builder, Expre
     Expression lhs;
     if (!parse_expression_leaf(stream, builder, &lhs))
         return false;
+
+    assert(lhs != NO_EXPRESSION);
+    if (!expression_can_be_followed_by_operators(&builder->expressions[lhs]))
+    {
+        *out_expression = lhs;
+        return true;
+    }
 
     Dynamic_Array<Expression_Kind> ops   = {};
     Dynamic_Array<Expression>      exprs = {};

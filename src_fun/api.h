@@ -13,27 +13,26 @@ bool int_get_abs_u64(u64* out, Integer const* i);
 
 String int_base10(Integer const* integer, Region* memory = temp, umm min_digits = 0);
 
-// Always maximally reduced, denominator always positive.
+// Always reduced, denominator always positive.
 struct Fraction
 {
     Integer num;
     Integer den;
 };
 
-Fraction fract_make(Integer const* num, Integer const* den);
-void     fract_free(Fraction* f);
-Fraction fract_clone(Fraction const* from);
-void     fract_reduce(Fraction* f);
-bool     fract_is_zero(Fraction const* f);
+Fraction fract_make      (Integer const* num, Integer const* den);
+void     fract_free      (Fraction* f);
+Fraction fract_clone     (Fraction const* from);
+void     fract_reduce    (Fraction* f);
+bool     fract_is_zero   (Fraction const* f);
 bool     fract_is_integer(Fraction const* f);
-Fraction fract_neg(Fraction const* a);
-Fraction fract_add(Fraction const* a, Fraction const* b);
-Fraction fract_sub(Fraction const* a, Fraction const* b);
-Fraction fract_mul(Fraction const* a, Fraction const* b);
-bool fract_div_fract(Fraction* out, Fraction const* a, Fraction const* b);
-bool fract_div_whole(Fraction* out, Fraction const* a, Fraction const* b);
-
-String fract_display(Fraction const* f, Region* memory = temp);
+Fraction fract_neg       (Fraction const* a);
+Fraction fract_add       (Fraction const* a, Fraction const* b);
+Fraction fract_sub       (Fraction const* a, Fraction const* b);
+Fraction fract_mul       (Fraction const* a, Fraction const* b);
+bool     fract_div_fract (Fraction* out, Fraction const* a, Fraction const* b);
+bool     fract_div_whole (Fraction* out, Fraction const* a, Fraction const* b);
+String   fract_display   (Fraction const* f, Region* memory = temp);
 
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -94,7 +93,6 @@ enum Atom: u32
     ATOM_YIELD,                 // yield
     ATOM_DEFER,                 // defer
     ATOM_CAST,                  // cast
-    ATOM_UNDERSCORE,            // _
 
     // symbols
     ATOM_COMMA,                 // ,
@@ -124,6 +122,7 @@ enum Atom: u32
     ATOM_GREATER,               // >
     ATOM_GREATER_EQUAL,         // >=
     ATOM_DOLLAR,                // $
+    ATOM_UNDERSCORE,            // _
 
     ATOM_ONE_PAST_LAST_FIXED_ATOM,
 
@@ -388,6 +387,7 @@ struct Soft_Block
 enum: flags32
 {
     INFERRED_EXPRESSION_IS_NOT_EVALUATED_AT_RUNTIME = 0x0001,
+    INFERRED_EXPRESSION_DOES_NOT_ALLOCATE_STORAGE   = 0x0002,
 };
 
 struct Inferred_Expression
@@ -597,6 +597,8 @@ bool find_declaration(Unit* unit, Token const* name,
                       Block* scope, Visibility visibility_limit,
                       Block** out_decl_scope, Expression* out_decl_expr);
 
+u64  get_type_size        (Unit* unit, Type type);
+u64  get_type_alignment   (Unit* unit, Type type);
 void allocate_unit_storage(Unit* unit, Type type, u64* out_size, u64* out_offset);
 
 bool pump_pipeline(Compiler* ctx);

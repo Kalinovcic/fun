@@ -137,7 +137,7 @@ static Memory* run_expression(Unit* unit, byte* storage, Block* block, Expressio
     case EXPRESSION_DEREFERENCE:
     {
         Memory* op = run_expression(unit, storage, block, expr->unary_operand);
-        memcpy(address, op->as_address, infer->size);
+        address = (Memory*) op->as_address;
     } break;
 
     case EXPRESSION_ASSIGNMENT:
@@ -337,13 +337,20 @@ static void allocate_remaining_unit_storage(Unit* unit, Block* block)
 {
     for (umm i = 0; i < block->inferred_expressions.count; i++)
     {
-        Inferred_Expression* infer = &block->inferred_expressions[i];
+        auto* expr  = &block->parsed_expressions[i];
+        auto* infer = &block->inferred_expressions[i];
         if (infer->called_block)
             allocate_remaining_unit_storage(unit, infer->called_block);
 
         if (infer->flags & INFERRED_EXPRESSION_IS_NOT_EVALUATED_AT_RUNTIME) continue;
         if (infer->offset != INVALID_STORAGE_OFFSET) continue;
         assert(infer->type != INVALID_TYPE);
+
+        if (infer->flags & INFERRED_EXPRESSION_DOES_NOT_ALLOCATE_STORAGE)
+        {
+            infer->size = get_type_size(unit, infer->type);
+            continue;
+        }
         allocate_unit_storage(unit, infer->type, &infer->size, &infer->offset);
     }
 

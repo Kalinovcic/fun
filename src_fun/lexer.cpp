@@ -63,7 +63,6 @@ static void lex_init(Compiler* ctx)
     AddKeyword(ATOM_YIELD,        "yield"_s);
     AddKeyword(ATOM_DEFER,        "defer"_s);
     AddKeyword(ATOM_CAST,         "cast"_s);
-    AddKeyword(ATOM_UNDERSCORE,   "_"_s);
 #undef AddKeyword
 }
 
@@ -82,7 +81,7 @@ bool lex_from_memory(Compiler* ctx, String name, String code, Array<Token>* out_
     {
          0, 0, 0, 0, 0, 0, 0, 0, 0,64,64, 0, 0,64, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         64, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,62,62,58,58,58,58,58,58,50,50, 0, 0, 0, 0, 0, 0,
-         0,35,35,35,35,35,35, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 0, 0, 0, 0, 3,
+         0,35,35,35,35,35,35, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 0, 0, 0, 0, 2,
          0,35,35,35,35,35,35, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 0, 0, 0, 0, 0,
          3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
          3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
@@ -643,6 +642,12 @@ bool lex_from_memory(Compiler* ctx, String name, String code, Array<Token>* out_
             if (cursor < end && *cursor == '=') cursor++, atom = ATOM_GREATER_EQUAL;
         }
         else if (c == '$') cursor++, atom = ATOM_DOLLAR;
+        else if (c == '_')
+        {
+            cursor++, atom = ATOM_UNDERSCORE;
+            if (cursor < end && (CHARACTER_CLASS[*cursor] & CHARACTER_IDENTIFIER_CONTINUATION))
+                LexError("The underscore character '_' is not a valid start of an identifier.")
+        }
         else
         {
             LexError("Unrecognized token.")
@@ -774,7 +779,9 @@ String location_report_part(Compiler* ctx, Token_Info const* info, umm lines_bef
         String highlit = take(&source, amount_highlit);
         String after = source;
 
-        source = concatenate(temp, before, highlight, highlit, reset, after);
+        source = concatenate(temp, before, highlight,
+                             replace_all_occurances(highlit, "\n"_s, concatenate(temp, "\n"_s, highlight), temp),
+                             reset, after);
     }
 
     String_Concatenator cat = {};

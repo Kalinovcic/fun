@@ -3,11 +3,18 @@
 // debug a + b;
 
 
-import "proc.fun"();
+set_to_69 :: (what: &u64)
+{
+    debug what;
+    *what = cast(u64, 69);
+}
+
+set_to_69(&thing: u64);
+debug thing;
 
 
-debug 1e10000 !/ 998001;
 
+(import "proc.fun")();
 
 test :: ($T: type, v: u64)
 {
