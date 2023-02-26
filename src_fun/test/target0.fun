@@ -6,6 +6,9 @@
 import "proc.fun"();
 
 
+debug 1e10000 !/ 998001;
+
+
 test :: ($T: type, v: u64)
 {
     x: T = cast(T, v);

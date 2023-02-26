@@ -176,11 +176,10 @@ static Memory* run_expression(Unit* unit, byte* storage, Block* block, Expressio
                 Fraction* fract = &block->constants[infer->constant_index];
                 assert(fract_is_integer(fract));
 
-                Integer const* integer = &fract->num;
                 u64 abs = 0;
-                for (umm i = 0; i < integer->size; i++)
-                    abs |= ((u64) integer->digit[i]) << (i * DIGIT_BITS);
-                if (integer->negative)
+                bool ok = int_get_abs_u64(&abs, &fract->num);
+                assert(ok);
+                if (fract->num.negative)
                     abs = -abs;
                 memcpy(address->base, &abs, infer->size);
             }

@@ -9,6 +9,8 @@ struct Compiler;
 ////////////////////////////////////////////////////////////////////////////////
 
 
+bool int_get_abs_u64(u64* out, Integer const* i);
+
 String int_base10(Integer const* integer, Region* memory = temp, umm min_digits = 0);
 
 // Always maximally reduced, denominator always positive.

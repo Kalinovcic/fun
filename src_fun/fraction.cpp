@@ -7,6 +7,70 @@
 EnterApplicationNamespace
 
 
+static Integer int_pow(u64 a, u64 b)
+{
+    Integer a_int = {};
+    int_setu64(&a_int, a);
+    Integer b_int = {};
+    int_setu64(&b_int, b);
+    int_pow(&a_int, &b_int);
+    int_free(&b_int);
+    return a_int;
+}
+
+
+bool int_get_abs_u64(u64* out, Integer const* i)
+{
+    if (int_log2_abs(i) >= 64)
+        return false;
+    *out = 0;
+    if (i->size >= 1) *out |= (u64) i->digit[0];
+    if (i->size >= 2) *out |= (u64) i->digit[1] << DIGIT_BITS;
+    if (i->size >= 3) *out |= (u64) i->digit[2] << (2 * DIGIT_BITS);
+    return true;
+}
+
+
+static void int_base10(String_Concatenator* cat, Integer const* i, umm min_digits)
+{
+    u64 small;
+    if (int_get_abs_u64(&small, i))
+    {
+        umm digits = 0;
+        do
+        {
+            *reserve_item(cat) = '0' + (small % 10);
+            small /= 10;
+            digits++;
+        }
+        while (small);
+        while (digits < min_digits)
+        {
+            *reserve_item(cat) = '0';
+            digits++;
+        }
+    }
+    else
+    {
+        umm log10 = int_log2_abs(i) / 4;  // this is less than the real log10
+        umm rhs_digits = log10 / 2;
+        umm lhs_digits = (min_digits < rhs_digits ? 0 : min_digits - rhs_digits);
+
+        Integer power = int_pow(10, rhs_digits);
+        Integer div = {};
+        Integer mod = {};
+        int_div(&div, i, &power, &mod);
+        assert(!int_is_zero(&div));  // can't be, because we picked less than the real log10
+        int_free(&power);
+
+        int_base10(cat, &mod, rhs_digits);
+        int_free(&mod);
+        int_base10(cat, &div, lhs_digits);
+        int_free(&div);
+    }
+}
+
+
 String int_base10(Integer const* integer, Region* memory, umm min_digits)
 {
     Integer i = int_clone(integer);
@@ -19,22 +83,8 @@ String int_base10(Integer const* integer, Region* memory, umm min_digits)
     Defer(int_free(&ten));
 
     String_Concatenator cat = {};
-    if (int_is_zero(&i))
-        add(&cat, "0"_s);
-    else while (!int_is_zero(&i))
-    {
-        Integer mod = {};
-        Defer(int_free(&mod));
-        int_div(&i, &ten, &mod);
-
-        u32 number = mod.size ? mod.digit[0] : 0;
-        assert(number < 10);
-        char c = '0' + number;
-        add(&cat, &c, 1);
-    }
-    while (cat.count < min_digits)
-        add(&cat, "0"_s);
-
+    int_base10(&cat, integer, min_digits);
+    assert(cat.count >= min_digits);
     if (integer->negative)
         add(&cat, "-"_s);
 
@@ -190,17 +240,6 @@ bool fract_div_whole(Fraction* out, Fraction const* a, Fraction const* b)
     return true;
 }
 
-
-static Integer int_pow(u64 a, u64 b)
-{
-    Integer a_int = {};
-    int_setu64(&a_int, a);
-    Integer b_int = {};
-    int_setu64(&b_int, b);
-    int_pow(&a_int, &b_int);
-    int_free(&b_int);
-    return a_int;
-}
 
 String fract_display(Fraction const* f, Region* memory)
 {
