@@ -12,7 +12,8 @@ void free_compiler(Compiler* ctx)
     lk_region_free(&ctx->lexer_memory);
     free_heap_array(&ctx->sources);
     free_heap_array(&ctx->token_info_other);
-    free_heap_array(&ctx->token_info_integer);
+    free_heap_array(&ctx->token_info_number);
+    free_heap_array(&ctx->token_info_string);
     free_heap_array(&ctx->identifiers);
     free_table(&ctx->atom_table);
     lk_region_free(&ctx->parser_memory);

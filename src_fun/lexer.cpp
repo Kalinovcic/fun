@@ -14,9 +14,10 @@ static void lex_init(Compiler* ctx)
 
     ctx->lexer_initialized = true;
     ctx->lexer_memory.page_size = Megabyte(64);
-    set_capacity(&ctx->token_info_other,   Megabyte(256) / sizeof(ctx->token_info_other  [0]));
-    set_capacity(&ctx->token_info_integer, Megabyte(64)  / sizeof(ctx->token_info_integer[0]));
-    set_capacity(&ctx->identifiers,        Megabyte(32)  / sizeof(ctx->identifiers       [0]));
+    set_capacity(&ctx->token_info_other,  Megabyte(256) / sizeof(ctx->token_info_other [0]));
+    set_capacity(&ctx->token_info_number, Megabyte(64)  / sizeof(ctx->token_info_number[0]));
+    set_capacity(&ctx->token_info_string, Megabyte(32)  / sizeof(ctx->token_info_string[0]));
+    set_capacity(&ctx->identifiers,       Megabyte(32)  / sizeof(ctx->identifiers      [0]));
 
     ctx->next_identifier_atom = ATOM_FIRST_IDENTIFIER;
 
@@ -215,15 +216,12 @@ bool lex_from_memory(Compiler* ctx, String name, String code, Array<Token>* out_
             }
 
             // parse fractional part if it exists
-            bool has_denominator = false;
             Integer denominator = {};
+            int_set16(&denominator, 1);
             Defer(int_free(&denominator));
             if (cursor < end && *cursor == '.')
             {
                 cursor++;
-                has_denominator = true;
-                int_set16(&denominator, 1);
-
                 while (cursor < end)
                 {
                     c  = *cursor;
@@ -249,17 +247,11 @@ bool lex_from_memory(Compiler* ctx, String name, String code, Array<Token>* out_
             {
                 cursor++;
 
+                bool positive = true;
                 if (cursor < end)
                 {
-                    if (*cursor == '+')
-                        cursor++;
-                    else if (*cursor == '-')
-                    {
-                        Integer temp = denominator;
-                        denominator = numerator;
-                        numerator = temp;
-                        cursor++;
-                    }
+                         if (*cursor == '+') cursor++;
+                    else if (*cursor == '-') cursor++, positive = false;
                 }
 
                 Integer exponent = {};
@@ -287,33 +279,19 @@ bool lex_from_memory(Compiler* ctx, String name, String code, Array<Token>* out_
 
                 Integer multiplier = {};
                 int_pow(&multiplier, &integer_base, &exponent);
-                int_mul(&numerator, &multiplier);
+                int_mul(positive ? &numerator : &denominator, &multiplier);
                 int_free(&multiplier);
             }
 
-            if (!has_denominator)
-            {
-                Token* token = reserve_item(&tokens);
-                token->atom       = ATOM_INTEGER;
-                token->info_index = ctx->token_info_integer.count;
+            Token* token = reserve_item(&tokens);
+            token->atom       = ATOM_NUMBER;
+            token->info_index = ctx->token_info_number.count;
 
-                Token_Info_Integer* info = reserve_item(&ctx->token_info_integer);
-                info->source_index = source_index;
-                info->offset       = start_cursor - start;
-                info->length       = cursor - start_cursor;
-                info->value        = numerator;
-                numerator = {};  // don't free it
-            }
-            else
-            {
-                Integer gcd = {};
-                int_gcd(&gcd, &numerator, &denominator);
-                bool ok1 = int_div(&numerator,   &gcd, NULL);
-                bool ok2 = int_div(&denominator, &gcd, NULL);
-                assert(ok1 && ok2);
-
-                LexError("@Incomplete - floating point literals are not supported yet");
-            }
+            Token_Info_Number* info = reserve_item(&ctx->token_info_number);
+            info->source_index = source_index;
+            info->offset       = start_cursor - start;
+            info->length       = cursor - start_cursor;
+            info->value        = fract_make(&numerator, &denominator);
 
             continue;
         }

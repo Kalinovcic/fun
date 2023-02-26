@@ -5,6 +5,36 @@ struct Compiler;
 
 
 ////////////////////////////////////////////////////////////////////////////////
+// Fraction
+////////////////////////////////////////////////////////////////////////////////
+
+
+String int_base10(Integer const* integer, Region* memory = temp, umm min_digits = 0);
+
+// Always maximally reduced, denominator always positive.
+struct Fraction
+{
+    Integer num;
+    Integer den;
+};
+
+Fraction fract_make(Integer const* num, Integer const* den);
+void     fract_free(Fraction* f);
+Fraction fract_clone(Fraction const* from);
+void     fract_reduce(Fraction* f);
+bool     fract_is_zero(Fraction const* f);
+bool     fract_is_integer(Fraction const* f);
+Fraction fract_neg(Fraction const* a);
+Fraction fract_add(Fraction const* a, Fraction const* b);
+Fraction fract_sub(Fraction const* a, Fraction const* b);
+Fraction fract_mul(Fraction const* a, Fraction const* b);
+bool fract_div_fract(Fraction* out, Fraction const* a, Fraction const* b);
+bool fract_div_whole(Fraction* out, Fraction const* a, Fraction const* b);
+
+String fract_display(Fraction const* f, Region* memory = temp);
+
+
+////////////////////////////////////////////////////////////////////////////////
 // Lexer
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -14,8 +44,7 @@ enum Atom: u32
     ATOM_INVALID,
 
     // literals
-    ATOM_INTEGER,               // any unsigned integer literal
-    ATOM_FLOAT,                 // any floating point literal
+    ATOM_NUMBER,                // any numeric literal
     ATOM_STRING,                // any string literal
     ATOM_ZERO,                  // zero
     ATOM_TRUE,                  // true
@@ -108,7 +137,6 @@ inline bool is_identifier(Atom atom)
 }
 
 
-
 struct Source_Info
 {
     String name;
@@ -125,12 +153,12 @@ struct Token_Info
 
 CompileTimeAssert(sizeof(Token_Info) == 8);
 
-struct Token_Info_Integer: Token_Info
+struct Token_Info_Number: Token_Info
 {
-    Integer value;
+    Fraction value;
 };
 
-CompileTimeAssert(sizeof(Token_Info_Integer) == 40);
+CompileTimeAssert(sizeof(Token_Info_Number) == 72);
 
 struct Token_Info_String: Token_Info
 {
@@ -175,12 +203,10 @@ enum Type: u32
     TYPE_S16,
     TYPE_S32,
     TYPE_S64,
-    TYPE_SOFT_INTEGER,          // this is the type of compile-time evaluated integer expressions
-
     TYPE_F16,
     TYPE_F32,
     TYPE_F64,
-    TYPE_SOFT_FLOATING_POINT,   // this is the type of compile-time evaluated floating-point expressions
+    TYPE_SOFT_NUMBER,           // this is the type of compile-time evaluated floating-point expressions
 
     TYPE_BOOL8,
     TYPE_BOOL16,
@@ -204,17 +230,17 @@ inline Type get_base_type  (Type type)                  { return (Type)(type & T
 inline u32  get_indirection(Type type)                  { return type >> TYPE_POINTER_SHIFT; }
 inline Type set_indirection(Type type, u32 indirection) { return (Type)((type & TYPE_BASE_MASK) | (indirection << TYPE_POINTER_SHIFT)); }
 
-inline bool is_integer_type         (Type type) { return type >= TYPE_U8    && type <= TYPE_SOFT_INTEGER;                 }
+inline bool is_integer_type         (Type type) { return type >= TYPE_U8    && type <= TYPE_S64;                          }
 inline bool is_unsigned_integer_type(Type type) { return type >= TYPE_U8    && type <= TYPE_U64;                          }
 inline bool is_signed_integer_type  (Type type) { return type >= TYPE_S8    && type <= TYPE_S64;                          }
-inline bool is_floating_point_type  (Type type) { return type >= TYPE_F16   && type <= TYPE_SOFT_FLOATING_POINT;          }
-inline bool is_numeric_type         (Type type) { return is_integer_type(type) || is_floating_point_type(type);           }
+inline bool is_floating_point_type  (Type type) { return type >= TYPE_F16   && type <= TYPE_F64;                          }
+inline bool is_numeric_type         (Type type) { return is_integer_type(type) || is_floating_point_type(type) || type == TYPE_SOFT_NUMBER; }
 inline bool is_bool_type            (Type type) { return type >= TYPE_BOOL8 && type <= TYPE_SOFT_BOOL;                    }
 inline bool is_primitive_type       (Type type) { return type >= TYPE_VOID  && type < TYPE_ONE_PAST_LAST_PRIMITIVE_TYPE;  }
 inline bool is_user_defined_type    (Type type) { return type >= TYPE_FIRST_USER_TYPE;                                    }
 inline bool is_type_type            (Type type) { return type == TYPE_TYPE  || type == TYPE_SOFT_TYPE;                    }
 inline bool is_block_type           (Type type) { return type == TYPE_SOFT_BLOCK;                                         }
-inline bool is_soft_type            (Type type) { return type == TYPE_SOFT_ZERO || type == TYPE_SOFT_INTEGER || type == TYPE_SOFT_FLOATING_POINT || type == TYPE_SOFT_BOOL || type == TYPE_SOFT_TYPE || type == TYPE_SOFT_BLOCK; }
+inline bool is_soft_type            (Type type) { return type == TYPE_SOFT_ZERO || type == TYPE_SOFT_NUMBER || type == TYPE_SOFT_BOOL || type == TYPE_SOFT_TYPE || type == TYPE_SOFT_BLOCK; }
 inline bool is_pointer_type         (Type type) { return get_indirection(type) > 0; }
 
 
@@ -248,8 +274,7 @@ enum Expression_Kind: u16
     EXPRESSION_ZERO,
     EXPRESSION_TRUE,
     EXPRESSION_FALSE,
-    EXPRESSION_INTEGER_LITERAL,
-    EXPRESSION_FLOATING_POINT_LITERAL,
+    EXPRESSION_NUMERIC_LITERAL,
     EXPRESSION_TYPE_LITERAL,
     EXPRESSION_BLOCK,
 
@@ -420,7 +445,7 @@ struct Block
     // Filled out in inference:
     Block* materialized_from;
     Array<struct Inferred_Expression> inferred_expressions;  // parallel to parsed_expressions
-    Dynamic_Array<struct Integer> constants;
+    Dynamic_Array<Fraction> constants;
 
     Table(Expression, Wait_Info, hash_u32) waiting_expressions;
 
@@ -478,11 +503,11 @@ struct Compiler
     bool lexer_initialized;
     Region lexer_memory;
 
-    Dynamic_Array<Source_Info,        false> sources;
-    Dynamic_Array<Token_Info,         false> token_info_other;
-    Dynamic_Array<Token_Info_Integer, false> token_info_integer;
-    Dynamic_Array<Token_Info_String,  false> token_info_string;
-    Dynamic_Array<String,             false> identifiers;
+    Dynamic_Array<Source_Info,       false> sources;
+    Dynamic_Array<Token_Info,        false> token_info_other;
+    Dynamic_Array<Token_Info_Number, false> token_info_number;
+    Dynamic_Array<Token_Info_String, false> token_info_string;
+    Dynamic_Array<String,            false> identifiers;
 
     Atom next_identifier_atom;
     Table(String, Atom, hash_string) atom_table;
@@ -515,8 +540,8 @@ Token_Info dummy_token_info_for_expression(Compiler* ctx, Parsed_Expression cons
 
 inline Token_Info* get_token_info(Compiler* ctx, Token const* token)
 {
-    if (token->atom == ATOM_INTEGER)
-        return &ctx->token_info_integer[token->info_index];
+    if (token->atom == ATOM_NUMBER)
+        return &ctx->token_info_number[token->info_index];
     if (token->atom == ATOM_STRING)
         return &ctx->token_info_string[token->info_index];
     return &ctx->token_info_other[token->info_index];
@@ -562,7 +587,6 @@ Block* parse_top_level_from_memory(Compiler* ctx, String name, String code);
 
 Unit* materialize_unit(Compiler* ctx, Block* initiator);
 
-String int_base10(Integer const* integer, Region* memory);
 String vague_type_description(Unit* unit, Type type, bool point_out_soft_types = false);
 String vague_type_description_in_compile_time_context(Unit* unit, Type type);
 String exact_type_description(Unit* unit, Type type);

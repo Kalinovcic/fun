@@ -43,45 +43,6 @@ static Block* materialize_block(Unit* unit, Block* materialize_from,
 
 
 
-String int_base10(Integer const* integer, Region* memory)
-{
-    Integer i = int_clone(integer);
-    Defer(int_free(&i));
-    if (i.negative)
-        int_negate(&i);
-
-    Integer ten = {};
-    int_set16(&ten, 10);
-    Defer(int_free(&ten));
-
-    String_Concatenator cat = {};
-    if (int_is_zero(&i))
-        add(&cat, "0"_s);
-    else while (!int_is_zero(&i))
-    {
-        Integer mod = {};
-        Defer(int_free(&mod));
-        int_div(&i, &ten, &mod);
-
-        u32 number = mod.size ? mod.digit[0] : 0;
-        assert(number < 10);
-        char c = '0' + number;
-        add(&cat, &c, 1);
-    }
-
-    if (integer->negative)
-        add(&cat, "-"_s);
-
-    String str = resolve_to_string_and_free(&cat, memory);
-    for (umm i = 0; i < str.length - i - 1; i++)
-    {
-        u8 temp = str[i];
-        str[i] = str[str.length - i - 1];
-        str[str.length - i - 1] = temp;
-    }
-    return str;
-}
-
 String vague_type_description(Unit* unit, Type type, bool point_out_soft_types)
 {
     if (is_pointer_type(type))
@@ -91,8 +52,7 @@ String vague_type_description(Unit* unit, Type type, bool point_out_soft_types)
     {
         switch (type)
         {
-        case TYPE_SOFT_INTEGER:        return "a compile-time integer"_s;
-        case TYPE_SOFT_FLOATING_POINT: return "a compile-time floating-point"_s;
+        case TYPE_SOFT_NUMBER:         return "a compile-time number"_s;
         case TYPE_SOFT_BOOL:           return "a compile-time bool"_s;
         case TYPE_SOFT_TYPE:           return "a compile-time type"_s;
         }
@@ -104,9 +64,8 @@ String vague_type_description(Unit* unit, Type type, bool point_out_soft_types)
     case TYPE_VOID:                return "a void value"_s;
     case TYPE_U8: case TYPE_U16: case TYPE_U32: case TYPE_U64:
     case TYPE_S8: case TYPE_S16: case TYPE_S32: case TYPE_S64:
-    case TYPE_SOFT_INTEGER:        return "an integer value"_s;
     case TYPE_F16: case TYPE_F32: case TYPE_F64:
-    case TYPE_SOFT_FLOATING_POINT: return "a floating-point value"_s;
+    case TYPE_SOFT_NUMBER:         return "a numeric value"_s;
     case TYPE_BOOL8: case TYPE_BOOL16: case TYPE_BOOL32: case TYPE_BOOL64:
     case TYPE_SOFT_BOOL:           return "a bool value"_s;
     case TYPE_TYPE:
@@ -148,11 +107,10 @@ String exact_type_description(Unit* unit, Type type)
     case TYPE_S16:                 return "s16"_s;
     case TYPE_S32:                 return "s32"_s;
     case TYPE_S64:                 return "s64"_s;
-    case TYPE_SOFT_INTEGER:        return "compile-time integer"_s;
     case TYPE_F16:                 return "f16"_s;
     case TYPE_F32:                 return "f32"_s;
     case TYPE_F64:                 return "f64"_s;
-    case TYPE_SOFT_FLOATING_POINT: return "compile-time floating-point"_s;
+    case TYPE_SOFT_NUMBER:         return "compile-time number"_s;
     case TYPE_BOOL8:               return "bool8"_s;
     case TYPE_BOOL16:              return "bool16"_s;
     case TYPE_BOOL32:              return "bool32"_s;
@@ -219,11 +177,10 @@ static u64 get_type_size(Unit* unit, Type type)
     case TYPE_S16:                 return 2;
     case TYPE_S32:                 return 4;
     case TYPE_S64:                 return 8;
-    case TYPE_SOFT_INTEGER:        Unreachable;
     case TYPE_F16:                 return 2;
     case TYPE_F32:                 return 4;
     case TYPE_F64:                 return 8;
-    case TYPE_SOFT_FLOATING_POINT: Unreachable;
+    case TYPE_SOFT_NUMBER:         Unreachable;
     case TYPE_BOOL8:               return 1;
     case TYPE_BOOL16:              return 2;
     case TYPE_BOOL32:              return 4;
@@ -300,10 +257,10 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
 
     bool override_made_progress = false;
 
-    auto add_constant_integer = [](Block* block, Integer* integer) -> u32
+    auto add_constant = [](Block* block, Fraction fraction) -> u32
     {
         u32 index = block->constants.count;
-        add_item(&block->constants, integer);
+        add_item(&block->constants, &fraction);
         return index;
     };
 
@@ -347,17 +304,12 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
     case EXPRESSION_ZERO:                   Infer(TYPE_SOFT_ZERO);
     case EXPRESSION_TRUE:                   infer->constant_bool = true;  Infer(TYPE_SOFT_BOOL);
     case EXPRESSION_FALSE:                  infer->constant_bool = false; Infer(TYPE_SOFT_BOOL);
-    case EXPRESSION_INTEGER_LITERAL:
+    case EXPRESSION_NUMERIC_LITERAL:
     {
-        Token_Info_Integer* token_info = (Token_Info_Integer*) get_token_info(unit->ctx, &expr->literal);
-
-        Integer integer = int_clone(&token_info->value);
-        infer->constant_index = add_constant_integer(block, &integer);
-        Infer(TYPE_SOFT_INTEGER);
+        Token_Info_Number* token_info = (Token_Info_Number*) get_token_info(unit->ctx, &expr->literal);
+        infer->constant_index = add_constant(block, fract_clone(&token_info->value));
+        Infer(TYPE_SOFT_NUMBER);
     } break;
-
-    case EXPRESSION_FLOATING_POINT_LITERAL:
-        NotImplemented;
 
     case EXPRESSION_TYPE_LITERAL:
     {
@@ -433,27 +385,14 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
         if (decl_infer->type == INVALID_TYPE)
             Wait(WAITING_ON_DECLARATION, decl_id, decl_scope);
 
-        if (decl_infer->type == TYPE_SOFT_INTEGER)
-        {
-            Integer copy = int_clone(&decl_scope->constants[decl_infer->constant_index]);
-            infer->constant_index = add_constant_integer(block, &copy);
-        }
-        else if (decl_infer->type == TYPE_SOFT_FLOATING_POINT)
-        {
-            NotImplemented;
-        }
+        if (decl_infer->type == TYPE_SOFT_NUMBER)
+            infer->constant_index = add_constant(block, fract_clone(&decl_scope->constants[decl_infer->constant_index]));
         else if (decl_infer->type == TYPE_SOFT_BOOL)
-        {
             infer->constant_bool = decl_infer->constant_bool;
-        }
         else if (decl_infer->type == TYPE_SOFT_TYPE)
-        {
             infer->constant_type = decl_infer->constant_type;
-        }
         else if (decl_infer->type == TYPE_SOFT_BLOCK)
-        {
             infer->constant_block = decl_infer->constant_block;
-        }
         else
         {
             assert(!is_soft_type(decl_infer->type));
@@ -474,18 +413,8 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
 
         if (!is_numeric_type(op_infer->type))
             Error("Unary operator '-' expects a numeric argument, but got %.", vague_type_description(unit, op_infer->type));
-
-        if (op_infer->type == TYPE_SOFT_INTEGER)
-        {
-            Integer integer = int_clone(&block->constants[op_infer->constant_index]);
-            int_negate(&integer);
-            infer->constant_index = add_constant_integer(block, &integer);
-        }
-        else if (op_infer->type == TYPE_SOFT_FLOATING_POINT)
-        {
-            NotImplemented;
-        }
-        else assert(!is_soft_type(op_infer->type));
+        if (op_infer->type == TYPE_SOFT_NUMBER)
+            infer->constant_index = add_constant(block, fract_neg(&block->constants[op_infer->constant_index]));
 
         Infer(op_infer->type);
     } break;
@@ -576,6 +505,7 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
     case EXPRESSION_SUBTRACT:
     case EXPRESSION_MULTIPLY:
     case EXPRESSION_DIVIDE_WHOLE:
+    case EXPRESSION_DIVIDE_FRACTIONAL:
     {
         Type lhs_type = block->inferred_expressions[expr->binary.lhs].type;
         Type rhs_type = block->inferred_expressions[expr->binary.rhs].type;
@@ -590,31 +520,29 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
         if (!is_numeric_type(lhs_type))
             Error("Expected a numeric operand, but got %.", vague_type_description(unit, lhs_type));
 
-        if (lhs_type == TYPE_SOFT_INTEGER)
+        if (lhs_type == TYPE_SOFT_NUMBER)
         {
-            Integer const* lhs_int = &block->constants[block->inferred_expressions[expr->binary.lhs].constant_index];
-            Integer const* rhs_int = &block->constants[block->inferred_expressions[expr->binary.rhs].constant_index];
-            Integer result = int_clone(lhs_int);
-                 if (expr->kind == EXPRESSION_ADD)      int_add(&result, rhs_int);
-            else if (expr->kind == EXPRESSION_SUBTRACT) int_sub(&result, rhs_int);
-            else if (expr->kind == EXPRESSION_MULTIPLY) int_mul(&result, rhs_int);
+            Fraction const* lhs_fract = &block->constants[block->inferred_expressions[expr->binary.lhs].constant_index];
+            Fraction const* rhs_fract = &block->constants[block->inferred_expressions[expr->binary.rhs].constant_index];
+            Fraction result = {};
+                 if (expr->kind == EXPRESSION_ADD)      result = fract_add(lhs_fract, rhs_fract);
+            else if (expr->kind == EXPRESSION_SUBTRACT) result = fract_sub(lhs_fract, rhs_fract);
+            else if (expr->kind == EXPRESSION_MULTIPLY) result = fract_mul(lhs_fract, rhs_fract);
             else if (expr->kind == EXPRESSION_DIVIDE_WHOLE)
             {
-                if (!int_div(&result, rhs_int, NULL))
+                if (!fract_div_whole(&result, lhs_fract, rhs_fract))
                     Error("Division by zero!");
             }
-            infer->constant_index = add_constant_integer(block, &result);
+            else if (expr->kind == EXPRESSION_DIVIDE_FRACTIONAL)
+            {
+                if (!fract_div_fract(&result, lhs_fract, rhs_fract))
+                    Error("Division by zero!");
+            }
+            infer->constant_index = add_constant(block, result);
         }
-        else if (lhs_type == TYPE_SOFT_FLOATING_POINT)
-        {
-            NotImplemented;
-        }
-        else assert(!is_soft_type(lhs_type));
 
         Infer(lhs_type);
     } break;
-
-    case EXPRESSION_DIVIDE_FRACTIONAL: NotImplemented;
 
     case EXPRESSION_EQUAL:            NotImplemented;
     case EXPRESSION_NOT_EQUAL:        NotImplemented;
@@ -642,20 +570,28 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
         if (!is_numeric_type(cast_type))
             Error("Expected a numeric type as the first operand to 'cast', but got %.", exact_type_description(unit, cast_type));
 
-        if (rhs_infer->type == TYPE_SOFT_INTEGER)
+        if (rhs_infer->type == TYPE_SOFT_NUMBER)
         {
             if (!is_integer_type(cast_type))
                 NotImplemented;
 
+            Fraction const* fraction = &block->constants[rhs_infer->constant_index];
+            if (!fract_is_integer(fraction))
+            {
+                Error("The cast value operand is fractional, it can't be cast to %.\n"
+                          "Operand has value %",
+                          exact_type_description(unit, cast_type), fract_display(fraction));
+            }
+
             u64 target_size = get_type_size(unit, cast_type);
 
-            Integer const* integer = &block->constants[rhs_infer->constant_index];
+            Integer const* integer = &fraction->num;
             if (integer->negative)
             {
                 if (is_unsigned_integer_type(cast_type))
                     Error("The cast value operand is a negative constant, it can't be cast to %.\n"
                           "Operand has value %",
-                          exact_type_description(unit, cast_type), int_base10(integer, temp));
+                          exact_type_description(unit, cast_type), fract_display(fraction));
 
                 Integer min = {};
                 int_set_zero(&min);
@@ -663,7 +599,7 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
                 if (int_compare_abs(integer, &min) > 0)
                     Error("The cast value operand doesn't fit in %.\n"
                           "Operand has value %",
-                          exact_type_description(unit, cast_type), int_base10(integer, temp));
+                          exact_type_description(unit, cast_type), fract_display(fraction));
             }
             else
             {
@@ -671,15 +607,10 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
                 if (int_log2_abs(integer) >= max_log2)
                     Error("The cast value operand doesn't fit in %.\n"
                           "Operand has value %",
-                          exact_type_description(unit, cast_type), int_base10(integer, temp));
+                          exact_type_description(unit, cast_type), fract_display(fraction));
             }
 
-            Integer copy = int_clone(integer);
-            infer->constant_index = add_constant_integer(block, &copy);
-        }
-        else if (rhs_infer->type == TYPE_SOFT_FLOATING_POINT)
-        {
-            NotImplemented;
+            infer->constant_index = add_constant(block, fract_clone(fraction));
         }
         else
         {
@@ -832,21 +763,25 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
                 {
                     if (param_infer->type != INVALID_TYPE) continue;  // already inferred
 
-                    if (is_integer_type(param_type))
+                    if (is_numeric_type(param_type))
                     {
-                        if (arg_type != TYPE_SOFT_INTEGER)
+                        if (is_floating_point_type(param_type))
+                            NotImplemented;
+
+                        if (arg_type != TYPE_SOFT_NUMBER)
                             Error("Argument #% is expected to be a compile-time integer, but is %.", parameter_index + 1,
                                 vague_type_description_in_compile_time_context(unit, arg_type));
+
+                        Fraction const* fraction = &block->constants[arg_infer->constant_index];
+                        if (!fract_is_integer(fraction))
+                            Error("Argument #% is expected to be a compile-time integer, but is fractional.\n"
+                                  "Value is %.", parameter_index + 1, fract_display(fraction));
+
                         // @Incomplete - check if the value fits in the actual type
-                        Integer copy = int_clone(&block->constants[arg_infer->constant_index]);
                         param_infer->flags |= INFERRED_EXPRESSION_IS_NOT_EVALUATED_AT_RUNTIME;
-                        param_infer->constant_index = add_constant_integer(callee, &copy);
-                        param_infer->type = TYPE_SOFT_INTEGER;
+                        param_infer->constant_index = add_constant(callee, fract_clone(fraction));
+                        param_infer->type = TYPE_SOFT_NUMBER;
                         override_made_progress = true;  // We made progress by inferring the callee's param type.
-                    }
-                    else if (is_floating_point_type(param_type))
-                    {
-                        NotImplemented;
                     }
                     else if (is_bool_type(param_type))
                     {
@@ -926,27 +861,14 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
 
             auto* value_infer = &block->inferred_expressions[expr->declaration.value];
             if (value_infer->type == INVALID_TYPE) WaitOperand(expr->declaration.value);
-            if (value_infer->type == TYPE_SOFT_INTEGER)
-            {
-                Integer copy = int_clone(&block->constants[value_infer->constant_index]);
-                infer->constant_index = add_constant_integer(block, &copy);
-            }
-            else if (value_infer->type == TYPE_SOFT_FLOATING_POINT)
-            {
-                NotImplemented;
-            }
+            if (value_infer->type == TYPE_SOFT_NUMBER)
+                infer->constant_index = add_constant(block, fract_clone(&block->constants[value_infer->constant_index]));
             else if (value_infer->type == TYPE_SOFT_BOOL)
-            {
                 infer->constant_bool = value_infer->constant_bool;
-            }
             else if (value_infer->type == TYPE_SOFT_TYPE)
-            {
                 infer->constant_type = value_infer->constant_type;
-            }
             else if (value_infer->type == TYPE_SOFT_BLOCK)
-            {
                 infer->constant_block = value_infer->constant_block;
-            }
             else
             {
                 Error("RHS is not known at compile-time, it's %.", vague_type_description_in_compile_time_context(unit, value_infer->type));

@@ -116,8 +116,7 @@ static Memory* run_expression(Unit* unit, byte* storage, Block* block, Expressio
     case EXPRESSION_ZERO:                   Unreachable;
     case EXPRESSION_TRUE:                   Unreachable;
     case EXPRESSION_FALSE:                  Unreachable;
-    case EXPRESSION_INTEGER_LITERAL:        Unreachable;
-    case EXPRESSION_FLOATING_POINT_LITERAL: Unreachable;
+    case EXPRESSION_NUMERIC_LITERAL:        Unreachable;
     case EXPRESSION_BLOCK:                  Unreachable;
 
     case EXPRESSION_NAME: break;
@@ -153,18 +152,20 @@ static Memory* run_expression(Unit* unit, byte* storage, Block* block, Expressio
         memcpy(address, lhs, size);
     } break;
 
-    case EXPRESSION_ADD:               specialize_numeric_binary([](auto* v, auto* l, auto* r) { *v = *l + *r; }); break;
-    case EXPRESSION_SUBTRACT:          specialize_numeric_binary([](auto* v, auto* l, auto* r) { *v = *l - *r; }); break;
-    case EXPRESSION_MULTIPLY:          specialize_numeric_binary([](auto* v, auto* l, auto* r) { *v = *l * *r; }); break;
-    case EXPRESSION_DIVIDE_WHOLE:      specialize_numeric_binary([](auto* v, auto* l, auto* r) { *v = *l / *r; }); break;
-    case EXPRESSION_DIVIDE_FRACTIONAL: specialize_numeric_binary([](auto* v, auto* l, auto* r) { *v = *l / *r; }); break;
+    case EXPRESSION_ADD:                specialize_numeric_binary([](auto* v, auto* l, auto* r) { *v = *l + *r; }); break;
+    case EXPRESSION_SUBTRACT:           specialize_numeric_binary([](auto* v, auto* l, auto* r) { *v = *l - *r; }); break;
+    case EXPRESSION_MULTIPLY:           specialize_numeric_binary([](auto* v, auto* l, auto* r) { *v = *l * *r; }); break;
 
-    case EXPRESSION_EQUAL:            specialize_logic_binary([](auto* v, auto* l, auto* r) { *v = *l == *r; }); break;
-    case EXPRESSION_NOT_EQUAL:        specialize_logic_binary([](auto* v, auto* l, auto* r) { *v = *l != *r; }); break;
-    case EXPRESSION_GREATER_THAN:     specialize_logic_binary([](auto* v, auto* l, auto* r) { *v = *l >  *r; }); break;
-    case EXPRESSION_GREATER_OR_EQUAL: specialize_logic_binary([](auto* v, auto* l, auto* r) { *v = *l >= *r; }); break;
-    case EXPRESSION_LESS_THAN:        specialize_logic_binary([](auto* v, auto* l, auto* r) { *v = *l <  *r; }); break;
-    case EXPRESSION_LESS_OR_EQUAL:    specialize_logic_binary([](auto* v, auto* l, auto* r) { *v = *l <= *r; }); break;
+    // @Reconsider
+    case EXPRESSION_DIVIDE_WHOLE:       specialize_numeric_binary([](auto* v, auto* l, auto* r) { *v = *l / *r; }); break;
+    case EXPRESSION_DIVIDE_FRACTIONAL:  specialize_numeric_binary([](auto* v, auto* l, auto* r) { *v = *l / *r; }); break;
+
+    case EXPRESSION_EQUAL:              specialize_logic_binary([](auto* v, auto* l, auto* r) { *v = *l == *r; }); break;
+    case EXPRESSION_NOT_EQUAL:          specialize_logic_binary([](auto* v, auto* l, auto* r) { *v = *l != *r; }); break;
+    case EXPRESSION_GREATER_THAN:       specialize_logic_binary([](auto* v, auto* l, auto* r) { *v = *l >  *r; }); break;
+    case EXPRESSION_GREATER_OR_EQUAL:   specialize_logic_binary([](auto* v, auto* l, auto* r) { *v = *l >= *r; }); break;
+    case EXPRESSION_LESS_THAN:          specialize_logic_binary([](auto* v, auto* l, auto* r) { *v = *l <  *r; }); break;
+    case EXPRESSION_LESS_OR_EQUAL:      specialize_logic_binary([](auto* v, auto* l, auto* r) { *v = *l <= *r; }); break;
 
     case EXPRESSION_CAST:
     {
@@ -172,7 +173,10 @@ static Memory* run_expression(Unit* unit, byte* storage, Block* block, Expressio
         {
             if (is_integer_type(infer->type))
             {
-                Integer const* integer = &block->constants[infer->constant_index];
+                Fraction* fract = &block->constants[infer->constant_index];
+                assert(fract_is_integer(fract));
+
+                Integer const* integer = &fract->num;
                 u64 abs = 0;
                 for (umm i = 0; i < integer->size; i++)
                     abs |= ((u64) integer->digit[i]) << (i * DIGIT_BITS);
@@ -278,12 +282,11 @@ static Memory* run_expression(Unit* unit, byte* storage, Block* block, Expressio
         {
         case TYPE_VOID:                 printf("void\n"); break;
         case TYPE_SOFT_ZERO:            printf("zero\n"); break;
-        case TYPE_SOFT_INTEGER:
+        case TYPE_SOFT_NUMBER:
         {
-            String str = int_base10(&block->constants[op_infer->constant_index], temp);
+            String str = fract_display(&block->constants[op_infer->constant_index]);
             printf("%.*s\n", StringArgs(str));
         } break;
-        case TYPE_SOFT_FLOATING_POINT:  printf("<soft floating point>\n"); break;
         case TYPE_SOFT_BOOL:            printf("%s\n", op_infer->constant_bool ? "true" : "false"); break;
         case TYPE_SOFT_TYPE:            printf("<soft type>\n"); break;
         case TYPE_SOFT_BLOCK:

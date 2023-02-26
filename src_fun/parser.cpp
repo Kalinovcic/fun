@@ -333,9 +333,9 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
     else if (maybe_take_atom(stream, ATOM_ZERO))  add_expression(builder, EXPRESSION_ZERO,  start, start, out_expression);
     else if (maybe_take_atom(stream, ATOM_TRUE))  add_expression(builder, EXPRESSION_TRUE,  start, start, out_expression);
     else if (maybe_take_atom(stream, ATOM_FALSE)) add_expression(builder, EXPRESSION_FALSE, start, start, out_expression);
-    else if (maybe_take_atom(stream, ATOM_INTEGER))
+    else if (maybe_take_atom(stream, ATOM_NUMBER))
     {
-        Parsed_Expression* expr = add_expression(builder, EXPRESSION_INTEGER_LITERAL, start, start, out_expression);
+        Parsed_Expression* expr = add_expression(builder, EXPRESSION_NUMERIC_LITERAL, start, start, out_expression);
         expr->literal = *start;
     }
     else if (maybe_take_atom(stream, ATOM_VOID))   make_type_literal(TYPE_VOID);
