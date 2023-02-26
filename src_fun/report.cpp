@@ -8,15 +8,6 @@
 EnterApplicationNamespace
 
 
-static umm count_newlines(String string)
-{
-    umm count = 0;
-    for (umm i = 0; i < string.length; i++)
-        if (string[i] == '\n')
-            count++;
-    return count;
-}
-
 
 void get_line(Compiler* ctx, Token_Info const* info, u32* out_line, u32* out_column, String* out_source_name)
 {
@@ -40,9 +31,9 @@ void get_line(Compiler* ctx, Token_Info const* info, u32* out_line, u32* out_col
     if (out_source_name) *out_source_name = source->name;
 }
 
-void get_source_code_slice(Compiler* ctx, Token_Info const* info,
-                           umm extra_lines_before, umm extra_lines_after,
-                           String* out_source, u32* out_source_offset, u32* out_source_line)
+static void get_source_code_slice(Compiler* ctx, Token_Info const* info,
+                                  umm extra_lines_before, umm extra_lines_after,
+                                  String* out_source, u32* out_source_offset, u32* out_source_line)
 {
     Source_Info* source = &ctx->sources[info->source_index];
     Array<u32> line_offsets = source->line_offsets;
@@ -67,27 +58,17 @@ void get_source_code_slice(Compiler* ctx, Token_Info const* info,
     if (out_source_line)   *out_source_line   = source_start_line + 1;  // +1 because 1-indexed
 }
 
-Token_Info dummy_token_info_for_expression(Compiler* ctx, Parsed_Expression const* expr)
+static String format_line_numbers(bool colored, String source, u32 source_line, String file = {})
 {
-    Token_Info* from_info = get_token_info(ctx, &expr->from);
-    Token_Info* to_info   = get_token_info(ctx, &expr->to);
-
-    Token_Info result = *from_info;
-    u32 length = to_info->offset + to_info->length - from_info->offset;
-    if (length > U16_MAX) length = U16_MAX;
-    result.length = length;
-    return result;
-}
-
-static String format_line_numbers(String source, u32 source_line, String file = {})
-{
-    bool supports_color = supports_colored_output();
-    String lowlight = supports_color ? "\x1b[30;1m"_s : ""_s;
-    String reset    = supports_color ? "\x1b[m"_s     : ""_s;
+    String lowlight = colored ? "\x1b[30;1m"_s : ""_s;
+    String reset    = colored ? "\x1b[m"_s     : ""_s;
 
     bool skinny = file;
 
-    u32 last_line = source_line + count_newlines(source);
+    u32 last_line = source_line;
+    for (umm i = 0; i < source.length; i++)
+        if (source[i] == '\n')
+            last_line++;
     umm digits = digits_base10_u64(last_line);
     if (digits < 4 && !skinny)
         digits = 4;
@@ -118,29 +99,6 @@ static void split_source_around_token_info(Token_Info const* info, u32 source_of
     *out_inside = take(&source, amount_highlit);
     *out_after = source;
 }
-
-String highlighted_snippet(Compiler* ctx, Token_Info const* info, umm lines_before, umm lines_after, bool skinny)
-{
-    String source;
-    u32 source_offset, source_line;
-    get_source_code_slice(ctx, info, lines_before, lines_after, &source, &source_offset, &source_line);
-
-    if (supports_colored_output())
-    {
-        String before, inside, after;
-        split_source_around_token_info(info, source_offset, source, &before, &inside, &after);
-
-        String highlight = "\x1b[31;1m"_s;
-        String reset     = "\x1b[m"_s;
-        source = concatenate(temp, before, highlight,
-                             replace_all_occurances(inside, "\n"_s, concatenate(temp, "\n"_s, highlight), temp),
-                             reset, after);
-    }
-
-    String file = skinny ? get_file_name(ctx->sources[info->source_index].name) : ""_s;
-    return format_line_numbers(source, source_line, file);
-}
-
 
 static String get_severity_label(bool colored, Severity severity)
 {
@@ -204,19 +162,36 @@ Report& Report::message(String message)
     return *this;
 }
 
-Report& Report::internal_snippet(Token_Info info, bool skinny)
+Report& Report::internal_snippet(Token_Info info, bool skinny, umm before, umm after)
 {
-    FormatAdd(&cat, "%~%",
-        skinny ? ""_s : "\n"_s,
-        highlighted_snippet(ctx, &info, skinny ? 0 : 2, skinny ? 0 : 1, skinny));
+    if (skinny) before = after = 0;
+    String source;
+    u32 source_offset, source_line;
+    get_source_code_slice(ctx, &info, before, after, &source, &source_offset, &source_line);
+
+    if (colored)
+    {
+        String code_before, code_inside, code_after;
+        split_source_around_token_info(&info, source_offset, source, &code_before, &code_inside, &code_after);
+
+        String highlight = "\x1b[31;1m"_s;
+        String reset     = "\x1b[m"_s;
+        source = concatenate(temp, code_before, highlight,
+                             replace_all_occurances(code_inside, "\n"_s, concatenate(temp, "\n"_s, highlight), temp),
+                             reset, code_after);
+    }
+
+    String file = skinny ? get_file_name(ctx->sources[info.source_index].name) : ""_s;
+    FormatAdd(&cat, "%~%", skinny ? ""_s : "\n"_s, format_line_numbers(colored, source, source_line, file));
     return *this;
 }
 
-Report& Report::internal_suggestion(String left, Token_Info info, String right, bool skinny)
+Report& Report::internal_suggestion(String left, Token_Info info, String right, bool skinny, umm before, umm after)
 {
+    if (skinny) before = after = 0;
     String source;
     u32 source_offset, source_line;
-    get_source_code_slice(ctx, &info, skinny ? 0 : 2, skinny ? 0 : 1, &source, &source_offset, &source_line);
+    get_source_code_slice(ctx, &info, before, after, &source, &source_offset, &source_line);
 
     if (colored)
     {
@@ -226,14 +201,12 @@ Report& Report::internal_suggestion(String left, Token_Info info, String right, 
         right = concatenate(temp, highlight, right, reset);
     }
 
-    String before, inside, after;
-    split_source_around_token_info(&info, source_offset, source, &before, &inside, &after);
-    source = concatenate(temp, before, left, inside, right, after);
+    String code_before, code_inside, code_after;
+    split_source_around_token_info(&info, source_offset, source, &code_before, &code_inside, &code_after);
+    source = concatenate(temp, code_before, left, code_inside, right, code_after);
 
     String file = skinny ? get_file_name(ctx->sources[info.source_index].name) : ""_s;
-    FormatAdd(&cat, "%~%",
-        skinny ? ""_s : "\n"_s,
-        format_line_numbers(source, source_line, file));
+    FormatAdd(&cat, "%~%", skinny ? ""_s : "\n"_s, format_line_numbers(colored, source, source_line, file));
     return *this;
 }
 

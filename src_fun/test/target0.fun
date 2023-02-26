@@ -12,7 +12,6 @@ set_to_69(&thing: u64);
 debug thing;
 
 
-(){}();
 
 (import "proc.fun")();
 
@@ -43,8 +42,7 @@ repeat :: ($N: u32, $a: block)
 {
     foo();
     n := cast(u8, N);
-    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n
-    Ž
+    while n
     {
         a();
         n = n - cast(u8, 1);

@@ -52,8 +52,7 @@ static Memory* run_expression(Unit* unit, byte* storage, Block* block, Expressio
 
 #if TRACE
     {
-        Token_Info info = dummy_token_info_for_expression(unit->ctx, expr);
-        String location = highlighted_snippet(unit->ctx, &info, 5, 5);
+        String location = Report(unit->ctx).snippet(expr, false, 5, 5).return_without_reporting();
         int newlines = 1;
         for (umm i = 0; i < location.length; i++)
             if (location[i] == '\n')
@@ -297,7 +296,7 @@ static Memory* run_expression(Unit* unit, byte* storage, Block* block, Expressio
                 info = *from_info;
                 info.length = to_info->offset + to_info->length - from_info->offset;
             }
-            String location = highlighted_snippet(unit->ctx, &info, 1);
+            String location = Report(unit->ctx).snippet(info, false, 0, 0).return_without_reporting();
             printf("<soft block>\n%.*s\n", StringArgs(location));
         } break;
         default:

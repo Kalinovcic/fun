@@ -604,8 +604,6 @@ void html_dump(String path);
 ////////////////////////////////////////////////////////////////////////////////
 // Reporting
 
-Token_Info dummy_token_info_for_expression(Compiler* ctx, Parsed_Expression const* expr);
-
 enum Severity
 {
     SEVERITY_NONE,
@@ -626,10 +624,10 @@ struct Report
     Report& continuation();
     Report& message(String message);
 
-    inline Report& intro       (Severity severity, auto at)   { return internal_intro       (severity, convert(at)); }
+    inline Report& intro(Severity severity, auto at) { return internal_intro(severity, convert(at)); }
     inline Report& continuation(auto at, bool skinny = false) { return internal_continuation(convert(at), skinny); }
-    inline Report& snippet     (auto at, bool skinny = false) { return internal_snippet     (convert(at), skinny); }
-    inline Report& suggestion(String left, auto at, String right, bool skinny = false) { return internal_suggestion(left, convert(at), right, skinny); }
+    inline Report& snippet(auto at, bool skinny = false, umm before = 2, umm after = 1) { return internal_snippet(convert(at), skinny, before, after); }
+    inline Report& suggestion(String left, auto at, String right, bool skinny = false, umm before = 2, umm after = 1) { return internal_suggestion(left, convert(at), right, skinny, before, after); }
 
     inline Report& part(auto at, String msg, Severity severity = SEVERITY_ERROR)
     {
@@ -641,28 +639,33 @@ struct Report
     }
 
     bool done();
+    inline String return_without_reporting() { return resolve_to_string_and_free(&cat, temp); }
 
 private:
     Report& internal_intro(Severity severity, Token_Info info);
     Report& internal_continuation(Token_Info info, bool skinny);
-    Report& internal_snippet(Token_Info info, bool skinny);
-    Report& internal_suggestion(String left, Token_Info info, String right, bool skinny);
+    Report& internal_snippet(Token_Info info, bool skinny, umm before, umm after);
+    Report& internal_suggestion(String left, Token_Info info, String right, bool skinny, umm before, umm after);
 
-    inline Token_Info convert(Token_Info info)               { return  info;                                      }
-    inline Token_Info convert(Token_Info const* info)        { return *info;                                      }
-    inline Token_Info convert(Token const* t)                { return *get_token_info(ctx, t);                    }
-    inline Token_Info convert(Parsed_Expression const* expr) { return dummy_token_info_for_expression(ctx, expr); }
+    inline Token_Info convert(Token_Info info)        const { return  info;                   }
+    inline Token_Info convert(Token_Info const* info) const { return *info;                   }
+    inline Token_Info convert(Token const* t)         const { return *get_token_info(ctx, t); }
+    inline Token_Info convert(Parsed_Expression const* expr) const
+    {
+        Token_Info* from_info = get_token_info(ctx, &expr->from);
+        Token_Info* to_info   = get_token_info(ctx, &expr->to);
+
+        Token_Info result = *from_info;
+        u32 length = to_info->offset + to_info->length - from_info->offset;
+        if (length > U16_MAX) length = U16_MAX;
+        result.length = length;
+        return result;
+    }
 };
 
 
 void get_line(Compiler* ctx, Token_Info const* info,
               u32* out_line, u32* out_column = NULL, String* out_source_name = NULL);
-
-void get_source_code_slice(Compiler* ctx, Token_Info const* info,
-                           umm extra_lines_before, umm extra_lines_after,
-                           String* out_source, u32* out_source_offset, u32* out_source_line);
-
-String highlighted_snippet(Compiler* ctx, Token_Info const* info, umm lines_before = 2, umm lines_behind = 0, bool skinny = false);
 
 template <typename T>
 inline bool report_error(Compiler* ctx, T at, String message, Severity severity = SEVERITY_ERROR)
