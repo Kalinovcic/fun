@@ -61,6 +61,9 @@ run_tree/fun: $(objects)
 	$(eval compiled := true)
 
 
+lines:
+	wc -l src_fun/*.cpp src_fun/*.h
+
 clean:
 	rm -rf obj/fun
 	rm -f  run_tree/fun

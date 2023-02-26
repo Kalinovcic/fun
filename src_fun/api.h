@@ -457,14 +457,6 @@ struct Block
 
 
 
-/*struct Run
-{
-    Token  from;
-    Token  to;
-    Block* entry_block;
-};*/
-
-
 static constexpr umm MAX_BLOCKS_PER_UNIT = 10000;
 
 struct Unit
@@ -562,6 +554,7 @@ inline String get_identifier(Compiler* ctx, Token const* token)
 
 Block* parse_top_level(Compiler* ctx, String imports_relative_to_path, Array<Token> tokens);
 Block* parse_top_level_from_file(Compiler* ctx, String path);
+// Your responsibility that code remains allocated as long as necessary!
 Block* parse_top_level_from_memory(Compiler* ctx, String name, String code);
 
 
@@ -589,15 +582,6 @@ bool pump_pipeline(Compiler* ctx);
 // Runtime
 
 void run_unit(Unit* unit);
-
-
-
-////////////////////////////////////////////////////////////////////////////////
-// Developer output
-
-
-void html_add_graph(String title, String dot_code);
-void html_dump(String path);
 
 
 
@@ -663,15 +647,13 @@ private:
     }
 };
 
-
-void get_line(Compiler* ctx, Token_Info const* info,
-              u32* out_line, u32* out_column = NULL, String* out_source_name = NULL);
-
 template <typename T>
 inline bool report_error(Compiler* ctx, T at, String message, Severity severity = SEVERITY_ERROR)
 {
     return Report(ctx).part(at, message, severity).done();
 }
+
+void get_line(Compiler* ctx, Token_Info const* info, u32* out_line, u32* out_column = NULL, String* out_source_name = NULL);
 
 bool supports_colored_output();
 
