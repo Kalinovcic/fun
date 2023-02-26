@@ -31,7 +31,7 @@ cpp_compiler  := g++
 # Building fun objects
 compile_flags := -MD -g -O2 -mrdrnd -maes -pthread
 c_flags       := $(compile_flags) -std=c11
-cpp_flags     := $(compile_flags) -std=c++17
+cpp_flags     := $(compile_flags) -std=c++20
 link_flags    := 
 
 sources := $(wildcard src_fun/*.cpp)          \

@@ -197,9 +197,9 @@ static bool expression_can_be_followed_by_operators(Parsed_Expression const* exp
     return true;
 }
 
-static bool parse_expression(Token_Stream* stream, Block_Builder* builder, Expression* out_expression);
+static bool parse_expression(Token_Stream* stream, Block_Builder* builder, Expression* out_expression, bool allow_block_expressions = false);
 
-static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, Expression* out_expression)
+static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, Expression* out_expression, bool allow_block_expressions = false)
 {
     *out_expression = NO_EXPRESSION;
 
@@ -221,11 +221,7 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
 
     if (maybe_take_atom(stream, ATOM_LEFT_PARENTHESIS))
     {
-        // Significant lookahead ahead:
-        // Whenever we encounter a '(' token, we scan forward to see if we can find '=>' or '{''
-        // If we can, then parse this as a block expression.
-        // Otherwise, it's just a normal parenthesized expression
-        bool parse_as_a_block = false;
+        auto is_this_probably_block_syntax = [&]()
         {
             umm open_parents_counter = 1;
             umm lookahead = 0;
@@ -239,11 +235,12 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
             {
                 Atom atom = stream->cursor[lookahead].atom;
                 if (atom == ATOM_EQUAL_GREATER || atom == ATOM_LEFT_BRACE)
-                    parse_as_a_block = true;
+                    return true;
             }
-        }
+            return false;
+        };
 
-        if (parse_as_a_block)
+        if (allow_block_expressions && is_this_probably_block_syntax())
         {
             Block* parameter_block;
             {
@@ -313,8 +310,21 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
         }
         else
         {
-            if (!parse_expression(stream, builder, out_expression))
+            if (lookahead_atom(stream, ATOM_RIGHT_PARENTHESIS, 0) && is_this_probably_block_syntax())
+                return ReportError(stream->ctx, next_token_or_eof(stream),
+                        "Expected an expression.\n"
+                        "It looks like you're trying to use block syntax, however it's not enabled in the current parsing context.\n"
+                        "Place parentheses around the block to allow this."_s);
+
+            if (!parse_expression(stream, builder, out_expression, /* allow_block_expressions */ true))
                 return false;
+
+            if (lookahead_atom(stream, ATOM_COMMA, 0) && is_this_probably_block_syntax())
+                return ReportError(stream->ctx, next_token_or_eof(stream),
+                        "Expected a closing ')' parenthesis.\n"
+                        "It looks like you're trying to use block syntax, however it's not enabled in the current parsing context.\n"
+                        "Place parentheses around the block to allow this."_s);
+
             if (!take_atom(stream, ATOM_RIGHT_PARENTHESIS, "Expected a closing ')' parenthesis."_s))
                 return false;
             builder->expressions[*out_expression].flags |= EXPRESSION_IS_IN_PARENTHESES;
@@ -381,11 +391,12 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
                 String old_source_token = get_source_token(stream->ctx, old_name);
                 String new_source_token = get_source_token(stream->ctx, start);
 
-                return ReportError(stream->ctx,
-                    start, Format(temp, "Duplicate declaration of '%'.", identifier),
-                    old_name, (old_source_token != new_source_token)
+                return Report(stream->ctx)
+                    .part(start, Format(temp, "Duplicate declaration of '%'.", identifier))
+                    .part(old_name, (old_source_token != new_source_token)
                         ? "Previously declared here. Keep in mind that multiple '_' characters are collapsed into one."_s
-                        : "Previously declared here."_s);
+                        : "Previously declared here."_s)
+                    .done();
             }
 
             bool       alias = false;
@@ -395,12 +406,12 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
             if (maybe_take_atom(stream, ATOM_COLON))
             {
                 alias = true;
-                if (!parse_expression(stream, builder, &value))
+                if (!parse_expression(stream, builder, &value, allow_block_expressions))
                     return false;
             }
             else if (maybe_take_atom(stream, ATOM_EQUAL))
             {
-                if (!parse_expression(stream, builder, &value))
+                if (!parse_expression(stream, builder, &value, allow_block_expressions))
                     return false;
             }
             else
@@ -408,7 +419,7 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
                 if (!parse_expression_leaf(stream, builder, &type))
                     return false;
                 if (maybe_take_atom(stream, ATOM_EQUAL))
-                    if (!parse_expression(stream, builder, &value))
+                    if (!parse_expression(stream, builder, &value, allow_block_expressions))
                         return false;
             }
 
@@ -445,14 +456,8 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
     }
     else if (maybe_take_atom(stream, ATOM_IF))
     {
-        if (!take_atom(stream, ATOM_LEFT_PARENTHESIS, "Expected a '(' before the condition."_s))
-            return false;
-
         Expression expression;
         if (!parse_expression(stream, builder, &expression))
-            return false;
-
-        if (!take_atom(stream, ATOM_RIGHT_PARENTHESIS, "Expected a ')' after the condition."_s))
             return false;
 
         Expression if_true;
@@ -473,14 +478,8 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
     }
     else if (maybe_take_atom(stream, ATOM_WHILE))
     {
-        if (!take_atom(stream, ATOM_LEFT_PARENTHESIS, "Expected a '(' before the condition."_s))
-            return false;
-
         Expression expression;
         if (!parse_expression(stream, builder, &expression))
-            return false;
-
-        if (!take_atom(stream, ATOM_RIGHT_PARENTHESIS, "Expected a ')' after the condition."_s))
             return false;
 
         Expression if_true;
@@ -555,10 +554,10 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
     return true;
 }
 
-static bool parse_expression(Token_Stream* stream, Block_Builder* builder, Expression* out_expression)
+static bool parse_expression(Token_Stream* stream, Block_Builder* builder, Expression* out_expression, bool allow_block_expressions)
 {
     Expression lhs;
-    if (!parse_expression_leaf(stream, builder, &lhs))
+    if (!parse_expression_leaf(stream, builder, &lhs, allow_block_expressions))
         return false;
 
     assert(lhs != NO_EXPRESSION);
@@ -656,8 +655,24 @@ static bool parse_expression(Token_Stream* stream, Block_Builder* builder, Expre
 static bool parse_statement(Token_Stream* stream, Block_Builder* builder)
 {
     Expression expression;
-    if (!parse_expression(stream, builder, &expression))
+    if (!parse_expression(stream, builder, &expression, /* allow_block_expressions */ true))
         return false;
+
+    assert(expression != NO_EXPRESSION);
+    auto* expr = &builder->expressions[expression];
+    if (expr->kind == EXPRESSION_BLOCK)
+    {
+        if (lookahead_atom(stream, ATOM_LEFT_PARENTHESIS, 0))
+            Report(stream->ctx)
+                .intro(SEVERITY_WARNING, expr)
+                .message("Block expression has no effect.\n"
+                         "It looks like you're trying to call it, but in that case you have to place the block inside parentheses."_s)
+                .suggestion("("_s, expr, ")"_s)
+                .done();
+        else
+            report_error(stream->ctx, expr, "Block expression has no effect."_s, SEVERITY_WARNING);
+    }
+
     add_item(&builder->imperative_order, &expression);
     return true;
 }

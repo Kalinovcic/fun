@@ -531,15 +531,6 @@ void free_compiler(Compiler* compiler);
 bool lex_from_memory(Compiler* ctx, String name, String code, Array<Token>* out_tokens);
 bool lex_file(Compiler* ctx, String path, Array<Token>* out_tokens);
 
-void get_line(Compiler* ctx, Token_Info const* info,
-              u32* out_line, u32* out_column = NULL, String* out_source_name = NULL);
-
-void get_source_code_slice(Compiler* ctx, Token_Info const* info,
-                           umm extra_lines_before, umm extra_lines_after,
-                           String* out_source, u32* out_source_offset, u32* out_source_line);
-
-Token_Info dummy_token_info_for_expression(Compiler* ctx, Parsed_Expression const* expr);
-
 inline Token_Info* get_token_info(Compiler* ctx, Token const* token)
 {
     if (token->atom == ATOM_NUMBER)
@@ -564,16 +555,6 @@ inline String get_identifier(Compiler* ctx, Token const* token)
     return ctx->identifiers[atom];
 }
 
-
-bool enable_color_output();
-
-String location_report_part(Compiler* ctx, Token_Info const* info, umm lines_before = 2, umm lines_behind = 0);
-String location_report_part(Compiler* ctx, Token const* token, umm lines_before = 2, umm lines_behind = 0);
-
-bool report_error_locationless(Compiler* ctx, String message);
-bool report_error(Compiler* ctx, Token const* at, String message);
-bool report_error(Compiler* ctx, Token const* at1, String message1, Token const* at2, String message2);
-bool report_error(Compiler* ctx, Parsed_Expression const* at, String message);
 
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -617,6 +598,79 @@ void run_unit(Unit* unit);
 
 void html_add_graph(String title, String dot_code);
 void html_dump(String path);
+
+
+
+////////////////////////////////////////////////////////////////////////////////
+// Reporting
+
+Token_Info dummy_token_info_for_expression(Compiler* ctx, Parsed_Expression const* expr);
+
+enum Severity
+{
+    SEVERITY_NONE,
+    SEVERITY_ERROR,
+    SEVERITY_WARNING,
+};
+
+struct Report
+{
+    String_Concatenator cat;
+    Compiler*           ctx;
+    bool                colored;
+    String              indentation;
+    bool                first_part;
+
+    Report(Compiler* ctx);
+    Report& intro(Severity severity);
+    Report& continuation();
+    Report& message(String message);
+
+    inline Report& intro       (Severity severity, auto at)   { return internal_intro       (severity, convert(at)); }
+    inline Report& continuation(auto at, bool skinny = false) { return internal_continuation(convert(at), skinny); }
+    inline Report& snippet     (auto at, bool skinny = false) { return internal_snippet     (convert(at), skinny); }
+    inline Report& suggestion(String left, auto at, String right, bool skinny = false) { return internal_suggestion(left, convert(at), right, skinny); }
+
+    inline Report& part(auto at, String msg, Severity severity = SEVERITY_ERROR)
+    {
+        first_part ? intro(severity, at) : continuation(at);
+        message(msg);
+        snippet(at);
+        first_part = false;
+        return *this;
+    }
+
+    bool done();
+
+private:
+    Report& internal_intro(Severity severity, Token_Info info);
+    Report& internal_continuation(Token_Info info, bool skinny);
+    Report& internal_snippet(Token_Info info, bool skinny);
+    Report& internal_suggestion(String left, Token_Info info, String right, bool skinny);
+
+    inline Token_Info convert(Token_Info info)               { return  info;                                      }
+    inline Token_Info convert(Token_Info const* info)        { return *info;                                      }
+    inline Token_Info convert(Token const* t)                { return *get_token_info(ctx, t);                    }
+    inline Token_Info convert(Parsed_Expression const* expr) { return dummy_token_info_for_expression(ctx, expr); }
+};
+
+
+void get_line(Compiler* ctx, Token_Info const* info,
+              u32* out_line, u32* out_column = NULL, String* out_source_name = NULL);
+
+void get_source_code_slice(Compiler* ctx, Token_Info const* info,
+                           umm extra_lines_before, umm extra_lines_after,
+                           String* out_source, u32* out_source_offset, u32* out_source_line);
+
+String highlighted_snippet(Compiler* ctx, Token_Info const* info, umm lines_before = 2, umm lines_behind = 0, bool skinny = false);
+
+template <typename T>
+inline bool report_error(Compiler* ctx, T at, String message, Severity severity = SEVERITY_ERROR)
+{
+    return Report(ctx).part(at, message, severity).done();
+}
+
+bool supports_colored_output();
 
 
 

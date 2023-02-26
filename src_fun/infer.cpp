@@ -354,8 +354,7 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
                         String hint = "Maybe you are referring to this, but you don't have visibility because of imperative order."_s;
                         if (visibility_limit == NO_VISIBILITY)
                             hint = "Maybe you are referring to this, but you don't have visibility because it's in an outer scope."_s;
-
-                        report_error(unit->ctx, name, Format(temp, "Can't find name '%'.", identifier), decl_name, hint);
+                        Report(unit->ctx).part(name, Format(temp, "Can't find name '%'.", identifier)).part(decl_name, hint).done();
                         return YIELD_ERROR;
                     }
 
@@ -374,8 +373,9 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
 
             if (best_alternative)
             {
-                report_error(unit->ctx, name, Format(temp, "Can't find name '%'.", identifier),
-                             best_alternative, Format(temp, "Maybe you meant '%'?", get_identifier(unit->ctx, best_alternative)));
+                Report(unit->ctx).part(name, Format(temp, "Can't find name '%'.", identifier))
+                                 .part(best_alternative, Format(temp, "Maybe you meant '%'?", get_identifier(unit->ctx, best_alternative)))
+                                 .done();
                 return YIELD_ERROR;
             }
 
@@ -1027,10 +1027,9 @@ bool pump_pipeline(Compiler* ctx)
             Unit* unit = ctx->pipeline[it_index].unit;
             if (unit->materialized_block_count >= MAX_BLOCKS_PER_UNIT)
             {
-                report_error(ctx, &unit->initiator_from,
-                    Format(temp, "Too many blocks instantiated in this unit. Maximum is %.", MAX_BLOCKS_PER_UNIT),
-                    &unit->most_recent_materialized_block->from,
-                    "The most recent instantiated block is here. It may or may not be part of the problem."_s);
+                Report(ctx).part(&unit->initiator_from, Format(temp, "Too many blocks instantiated in this unit. Maximum is %.", MAX_BLOCKS_PER_UNIT))
+                           .part(&unit->most_recent_materialized_block->from, "The most recent instantiated block is here. It may or may not be part of the problem."_s)
+                           .done();
                 return false;
             }
         }
@@ -1040,12 +1039,9 @@ bool pump_pipeline(Compiler* ctx)
 
         if (!made_progress)
         {
-            bool supports_color = enable_color_output();
-            String lowlight  = supports_color ? "\x1b[30;1m"_s : ""_s;
-            String highlight = supports_color ? "\x1b[31;1m"_s : ""_s;
-            String reset     = supports_color ? "\x1b[m"_s     : ""_s;
-
-            report_error_locationless(ctx, "Can't progress inference."_s);
+            Report report(ctx);
+            report.intro(SEVERITY_ERROR);
+            report.message("Can't make inference progress."_s);
             For (ctx->pipeline)
             {
                 Block* block = it->block;
@@ -1053,36 +1049,44 @@ bool pump_pipeline(Compiler* ctx)
                 For (block->waiting_expressions)
                 {
                     auto* expr = &block->parsed_expressions[it->key];
+                    Parsed_Expression const* waiting_on = NULL;
+                    if (it->value.on_expression != NO_EXPRESSION)
+                        waiting_on = &it->value.on_block->parsed_expressions[it->value.on_expression];
 
-                    String msg = {};
                     if (it->value.why == WAITING_ON_OPERAND)
                         continue;
                     else if (it->value.why == WAITING_ON_DECLARATION)
                     {
-                        msg = Format(temp, "% ..% This name is waiting on the declaration.\n"
-                                           "%",
-                                           lowlight, reset,
-                                           location_report_part(ctx, &expr->from));
+                        report.continuation();
+                        report.message("This name is waiting for a declaration..."_s);
+                        report.snippet(expr, /* skinny */ true);
+                        if (waiting_on)
+                        {
+                            report.message("and this is the declaration it's waiting for."_s);
+                            report.snippet(waiting_on, /* skinny */ true);
+                        }
                     }
                     else if (it->value.why == WAITING_ON_PARAMETER_INFERENCE)
                     {
-                        msg = Format(temp, "% ..% This call is waiting for a parameter type.\n"
-                                           "%",
-                                           lowlight, reset,
-                                           location_report_part(ctx, &expr->from));
+                        report.continuation();
+                        report.message("This call is waiting for a parameter type."_s);
+                        report.snippet(expr, /* skinny */ true);
+                        if (waiting_on)
+                        {
+                            report.message("and this is the parameter it's waiting for."_s);
+                            report.snippet(waiting_on, /* skinny */ true);
+                        }
                     }
                     else if (it->value.why == WAITING_ON_BAKE_INFERENCE)
                     {
-                        msg = Format(temp, "% ..% This parameter is waiting to be baked by the caller.\n"
-                                           "%",
-                                           lowlight, reset,
-                                           location_report_part(ctx, &expr->from));
+                        report.continuation();
+                        report.message("This parameter is waiting to be baked by the caller."_s);
+                        report.snippet(expr, /* skinny */ true);
                     }
                     else Unreachable;
-
-                    fprintf(stderr, "%.*s", StringArgs(msg));
                 }
             }
+            report.done();
             return false;
         }
     }

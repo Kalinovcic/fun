@@ -5,7 +5,6 @@
 
 set_to_69 :: (what: &u64)
 {
-    debug what;
     *what = cast(u64, 69);
 }
 
@@ -13,6 +12,7 @@ set_to_69(&thing: u64);
 debug thing;
 
 
+(){}();
 
 (import "proc.fun")();
 
@@ -28,7 +28,7 @@ test(u32, cast(u64, 123));
 print :: ($b: u32, $c: bool8)
  => debug b;
 
-if (cast(u64, 1))
+if cast(u64, 1)
  => print(123, true);
 else
  => debug 420;
@@ -43,7 +43,8 @@ repeat :: ($N: u32, $a: block)
 {
     foo();
     n := cast(u8, N);
-    while (n)
+    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n    while n
+    Ž
     {
         a();
         n = n - cast(u8, 1);
@@ -67,8 +68,8 @@ T :: &u32;
 var2: *T = *ptr;
 debug var2;
 
-// *ptr = *ptr + 1;
-// debug var;
+*ptr = *ptr + cast(u32, 1);
+debug var;
 
 
 
