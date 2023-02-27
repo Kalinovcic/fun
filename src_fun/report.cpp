@@ -115,6 +115,16 @@ Report::Report(Compiler* ctx)
   first_part(true)
 {}
 
+Report::~Report()
+{
+    String report = resolve_to_string_and_free(&cat, temp);
+    if (report)
+    {
+        fprintf(stderr, "Internal error: This error is reported late:");
+        fprintf(stderr, "%.*s", StringArgs(report));
+    }
+}
+
 Report& Report::intro(Severity severity)
 {
     FormatAdd(&cat, "\n%\n", get_severity_label(colored, severity));

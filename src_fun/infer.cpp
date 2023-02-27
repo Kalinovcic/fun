@@ -52,26 +52,26 @@ String vague_type_description(Unit* unit, Type type, bool point_out_soft_types)
     {
         switch (type)
         {
-        case TYPE_SOFT_NUMBER:         return "a compile-time number"_s;
-        case TYPE_SOFT_BOOL:           return "a compile-time bool"_s;
-        case TYPE_SOFT_TYPE:           return "a compile-time type"_s;
+        case TYPE_SOFT_NUMBER: return "a compile-time number"_s;
+        case TYPE_SOFT_BOOL:   return "a compile-time bool"_s;
+        case TYPE_SOFT_TYPE:   return "a compile-time type"_s;
         }
     }
 
     switch (type)
     {
     // run-time values
-    case TYPE_VOID:                return "a void value"_s;
+    case TYPE_VOID:        return "a void value"_s;
     case TYPE_U8: case TYPE_U16: case TYPE_U32: case TYPE_U64:
     case TYPE_S8: case TYPE_S16: case TYPE_S32: case TYPE_S64:
     case TYPE_F16: case TYPE_F32: case TYPE_F64:
-    case TYPE_SOFT_NUMBER:         return "a numeric value"_s;
+    case TYPE_SOFT_NUMBER: return "a numeric value"_s;
     case TYPE_BOOL8: case TYPE_BOOL16: case TYPE_BOOL32: case TYPE_BOOL64:
-    case TYPE_SOFT_BOOL:           return "a bool value"_s;
+    case TYPE_SOFT_BOOL:   return "a bool value"_s;
     case TYPE_TYPE:
-    case TYPE_SOFT_TYPE:           return "a type value"_s;
-    case TYPE_SOFT_ZERO:           return "a zero"_s;
-    case TYPE_SOFT_BLOCK:          return "a block"_s;
+    case TYPE_SOFT_TYPE:   return "a type value"_s;
+    case TYPE_SOFT_ZERO:   return "a zero"_s;
+    case TYPE_SOFT_BLOCK:  return "a block"_s;
     }
 
     assert(is_user_defined_type(type));
@@ -91,35 +91,35 @@ String exact_type_description(Unit* unit, Type type)
         umm indirection = get_indirection(type);
         String stars = {};
         while (indirection--)
-            FormatAppend(&stars, temp, "*");
+            FormatAppend(&stars, temp, "&");
         return concatenate(temp, stars, exact_type_description(unit, get_base_type(type)));
     }
 
     switch (type)
     {
     // run-time values
-    case TYPE_VOID:                return "void"_s;
-    case TYPE_U8:                  return "u8"_s;
-    case TYPE_U16:                 return "u16"_s;
-    case TYPE_U32:                 return "u32"_s;
-    case TYPE_U64:                 return "u64"_s;
-    case TYPE_S8:                  return "s8"_s;
-    case TYPE_S16:                 return "s16"_s;
-    case TYPE_S32:                 return "s32"_s;
-    case TYPE_S64:                 return "s64"_s;
-    case TYPE_F16:                 return "f16"_s;
-    case TYPE_F32:                 return "f32"_s;
-    case TYPE_F64:                 return "f64"_s;
-    case TYPE_SOFT_NUMBER:         return "compile-time number"_s;
-    case TYPE_BOOL8:               return "bool8"_s;
-    case TYPE_BOOL16:              return "bool16"_s;
-    case TYPE_BOOL32:              return "bool32"_s;
-    case TYPE_BOOL64:              return "bool64"_s;
-    case TYPE_SOFT_BOOL:           return "compile-time bool"_s;
-    case TYPE_TYPE:                return "type"_s;
-    case TYPE_SOFT_TYPE:           return "compile-time type"_s;
-    case TYPE_SOFT_ZERO:           return "zero"_s;
-    case TYPE_SOFT_BLOCK:          return "block"_s;
+    case TYPE_VOID:        return "void"_s;
+    case TYPE_U8:          return "u8"_s;
+    case TYPE_U16:         return "u16"_s;
+    case TYPE_U32:         return "u32"_s;
+    case TYPE_U64:         return "u64"_s;
+    case TYPE_S8:          return "s8"_s;
+    case TYPE_S16:         return "s16"_s;
+    case TYPE_S32:         return "s32"_s;
+    case TYPE_S64:         return "s64"_s;
+    case TYPE_F16:         return "f16"_s;
+    case TYPE_F32:         return "f32"_s;
+    case TYPE_F64:         return "f64"_s;
+    case TYPE_SOFT_NUMBER: return "compile-time number"_s;
+    case TYPE_BOOL8:       return "bool8"_s;
+    case TYPE_BOOL16:      return "bool16"_s;
+    case TYPE_BOOL32:      return "bool32"_s;
+    case TYPE_BOOL64:      return "bool64"_s;
+    case TYPE_SOFT_BOOL:   return "compile-time bool"_s;
+    case TYPE_TYPE:        return "type"_s;
+    case TYPE_SOFT_TYPE:   return "compile-time type"_s;
+    case TYPE_SOFT_ZERO:   return "zero"_s;
+    case TYPE_SOFT_BLOCK:  return "block"_s;
     }
 
     assert(is_user_defined_type(type));
@@ -167,27 +167,27 @@ u64 get_type_size(Unit* unit, Type type)
 
     switch (type)
     {
-    case TYPE_VOID:                return 0;
-    case TYPE_SOFT_ZERO:           Unreachable;
-    case TYPE_U8:                  return 1;
-    case TYPE_U16:                 return 2;
-    case TYPE_U32:                 return 4;
-    case TYPE_U64:                 return 8;
-    case TYPE_S8:                  return 1;
-    case TYPE_S16:                 return 2;
-    case TYPE_S32:                 return 4;
-    case TYPE_S64:                 return 8;
-    case TYPE_F16:                 return 2;
-    case TYPE_F32:                 return 4;
-    case TYPE_F64:                 return 8;
-    case TYPE_SOFT_NUMBER:         Unreachable;
-    case TYPE_BOOL8:               return 1;
-    case TYPE_BOOL16:              return 2;
-    case TYPE_BOOL32:              return 4;
-    case TYPE_BOOL64:              return 8;
-    case TYPE_SOFT_BOOL:           Unreachable;
-    case TYPE_TYPE:                return 4;
-    case TYPE_SOFT_TYPE:           Unreachable;
+    case TYPE_VOID:        return 0;
+    case TYPE_SOFT_ZERO:   Unreachable;
+    case TYPE_U8:          return 1;
+    case TYPE_U16:         return 2;
+    case TYPE_U32:         return 4;
+    case TYPE_U64:         return 8;
+    case TYPE_S8:          return 1;
+    case TYPE_S16:         return 2;
+    case TYPE_S32:         return 4;
+    case TYPE_S64:         return 8;
+    case TYPE_F16:         return 2;
+    case TYPE_F32:         return 4;
+    case TYPE_F64:         return 8;
+    case TYPE_SOFT_NUMBER: Unreachable;
+    case TYPE_BOOL8:       return 1;
+    case TYPE_BOOL16:      return 2;
+    case TYPE_BOOL32:      return 4;
+    case TYPE_BOOL64:      return 8;
+    case TYPE_SOFT_BOOL:   Unreachable;
+    case TYPE_TYPE:        return 4;
+    case TYPE_SOFT_TYPE:   Unreachable;
     IllegalDefaultCase;
     }
 }
@@ -240,6 +240,155 @@ static umm edit_distance(String a, String b)
     return 1 + best;
 }
 
+static bool check_constant_fits_in_runtime_type(Unit* unit, Parsed_Expression const* expr, Fraction const* fraction, Type type)
+{
+    assert(!is_soft_type(type));
+    assert(is_numeric_type(type));
+    String name = exact_type_description(unit, type);
+
+    if (!is_integer_type(type))
+        NotImplemented;
+
+#define Error(...) return (report_error(unit->ctx, expr, Format(temp, ##__VA_ARGS__)), false)
+    if (!fract_is_integer(fraction))
+        Error("The number is fractional, it can't fit in %.\n"
+              "    value: %",
+              exact_type_description(unit, type), fract_display(fraction));
+
+    u64 target_size = get_type_size(unit, type);
+
+    Integer const* integer = &fraction->num;
+    if (integer->negative)
+    {
+        if (is_unsigned_integer_type(type))
+            Error("The number doesn't fit in %.\n"
+                  "    value: %\n"
+                  "  minimum: 0 (lowest number that fits in %)",
+                  name, fract_display(fraction), name);
+
+        Integer min = {};
+        int_set_zero(&min);
+        int_set_bit(&min, target_size * 8 - 1);
+        int_negate(&min);
+        if (int_compare(integer, &min) < 0)
+            Error("The number doesn't fit in %.\n"
+                  "    value: %\n"
+                  "  minimum: % (lowest number that fits in %)",
+                  name, fract_display(fraction), int_base10(&min), name);
+    }
+    else
+    {
+        u64 max_log2 = (target_size * 8) - (is_signed_integer_type(type) ? 1 : 0);
+        u64 max_value = (((1ull << (max_log2 - 1)) - 1) << 1) | 1;  // clown behavior because << 64 doesn't work
+        if (int_log2_abs(integer) >= max_log2)
+            Error("The number doesn't fit in %.\n"
+                  "    value: %\n"
+                  "  maximum: % (greatest number that fits in %)",
+                  name, fract_display(fraction), max_value, name);
+    }
+#undef Error
+
+    return true;
+}
+
+static void set_inferred_type(Block* block, Expression id, Type type)
+{
+    auto* expr  = &block->parsed_expressions[id];
+    auto* infer = &block->inferred_expressions[id];
+
+    assert(type != INVALID_TYPE);
+    if (type == TYPE_SOFT_ZERO)
+        assert(expr->kind == EXPRESSION_ZERO);
+    else if (is_soft_type(type))
+        assert(infer->constant_index != INVALID_CONSTANT_INDEX);
+    if (is_soft_type(type))
+    {
+        infer->flags |= INFERRED_EXPRESSION_IS_NOT_EVALUATED_AT_RUNTIME;
+        infer->flags |= INFERRED_EXPRESSION_DOES_NOT_ALLOCATE_STORAGE;
+        assert(infer->size   == INVALID_STORAGE_SIZE);
+        assert(infer->offset == INVALID_STORAGE_OFFSET);
+    }
+    infer->type = type;
+    remove(&block->waiting_expressions, &id);
+}
+
+static bool pattern_matching_inference(Unit* unit, Block* block, Expression id, Type type,
+                                       Parsed_Expression const* inferred_from, Type full_inferred_type)
+{
+    assert(type != INVALID_TYPE);
+    assert(!is_soft_type(type));
+
+    auto* expr  = &block->parsed_expressions[id];
+    auto* infer = &block->inferred_expressions[id];
+    assert(expr->flags & EXPRESSION_HAS_TO_BE_EXTERNALLY_INFERRED);
+    assert(infer->type == INVALID_TYPE);
+
+    switch (expr->kind)
+    {
+
+    case EXPRESSION_DECLARATION:
+    {
+        if (expr->flags & EXPRESSION_DECLARATION_IS_INFERRED_ALIAS)
+        {
+            assert(expr->declaration.type  == NO_EXPRESSION);
+            assert(expr->declaration.value == NO_EXPRESSION);
+            infer->constant_type = type;
+            set_inferred_type(block, id, TYPE_SOFT_TYPE);
+        }
+        else if (expr->flags & EXPRESSION_DECLARATION_IS_ALIAS)
+        {
+            assert(expr->declaration.type  == NO_EXPRESSION);
+            assert(expr->declaration.value != NO_EXPRESSION);
+            if (!pattern_matching_inference(unit, block, expr->declaration.value, type, inferred_from, full_inferred_type))
+                return false;
+            infer->constant_type = type;
+            set_inferred_type(block, id, TYPE_SOFT_TYPE);
+        }
+        else Unreachable;
+    } break;
+
+    case EXPRESSION_ADDRESS:
+    {
+        if (!is_pointer_type(type))
+        {
+            String full_type = exact_type_description(unit, full_inferred_type);
+            Report(unit->ctx).part(expr, "Can't match the type to the expected pattern."_s)
+                             .part(inferred_from, Format(temp, "The type is %, inferred from here:", full_type))
+                             .done();
+            return false;
+        }
+
+        Type reduced = set_indirection(type, get_indirection(type) - 1);
+        if (!pattern_matching_inference(unit, block, expr->unary_operand, reduced, inferred_from, full_inferred_type))
+            return false;
+        infer->constant_type = type;
+        set_inferred_type(block, id, TYPE_SOFT_TYPE);
+    } break;
+
+    case EXPRESSION_DEREFERENCE:
+    {
+        u32 indirection = get_indirection(type) + 1;
+        if (indirection > TYPE_MAX_INDIRECTION)
+        {
+            String full_type = exact_type_description(unit, full_inferred_type);
+            Report(unit->ctx).part(expr, Format(temp, "Can't match the type to the expected pattern, because it would exceed the maximum indirection %.", TYPE_MAX_INDIRECTION))
+                             .part(inferred_from, Format(temp, "The type is %, inferred from here:", full_type))
+                             .done();
+        }
+
+        Type indirected = set_indirection(type, indirection);
+        if (!pattern_matching_inference(unit, block, expr->unary_operand, indirected, inferred_from, full_inferred_type))
+            return false;
+        infer->constant_type = type;
+        set_inferred_type(block, id, TYPE_SOFT_TYPE);
+    } break;
+
+    IllegalDefaultCase;
+
+    }
+
+    return true;
+}
 
 
 enum Yield_Result
@@ -269,24 +418,7 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
     assert(infer->type == INVALID_TYPE);
 
 
-    #define Infer(t)                                                            \
-    {                                                                           \
-        assert(t != INVALID_TYPE);                                              \
-        if (t == TYPE_SOFT_ZERO)                                                \
-            assert(expr->kind == EXPRESSION_ZERO);                              \
-        else if (is_soft_type(t))                                               \
-            assert(infer->constant_index != INVALID_CONSTANT_INDEX);            \
-        if (is_soft_type(t))                                                    \
-        {                                                                       \
-            infer->flags |= INFERRED_EXPRESSION_IS_NOT_EVALUATED_AT_RUNTIME;    \
-            infer->flags |= INFERRED_EXPRESSION_DOES_NOT_ALLOCATE_STORAGE;      \
-            assert(infer->size   == INVALID_STORAGE_SIZE);                      \
-            assert(infer->offset == INVALID_STORAGE_OFFSET);                    \
-        }                                                                       \
-        infer->type = t;                                                        \
-        remove(&block->waiting_expressions, &id);                               \
-        return YIELD_COMPLETED;                                                 \
-    }
+    #define Infer(type) return (set_inferred_type(block, id, type), YIELD_COMPLETED);
 
     #define Wait(why, on_expression, on_block)                                      \
     {                                                                               \
@@ -298,6 +430,9 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
     #define WaitOperand(on_expression) Wait(WAITING_ON_OPERAND, on_expression, block)
 
     #define Error(...) return (report_error(unit->ctx, expr, Format(temp, ##__VA_ARGS__)), YIELD_ERROR)
+
+    if (expr->flags & EXPRESSION_HAS_TO_BE_EXTERNALLY_INFERRED)
+        Wait(WAITING_ON_EXTERNAL_INFERENCE, NO_EXPRESSION, NULL);
 
     switch (expr->kind)
     {
@@ -579,44 +714,9 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
 
         if (rhs_infer->type == TYPE_SOFT_NUMBER)
         {
-            if (!is_integer_type(cast_type))
-                NotImplemented;
-
             Fraction const* fraction = &block->constants[rhs_infer->constant_index];
-            if (!fract_is_integer(fraction))
-            {
-                Error("The cast value operand is fractional, it can't be cast to %.\n"
-                          "Operand has value %",
-                          exact_type_description(unit, cast_type), fract_display(fraction));
-            }
-
-            u64 target_size = get_type_size(unit, cast_type);
-
-            Integer const* integer = &fraction->num;
-            if (integer->negative)
-            {
-                if (is_unsigned_integer_type(cast_type))
-                    Error("The cast value operand is a negative constant, it can't be cast to %.\n"
-                          "Operand has value %",
-                          exact_type_description(unit, cast_type), fract_display(fraction));
-
-                Integer min = {};
-                int_set_zero(&min);
-                int_set_bit(&min, target_size * 8 - 1);
-                if (int_compare_abs(integer, &min) > 0)
-                    Error("The cast value operand doesn't fit in %.\n"
-                          "Operand has value %",
-                          exact_type_description(unit, cast_type), fract_display(fraction));
-            }
-            else
-            {
-                u64 max_log2 = (target_size * 8) - (is_signed_integer_type(cast_type) ? 1 : 0);
-                if (int_log2_abs(integer) >= max_log2)
-                    Error("The cast value operand doesn't fit in %.\n"
-                          "Operand has value %",
-                          exact_type_description(unit, cast_type), fract_display(fraction));
-            }
-
+            if (!check_constant_fits_in_runtime_type(unit, &block->parsed_expressions[expr->binary.rhs], fraction, cast_type))
+                return YIELD_ERROR;
             infer->constant_index = add_constant(block, fract_clone(fraction));
         }
         else
@@ -725,12 +825,45 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
         umm parameter_index = 0;
         For (callee->imperative_order)
         {
-            auto* param_expr  = &callee->parsed_expressions  [*it];
-            auto* param_infer = &callee->inferred_expressions[*it];
+            Expression param_id = *it;
+            auto* param_expr  = &callee->parsed_expressions  [param_id];
+            auto* param_infer = &callee->inferred_expressions[param_id];
             if (!(param_expr->flags & EXPRESSION_DECLARATION_IS_PARAMETER)) continue;
             Defer(parameter_index++);
             assert(param_expr->declaration.type != NO_EXPRESSION);
             assert(param_expr->declaration.value == NO_EXPRESSION);
+
+            String param_name = get_identifier(unit->ctx, &param_expr->declaration.name);
+
+            auto* param_type_expr = &callee->parsed_expressions[param_expr->declaration.type];
+            if ((param_type_expr->flags & EXPRESSION_HAS_TO_BE_EXTERNALLY_INFERRED) &&
+                param_infer->type == INVALID_TYPE)
+            {
+                assert(!(param_expr->flags & EXPRESSION_DECLARATION_IS_ALIAS));
+                assert(parameter_index < args->count);
+
+                auto* arg_expr = &block->parsed_expressions  [args->expressions[parameter_index]];
+                Type  arg_type =  block->inferred_expressions[args->expressions[parameter_index]].type;
+                assert(arg_type != INVALID_TYPE);
+
+                if (is_soft_type(arg_type))
+                {
+                    Report(unit->ctx).part(arg_expr, Format(temp, "A runtime value is required for parameter #% ('%'), but the argument is %.",
+                                                            parameter_index + 1, param_name,
+                                                            vague_type_description_in_compile_time_context(unit, arg_type)))
+                                     .part(param_type_expr, "This is required because the parameter infers its type from the caller."_s)
+                                     .done();
+                    return YIELD_ERROR;
+                }
+
+                if (!pattern_matching_inference(unit, callee, param_expr->declaration.type, arg_type, arg_expr, arg_type))
+                    return YIELD_ERROR;
+
+                param_infer->flags |= INFERRED_EXPRESSION_IS_NOT_EVALUATED_AT_RUNTIME;
+                allocate_unit_storage(unit, arg_type, &param_infer->size, &param_infer->offset);
+                set_inferred_type(callee, param_id, arg_type);
+                override_made_progress = true;  // We made progress by inferring the callee's param type.
+            }
 
             auto* type_infer = &callee->inferred_expressions[param_expr->declaration.type];
             if (type_infer->type == INVALID_TYPE || type_infer->type != TYPE_SOFT_TYPE)
@@ -758,12 +891,13 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
 
                 param_infer->flags |= INFERRED_EXPRESSION_IS_NOT_EVALUATED_AT_RUNTIME;
                 param_infer->constant_block = soft;
-                param_infer->type = TYPE_SOFT_BLOCK;
+                set_inferred_type(callee, param_id, TYPE_SOFT_BLOCK);
                 override_made_progress = true;  // We made progress by inferring the callee's param type.
             }
             else
             {
                 assert(args->count > parameter_index);
+                auto* arg_expr  = &block->parsed_expressions  [args->expressions[parameter_index]];
                 auto* arg_infer = &block->inferred_expressions[args->expressions[parameter_index]];
                 Type  arg_type  = arg_infer->type;
                 if (param_expr->flags & EXPRESSION_DECLARATION_IS_ALIAS)
@@ -776,38 +910,43 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
                             NotImplemented;
 
                         if (arg_type != TYPE_SOFT_NUMBER)
-                            Error("Argument #% is expected to be a compile-time integer, but is %.", parameter_index + 1,
+                            Error("Argument #% ('%') is expected to be a compile-time integer, but is %.",
+                                parameter_index + 1, param_name,
                                 vague_type_description_in_compile_time_context(unit, arg_type));
 
                         Fraction const* fraction = &block->constants[arg_infer->constant_index];
                         if (!fract_is_integer(fraction))
-                            Error("Argument #% is expected to be a compile-time integer, but is fractional.\n"
-                                  "Value is %.", parameter_index + 1, fract_display(fraction));
+                            Error("Argument #% ('%') is expected to be a compile-time integer, but is fractional.\n"
+                                  "Value is %.", parameter_index + 1, param_name, fract_display(fraction));
 
-                        // @Incomplete - check if the value fits in the actual type
+                        if (!check_constant_fits_in_runtime_type(unit, arg_expr, fraction, param_type))
+                            return YIELD_ERROR;
+
                         param_infer->flags |= INFERRED_EXPRESSION_IS_NOT_EVALUATED_AT_RUNTIME;
                         param_infer->constant_index = add_constant(callee, fract_clone(fraction));
-                        param_infer->type = TYPE_SOFT_NUMBER;
+                        set_inferred_type(callee, param_id, TYPE_SOFT_NUMBER);
                         override_made_progress = true;  // We made progress by inferring the callee's param type.
                     }
                     else if (is_bool_type(param_type))
                     {
                         if (arg_type != TYPE_SOFT_BOOL)
-                            Error("Argument #% is expected to be a compile-time boolean, but is %.", parameter_index + 1,
+                            Error("Argument #% ('%') is expected to be a compile-time boolean, but is %.",
+                                parameter_index + 1, param_name,
                                 vague_type_description_in_compile_time_context(unit, arg_type));
                         param_infer->flags |= INFERRED_EXPRESSION_IS_NOT_EVALUATED_AT_RUNTIME;
                         param_infer->constant_bool = arg_infer->constant_bool;
-                        param_infer->type = TYPE_SOFT_BOOL;
+                        set_inferred_type(callee, param_id, TYPE_SOFT_BOOL);
                         override_made_progress = true;  // We made progress by inferring the callee's param type.
                     }
                     else if (param_type == TYPE_TYPE)
                     {
                         if (arg_type != TYPE_SOFT_TYPE)
-                            Error("Argument #% is expected to be a compile-time type, but is %.", parameter_index + 1,
+                            Error("Argument #% ('%') is expected to be a compile-time type, but is %.",
+                                parameter_index + 1, param_name,
                                 vague_type_description_in_compile_time_context(unit, arg_type));
                         param_infer->flags |= INFERRED_EXPRESSION_IS_NOT_EVALUATED_AT_RUNTIME;
                         param_infer->constant_type = arg_infer->constant_type;
-                        param_infer->type = TYPE_SOFT_TYPE;
+                        set_inferred_type(callee, param_id, TYPE_SOFT_TYPE);
                         override_made_progress = true;  // We made progress by inferring the callee's param type.
                     }
                     else Unreachable;
@@ -815,10 +954,10 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
                 else
                 {
                     if (param_type != arg_type)
-                        Error("Argument #% doesn't match the parameter type.\n"
+                        Error("Argument #% ('%') doesn't match the parameter type.\n"
                               "    expected: %\n"
                               "    received: %",
-                              parameter_index + 1,
+                              parameter_index + 1, param_name,
                               exact_type_description(unit, param_type),
                               exact_type_description(unit, arg_type));
                 }
@@ -840,6 +979,25 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
         Type type = INVALID_TYPE;
         if (expr->declaration.type != NO_EXPRESSION)
         {
+            auto* type_expr = &block->parsed_expressions[expr->declaration.type];
+            if (type_expr->flags & EXPRESSION_HAS_TO_BE_EXTERNALLY_INFERRED)
+            {
+                assert(expr->declaration.value != NO_EXPRESSION);
+                auto* value_expr = &block->parsed_expressions[expr->declaration.value];
+                Type value_type = block->inferred_expressions[expr->declaration.value].type;
+                if (value_type == INVALID_TYPE) WaitOperand(expr->declaration.value);
+                if (is_soft_type(value_type))
+                {
+                    Report(unit->ctx).part(value_expr, Format(temp, "A runtime value is required here, but this is %.\n",
+                                                              vague_type_description_in_compile_time_context(unit, value_type)))
+                                     .part(type_expr, "This is because the declaration type is inferred from the value."_s)
+                                     .done();
+                    return YIELD_ERROR;
+                }
+                if (!pattern_matching_inference(unit, block, expr->declaration.type, value_type, value_expr, value_type))
+                    return YIELD_ERROR;
+            }
+
             auto* type_infer = &block->inferred_expressions[expr->declaration.type];
             if (type_infer->type == INVALID_TYPE) WaitOperand(expr->declaration.type);
 
@@ -857,15 +1015,11 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
             if (value_type == INVALID_TYPE) WaitOperand(expr->declaration.value);
         }
 
+        assert(!(expr->flags & EXPRESSION_DECLARATION_IS_INFERRED_ALIAS));
         if (expr->flags & EXPRESSION_DECLARATION_IS_ALIAS)
         {
-            if (expr->declaration.value == NO_EXPRESSION)
-            {
-                // we can't infer this ourself, we're waiting for the callee to infer it for us
-                assert(expr->flags & EXPRESSION_DECLARATION_IS_PARAMETER);
-                Wait(WAITING_ON_BAKE_INFERENCE, NO_EXPRESSION, NULL);
-            }
-
+            assert(expr->declaration.value != NO_EXPRESSION);
+            auto* value_expr  = &block->parsed_expressions  [expr->declaration.value];
             auto* value_infer = &block->inferred_expressions[expr->declaration.value];
             if (value_infer->type == INVALID_TYPE) WaitOperand(expr->declaration.value);
             if (value_infer->type == TYPE_SOFT_NUMBER)
@@ -878,7 +1032,10 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
                 infer->constant_block = value_infer->constant_block;
             else
             {
-                Error("RHS is not known at compile-time, it's %.", vague_type_description_in_compile_time_context(unit, value_infer->type));
+                Report(unit->ctx).part(value_expr, Format(temp, "A compile-time value is required here, but this is %.",
+                                                          vague_type_description_in_compile_time_context(unit, value_infer->type)))
+                                 .done();
+                return YIELD_ERROR;
             }
 
             Infer(value_infer->type);
@@ -891,9 +1048,14 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
             if (expr->declaration.type == NO_EXPRESSION)
             {
                 if (is_soft_type(value_type))
-                    Error("An explicit type is required in this context.\n"
-                          "    rhs: %",
-                          exact_type_description(unit, value_type));
+                {
+                    assert(expr->declaration.value != NO_EXPRESSION);
+                    auto* value_expr = &block->parsed_expressions[expr->declaration.value];
+                    Report(unit->ctx).part(value_expr, Format(temp, "A runtime value is required here, but this is %.\n",
+                                                              vague_type_description_in_compile_time_context(unit, value_type)))
+                                     .done();
+                    return YIELD_ERROR;
+                }
                 type = value_type;
             }
             assert(type != INVALID_TYPE);
@@ -1077,10 +1239,10 @@ bool pump_pipeline(Compiler* ctx)
                             report.snippet(waiting_on, /* skinny */ true);
                         }
                     }
-                    else if (it->value.why == WAITING_ON_BAKE_INFERENCE)
+                    else if (it->value.why == WAITING_ON_EXTERNAL_INFERENCE)
                     {
                         report.continuation();
-                        report.message("This parameter is waiting to be baked by the caller."_s);
+                        report.message("This alias is waiting to be inferred."_s);
                         report.snippet(expr, /* skinny */ true);
                     }
                     else Unreachable;

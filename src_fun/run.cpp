@@ -286,7 +286,11 @@ static Memory* run_expression(Unit* unit, byte* storage, Block* block, Expressio
             printf("%.*s\n", StringArgs(str));
         } break;
         case TYPE_SOFT_BOOL:            printf("%s\n", op_infer->constant_bool ? "true" : "false"); break;
-        case TYPE_SOFT_TYPE:            printf("<soft type>\n"); break;
+        case TYPE_SOFT_TYPE:
+        {
+            String type = exact_type_description(unit, op_infer->constant_type);
+            printf("%.*s\n", StringArgs(type));
+        } break;
         case TYPE_SOFT_BLOCK:
         {
             Token_Info info;

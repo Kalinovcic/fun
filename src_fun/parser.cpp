@@ -192,24 +192,39 @@ static bool semicolon_after_statement(Token_Stream* stream)
 static bool expression_can_be_followed_by_operators(Parsed_Expression const* expr)
 {
     if (expr->flags & EXPRESSION_IS_IN_PARENTHESES) return true;
-    if (expr->kind == EXPRESSION_BLOCK)       return false;
+    if (expr->kind == EXPRESSION_BLOCK && !(expr->flags & EXPRESSION_BLOCK_IS_IMPORTED)) return false;
     if (expr->kind == EXPRESSION_DECLARATION) return false;
     return true;
 }
 
-static bool parse_expression(Token_Stream* stream, Block_Builder* builder, Expression* out_expression, bool allow_block_expressions = false);
+typedef flags32 Parse_Flags;
+enum: Parse_Flags
+{
+    PARSE_ALLOW_BLOCKS              = 0x0001,
+    PARSE_ALLOW_INFERRED_TYPE_ALIAS = 0x0002,
+};
 
-static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, Expression* out_expression, bool allow_block_expressions = false)
+static bool parse_expression(Token_Stream* stream, Block_Builder* builder, Expression* out_expression, Parse_Flags parse_flags);
+
+static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, Expression* out_expression, Parse_Flags parse_flags)
 {
     *out_expression = NO_EXPRESSION;
 
+    Parse_Flags original_parse_flags = parse_flags;
+    parse_flags &= ~PARSE_ALLOW_BLOCKS;
+    parse_flags &= ~PARSE_ALLOW_INFERRED_TYPE_ALIAS;
+#define InheritFlags(to_inherit) (parse_flags | (original_parse_flags & (to_inherit)))
+
     Token* start = stream->cursor;
-    auto make_unary = [&](Expression_Kind kind) -> bool
+    auto make_unary = [&](Expression_Kind kind, u32 next_parse_flags) -> bool
     {
         Expression unary_operand;
-        if (!parse_expression_leaf(stream, builder, &unary_operand))
+        if (!parse_expression_leaf(stream, builder, &unary_operand, next_parse_flags))
             return false;
+        auto* operand_expr = &builder->expressions[unary_operand];
+
         Parsed_Expression* expr = add_expression(builder, kind, start, unary_operand, out_expression);
+        expr->flags |= (operand_expr->flags & EXPRESSION_HAS_TO_BE_EXTERNALLY_INFERRED);
         expr->unary_operand = unary_operand;
         return true;
     };
@@ -240,7 +255,7 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
             return false;
         };
 
-        if (allow_block_expressions && is_this_probably_block_syntax())
+        if ((original_parse_flags & PARSE_ALLOW_BLOCKS) && is_this_probably_block_syntax())
         {
             Block* parameter_block;
             {
@@ -283,15 +298,21 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
                     }
                     else
                     {
-                        if (!parse_expression(stream, &parameter_builder, &type))
+                        if (!parse_expression_leaf(stream, &parameter_builder, &type, PARSE_ALLOW_INFERRED_TYPE_ALIAS))
                             return false;
                     }
 
                     Expression decl_expr_id;
                     Parsed_Expression* decl_expr = add_expression(&parameter_builder, EXPRESSION_DECLARATION, name, stream->cursor - 1, &decl_expr_id);
                     decl_expr->flags |= EXPRESSION_DECLARATION_IS_PARAMETER;
+                    if (parameter_builder.expressions[type].flags & EXPRESSION_HAS_TO_BE_EXTERNALLY_INFERRED)
+                    {
+                        if (is_baked)
+                            return ReportError(stream->ctx, decl_expr, "A parameter can't have an inferred type if it's baked, because baked values don't have assigned runtime types."_s);
+                        decl_expr->flags |= EXPRESSION_HAS_TO_BE_EXTERNALLY_INFERRED;
+                    }
                     if (is_baked)
-                        decl_expr->flags |= EXPRESSION_DECLARATION_IS_ALIAS;
+                        decl_expr->flags |= EXPRESSION_DECLARATION_IS_ALIAS | EXPRESSION_HAS_TO_BE_EXTERNALLY_INFERRED;
                     decl_expr->declaration.name  = *name;
                     decl_expr->declaration.type  = type;
                     decl_expr->declaration.value = NO_EXPRESSION;
@@ -316,7 +337,7 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
                         "It looks like you're trying to use block syntax, however it's not enabled in the current parsing context.\n"
                         "Place parentheses around the block to allow this."_s);
 
-            if (!parse_expression(stream, builder, out_expression, /* allow_block_expressions */ true))
+            if (!parse_expression(stream, builder, out_expression, InheritFlags(PARSE_ALLOW_INFERRED_TYPE_ALIAS) | PARSE_ALLOW_BLOCKS))
                 return false;
 
             if (lookahead_atom(stream, ATOM_COMMA, 0) && is_this_probably_block_syntax())
@@ -345,11 +366,12 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
             return false;
 
         Parsed_Expression* expr = add_expression(builder, EXPRESSION_BLOCK, start, stream->cursor - 1, out_expression);
+        expr->flags |= EXPRESSION_BLOCK_IS_IMPORTED;
         expr->parsed_block = imported_block;
     }
-    else if (maybe_take_atom(stream, ATOM_MINUS))     { if (!make_unary(EXPRESSION_NEGATE))      return false; }
-    else if (maybe_take_atom(stream, ATOM_AMPERSAND)) { if (!make_unary(EXPRESSION_ADDRESS))     return false; }
-    else if (maybe_take_atom(stream, ATOM_STAR))      { if (!make_unary(EXPRESSION_DEREFERENCE)) return false; }
+    else if (maybe_take_atom(stream, ATOM_MINUS))     { if (!make_unary(EXPRESSION_NEGATE,      parse_flags))                                 return false; }
+    else if (maybe_take_atom(stream, ATOM_AMPERSAND)) { if (!make_unary(EXPRESSION_ADDRESS,     InheritFlags(PARSE_ALLOW_INFERRED_TYPE_ALIAS))) return false; }
+    else if (maybe_take_atom(stream, ATOM_STAR))      { if (!make_unary(EXPRESSION_DEREFERENCE, InheritFlags(PARSE_ALLOW_INFERRED_TYPE_ALIAS))) return false; }
     else if (maybe_take_atom(stream, ATOM_ZERO))  add_expression(builder, EXPRESSION_ZERO,  start, start, out_expression);
     else if (maybe_take_atom(stream, ATOM_TRUE))  add_expression(builder, EXPRESSION_TRUE,  start, start, out_expression);
     else if (maybe_take_atom(stream, ATOM_FALSE)) add_expression(builder, EXPRESSION_FALSE, start, start, out_expression);
@@ -399,32 +421,36 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
                     .done();
             }
 
+            flags32    flags = EXPRESSION_DECLARATION_IS_ORDERED;
             bool       alias = false;
             Expression type  = NO_EXPRESSION;
             Expression value = NO_EXPRESSION;
 
             if (maybe_take_atom(stream, ATOM_COLON))
             {
-                alias = true;
-                if (!parse_expression(stream, builder, &value, allow_block_expressions))
+                flags &= ~EXPRESSION_DECLARATION_IS_ORDERED;
+                flags |=  EXPRESSION_DECLARATION_IS_ALIAS;
+                if (!parse_expression(stream, builder, &value, InheritFlags(PARSE_ALLOW_BLOCKS | PARSE_ALLOW_INFERRED_TYPE_ALIAS)))
                     return false;
+                if (builder->expressions[value].flags & EXPRESSION_HAS_TO_BE_EXTERNALLY_INFERRED)
+                    flags |= EXPRESSION_HAS_TO_BE_EXTERNALLY_INFERRED;
             }
             else if (maybe_take_atom(stream, ATOM_EQUAL))
             {
-                if (!parse_expression(stream, builder, &value, allow_block_expressions))
+                if (!parse_expression(stream, builder, &value, parse_flags))
                     return false;
             }
             else
             {
-                if (!parse_expression_leaf(stream, builder, &type))
+                if (!parse_expression_leaf(stream, builder, &type, parse_flags | PARSE_ALLOW_INFERRED_TYPE_ALIAS))
                     return false;
                 if (maybe_take_atom(stream, ATOM_EQUAL))
-                    if (!parse_expression(stream, builder, &value, allow_block_expressions))
+                    if (!parse_expression(stream, builder, &value, parse_flags))
                         return false;
             }
 
             Parsed_Expression* expr = add_expression(builder, EXPRESSION_DECLARATION, start, stream->cursor - 1, out_expression);
-            expr->flags |= alias ? EXPRESSION_DECLARATION_IS_ALIAS : EXPRESSION_DECLARATION_IS_ORDERED;
+            expr->flags |= flags;
             expr->declaration.name  = *start;
             expr->declaration.type  = type;
             expr->declaration.value = value;
@@ -435,17 +461,32 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
             expr->name.token = *start;
         }
     }
+    else if (maybe_take_atom(stream, ATOM_DOLLAR))
+    {
+        if (!(original_parse_flags & PARSE_ALLOW_INFERRED_TYPE_ALIAS))
+            return ReportError(stream->ctx, stream->cursor - 1, "Inferred type alias is not allowed here, as there would be nowhere to infer the type from."_s);
+
+        Token* name = stream->cursor;
+        if (!take_atom(stream, ATOM_FIRST_IDENTIFIER, "Expected the type alias name after '$'."_s))
+            return false;
+
+        Parsed_Expression* expr = add_expression(builder, EXPRESSION_DECLARATION, start, stream->cursor - 1, out_expression);
+        expr->flags |= EXPRESSION_HAS_TO_BE_EXTERNALLY_INFERRED | EXPRESSION_DECLARATION_IS_ALIAS | EXPRESSION_DECLARATION_IS_INFERRED_ALIAS;
+        expr->declaration.name  = *name;
+        expr->declaration.type  = NO_EXPRESSION;
+        expr->declaration.value = NO_EXPRESSION;
+    }
     else if (maybe_take_atom(stream, ATOM_CAST))
     {
         if (!take_atom(stream, ATOM_LEFT_PARENTHESIS, "Expected '(' after the 'cast' keyword."_s))
             return false;
         Expression lhs;
-        if (!parse_expression(stream, builder, &lhs))
+        if (!parse_expression(stream, builder, &lhs, parse_flags))
             return false;
         if (!take_atom(stream, ATOM_COMMA, "Expected ',' between the operands to 'cast'."_s))
             return false;
         Expression rhs;
-        if (!parse_expression(stream, builder, &rhs))
+        if (!parse_expression(stream, builder, &rhs, parse_flags))
             return false;
         if (!take_atom(stream, ATOM_RIGHT_PARENTHESIS, "Expected ')' after the second operand to 'cast'."_s))
             return false;
@@ -457,7 +498,7 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
     else if (maybe_take_atom(stream, ATOM_IF))
     {
         Expression expression;
-        if (!parse_expression(stream, builder, &expression))
+        if (!parse_expression(stream, builder, &expression, parse_flags))
             return false;
 
         Expression if_true;
@@ -479,7 +520,7 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
     else if (maybe_take_atom(stream, ATOM_WHILE))
     {
         Expression expression;
-        if (!parse_expression(stream, builder, &expression))
+        if (!parse_expression(stream, builder, &expression, parse_flags))
             return false;
 
         Expression if_true;
@@ -495,7 +536,7 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
     else if (maybe_take_atom(stream, ATOM_DEBUG))
     {
         Expression expression;
-        if (!parse_expression(stream, builder, &expression))
+        if (!parse_expression(stream, builder, &expression, parse_flags))
             return false;
 
         Parsed_Expression* expr = add_expression(builder, EXPRESSION_DEBUG, start, stream->cursor - 1, out_expression);
@@ -525,7 +566,7 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
                     return false;
 
                 Expression value;
-                if (!parse_expression(stream, builder, reserve_item(&args)))
+                if (!parse_expression(stream, builder, reserve_item(&args), parse_flags))
                     return false;
             }
 
@@ -551,13 +592,14 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
         else break;
     }
 
+#undef InheritFlags
     return true;
 }
 
-static bool parse_expression(Token_Stream* stream, Block_Builder* builder, Expression* out_expression, bool allow_block_expressions)
+static bool parse_expression(Token_Stream* stream, Block_Builder* builder, Expression* out_expression, Parse_Flags parse_flags)
 {
     Expression lhs;
-    if (!parse_expression_leaf(stream, builder, &lhs, allow_block_expressions))
+    if (!parse_expression_leaf(stream, builder, &lhs, parse_flags))
         return false;
 
     assert(lhs != NO_EXPRESSION);
@@ -640,7 +682,7 @@ static bool parse_expression(Token_Stream* stream, Block_Builder* builder, Expre
         else break;
 
         Expression rhs;
-        if (!parse_expression_leaf(stream, builder, &rhs)) return false;
+        if (!parse_expression_leaf(stream, builder, &rhs, parse_flags)) return false;
         while (ops.count && should_pop(ops[ops.count - 1], op)) pop();
         add_item(&ops, &op);
         add_item(&exprs, &rhs);
@@ -655,7 +697,7 @@ static bool parse_expression(Token_Stream* stream, Block_Builder* builder, Expre
 static bool parse_statement(Token_Stream* stream, Block_Builder* builder)
 {
     Expression expression;
-    if (!parse_expression(stream, builder, &expression, /* allow_block_expressions */ true))
+    if (!parse_expression(stream, builder, &expression, PARSE_ALLOW_BLOCKS))
         return false;
 
     assert(expression != NO_EXPRESSION);

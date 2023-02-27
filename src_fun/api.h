@@ -319,6 +319,9 @@ enum: flags16
     EXPRESSION_DECLARATION_IS_ORDERED        = 0x0008,
     EXPRESSION_ALLOW_PARENT_SCOPE_VISIBILITY = 0x0010,
     EXPRESSION_BRANCH_IS_LOOP                = 0x0020,
+    EXPRESSION_BLOCK_IS_IMPORTED             = 0x0040,
+    EXPRESSION_DECLARATION_IS_INFERRED_ALIAS = 0x0080,
+    EXPRESSION_HAS_TO_BE_EXTERNALLY_INFERRED = 0x0100,
 };
 
 struct Parsed_Expression
@@ -414,7 +417,8 @@ enum Wait_Reason: u32
     WAITING_ON_OPERAND,              // most boring wait reason, skipped in chain reporting because it's obvious
     WAITING_ON_DECLARATION,          // a name expression can wait for the declaration to infer
     WAITING_ON_PARAMETER_INFERENCE,  // a call expression can wait for the callee to infer its parameter types
-    WAITING_ON_BAKE_INFERENCE,       // an alias parameter declaration can wait for the caller to infer it
+    WAITING_ON_EXTERNAL_INFERENCE,   // an alias parameter declaration can wait for the caller to infer it,
+                                     // or an inferred type alias can wait for its surrounding expression to infer it
 };
 
 struct Wait_Info
@@ -604,6 +608,7 @@ struct Report
     bool                first_part;
 
     Report(Compiler* ctx);
+    ~Report();
     Report& intro(Severity severity);
     Report& continuation();
     Report& message(String message);

@@ -3,6 +3,23 @@
 // debug a + b;
 
 
+if cast(u64, 1)
+{
+    x: u32 = cast(u32, 123);
+    y: &u32 = &x;
+    z: (G :: &$T) = y;
+    w: *$Z = z;
+    debug T;
+    debug G;
+    debug Z;
+
+    foo :: ($a: u8)
+     => debug a;
+    foo(123);
+    debug 69;
+}
+
+/*
 set_to_69 :: (what: &u64)
 {
     *what = cast(u64, 69);
@@ -13,7 +30,7 @@ debug thing;
 
 
 
-(import "proc.fun")();
+import "proc.fun"();
 
 test :: ($T: type, v: u64)
 {
@@ -106,3 +123,4 @@ proc_b();
 */
 
 
+*/
