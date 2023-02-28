@@ -559,7 +559,8 @@ bool lex_from_memory(Compiler* ctx, String name, String code, Array<Token>* out_
         u8* start_cursor = cursor;
 
         Atom atom = ATOM_INVALID;
-             if (c == ',') cursor++, atom = ATOM_COMMA;
+             if (c == '.') cursor++, atom = ATOM_DOT;
+        else if (c == ',') cursor++, atom = ATOM_COMMA;
         else if (c == ';') cursor++, atom = ATOM_SEMICOLON;
         else if (c == ':') cursor++, atom = ATOM_COLON;
         else if (c == '(') cursor++, atom = ATOM_LEFT_PARENTHESIS;

@@ -158,9 +158,10 @@ String exact_type_description(Unit* unit, Type type)
 
 
 
-bool find_declaration(Unit* unit, Token const* name,
+bool find_declaration(Token const* name,
                       Block* scope, Visibility visibility_limit,
-                      Block** out_decl_scope, Expression* out_decl_expr)
+                      Block** out_decl_scope, Expression* out_decl_expr,
+                      bool allow_parent_traversal)
 {
     while (scope)
     {
@@ -178,6 +179,9 @@ bool find_declaration(Unit* unit, Token const* name,
             *out_decl_expr = id;
             return true;
         }
+
+        if (!allow_parent_traversal)
+            break;
 
         visibility_limit = scope->parent_scope_visibility_limit;
         scope            = scope->parent_scope;
@@ -198,7 +202,7 @@ u64 get_type_size(Unit* unit, Type type)
         User_Type* data = get_user_type_data(unit->ctx, type);
         assert(data->unit);
         assert(data->unit->completed_inference);
-        return data->unit->next_storage_offset;
+        return data->unit->storage_size;
     }
 
     switch (type)
@@ -234,7 +238,12 @@ u64 get_type_alignment(Unit* unit, Type type)
         return unit->pointer_alignment;
 
     if (is_user_defined_type(type))
-        NotImplemented;
+    {
+        User_Type* data = get_user_type_data(unit->ctx, type);
+        assert(data->unit);
+        assert(data->unit->completed_inference);
+        return data->unit->storage_alignment;
+    }
 
     // For primitives, the alignment is the same as their size.
     u64 size = get_type_size(unit, type);
@@ -254,6 +263,9 @@ void allocate_unit_storage(Unit* unit, Type type, u64* out_size, u64* out_offset
     *out_size   = size;
     *out_offset = unit->next_storage_offset;
     unit->next_storage_offset += size;
+
+    if (unit->storage_alignment < alignment)
+        unit->storage_alignment = alignment;
 }
 
 
@@ -544,7 +556,7 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
 
         Block*     decl_scope;
         Expression decl_id;
-        if (!find_declaration(unit, name, block, expr->visibility_limit, &decl_scope, &decl_id))
+        if (!find_declaration(name, block, expr->visibility_limit, &decl_scope, &decl_id))
         {
             Token const* best_alternative = NULL;
             umm          best_distance    = UMM_MAX;
@@ -608,6 +620,48 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
             assert(decl_infer->offset != INVALID_STORAGE_OFFSET);
             infer->flags |= INFERRED_EXPRESSION_DOES_NOT_ALLOCATE_STORAGE;
             infer->size   = decl_infer->size;
+            infer->offset = decl_infer->offset;
+        }
+
+        Infer(decl_infer->type);
+    } break;
+
+    case EXPRESSION_MEMBER:
+    {
+        Type lhs_type = block->inferred_expressions[expr->member.lhs].type;
+        if (lhs_type == INVALID_TYPE)
+            WaitOperand(expr->member.lhs);
+        if (!is_user_defined_type(lhs_type))
+            Error("Expected a unit type on the left side of the '.' operator, but got %.", vague_type_description(unit, lhs_type));
+
+        User_Type* data = get_user_type_data(unit->ctx, lhs_type);
+        assert(data->unit);
+        Block* member_block = data->unit->entry_block;
+        assert(member_block);
+
+        Block* decl_scope;
+        Expression decl_id;
+        if (!find_declaration(&expr->member.name, member_block, ALL_VISIBILITY, &decl_scope, &decl_id, /* allow_parent_traversal */ false))
+        {
+            String identifier = get_identifier(unit->ctx, &expr->member.name);
+            // @ErrorReporting suggest potential typos
+            Error("Can't find member '%' in %.", identifier, exact_type_description(unit, lhs_type));
+        }
+
+        Inferred_Expression* decl_infer = &decl_scope->inferred_expressions[decl_id];
+        if (decl_infer->type == INVALID_TYPE)
+            Wait(WAITING_ON_DECLARATION, decl_id, decl_scope);
+
+        if (is_soft_type(decl_infer->type))
+        {
+            if (!copy_constant(block, id, decl_scope, decl_id, decl_infer->type))
+                Wait(WAITING_ON_DECLARATION, decl_id, decl_scope);
+        }
+        else
+        {
+            assert(decl_infer->size   != INVALID_STORAGE_SIZE);
+            assert(decl_infer->offset != INVALID_STORAGE_OFFSET);
+            infer->flags |= INFERRED_EXPRESSION_DOES_NOT_ALLOCATE_STORAGE;
             infer->offset = decl_infer->offset;
         }
 
@@ -1268,6 +1322,9 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
                       exact_type_description(unit, type),
                       exact_type_description(unit, value_type));
 
+            if (is_user_defined_type(type) && !is_user_type_sizeable(unit->ctx, type))
+                WaitOperand(expr->unary_operand);
+
             allocate_unit_storage(unit, type, &infer->size, &infer->offset);
             Infer(type);
         }
@@ -1390,6 +1447,9 @@ static void complete_unit_inference(Unit* unit)
     assert(unit->blocks_in_flight == 0);
     allocate_remaining_storage(unit, unit->entry_block);
     unit->completed_inference = true;
+    unit->storage_size = unit->next_storage_offset;
+    if (!unit->storage_alignment)
+        unit->storage_alignment = 1;
 }
 
 

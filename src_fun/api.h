@@ -102,6 +102,7 @@ enum Atom: u32
     ATOM_CODEOF,                // codeof
 
     // symbols
+    ATOM_DOT,                   // .
     ATOM_COMMA,                 // ,
     ATOM_SEMICOLON,             // ;
     ATOM_COLON,                 // :
@@ -262,8 +263,9 @@ inline bool is_pointer_type         (Type type) { return get_indirection(type) >
 enum Expression: u32 {};
 enum Visibility: u32 {};
 
-static constexpr Expression NO_EXPRESSION = (Expression) 0xFFFFFFFF;
-static constexpr Visibility NO_VISIBILITY = (Visibility) 0xFFFFFFFF;
+static constexpr Expression NO_EXPRESSION  = (Expression) 0xFFFFFFFF;
+static constexpr Visibility NO_VISIBILITY  = (Visibility) 0xFFFFFFFF;
+static constexpr Visibility ALL_VISIBILITY = (Visibility) 0xFFFFFFFE;
 
 
 struct Expression_List
@@ -288,6 +290,7 @@ enum Expression_Kind: u16
     EXPRESSION_UNIT,
 
     EXPRESSION_NAME,
+    EXPRESSION_MEMBER,
 
     // unary operators
     EXPRESSION_NEGATE,
@@ -356,6 +359,12 @@ struct Parsed_Expression
         {
             Token token;
         } name;
+
+        struct
+        {
+            Expression lhs;
+            Token      name;
+        } member;
 
         struct
         {
@@ -497,10 +506,12 @@ struct Unit
     umm    materialized_block_count;
     Block* most_recent_materialized_block;
 
+    u64    next_storage_offset;
+
     umm    blocks_in_flight;
     bool   completed_inference;
-
-    u64 next_storage_offset;
+    u64    storage_alignment;
+    u64    storage_size;
 };
 
 
@@ -600,9 +611,10 @@ String vague_type_description(Unit* unit, Type type, bool point_out_soft_types =
 String vague_type_description_in_compile_time_context(Unit* unit, Type type);
 String exact_type_description(Unit* unit, Type type);
 
-bool find_declaration(Unit* unit, Token const* name,
+bool find_declaration(Token const* name,
                       Block* scope, Visibility visibility_limit,
-                      Block** out_decl_scope, Expression* out_decl_expr);
+                      Block** out_decl_scope, Expression* out_decl_expr,
+                      bool allow_parent_traversal = true);
 
 u64  get_type_size        (Unit* unit, Type type);
 u64  get_type_alignment   (Unit* unit, Type type);

@@ -613,6 +613,17 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
             expr->call.arguments = list;
             expr->call.block     = block_expr;
         }
+        else if (maybe_take_atom(stream, ATOM_DOT))
+        {
+            Token* name = stream->cursor;
+            if (!take_atom(stream, ATOM_FIRST_IDENTIFIER, "Expected a member name after the '.' operator."_s))
+                return false;
+
+            Expression lhs = *out_expression;
+            Parsed_Expression* expr = add_expression(builder, EXPRESSION_MEMBER, start, stream->cursor - 1, out_expression);
+            expr->member.lhs  = lhs;
+            expr->member.name = *name;
+        }
         else break;
     }
 

@@ -19,9 +19,13 @@ U :: unit
     z := x * cast(u64, 100) + y;
     debug z;
 }
-// U();
 
-goto(codeof U, debug_alloc U);
+storage: U;
+goto(codeof U, &storage);
+
+debug storage.x;
+debug storage.y;
+
 
 
 /*

@@ -120,6 +120,12 @@ static Memory* run_expression(Unit* unit, byte* storage, Block* block, Expressio
 
     case EXPRESSION_NAME: break;
 
+    case EXPRESSION_MEMBER:
+    {
+        Memory* lhs = run_expression(unit, storage, block, expr->member.lhs);
+        address = (Memory*)((byte*) lhs + infer->offset);
+    } break;
+
     case EXPRESSION_NEGATE:
     {
         assert(block->inferred_expressions[expr->unary_operand].type == infer->type);
