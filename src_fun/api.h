@@ -532,7 +532,9 @@ struct User_Type
     Block*     created_by_block;
     Expression created_by_expression;
     Unit*      unit;
-    Token      first_alias;
+
+    bool       has_alias;
+    Token      alias;
 };
 
 struct Compiler

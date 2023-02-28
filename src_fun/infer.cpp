@@ -153,6 +153,9 @@ String exact_type_description(Unit* unit, Type type)
 
     assert(is_user_defined_type(type));
     // @ErrorReporting more detail, what type of custom type
+    User_Type* data = get_user_type_data(unit->ctx, type);
+    if (data->has_alias)
+        return get_identifier(unit->ctx, &data->alias);
     return "<user defined type>"_s;
 }
 
@@ -187,6 +190,81 @@ bool find_declaration(Token const* name,
         scope            = scope->parent_scope;
     }
     return false;
+}
+
+
+static umm edit_distance(String a, String b)
+{
+    if (!a) return b.length;
+    if (!b) return a.length;
+
+    if (a[0] == b[0])
+        return edit_distance(consume(a, 1), consume(b, 1));
+
+    umm option1 = edit_distance(consume(a, 1), b);
+    umm option2 = edit_distance(a, consume(b, 1));
+    umm option3 = edit_distance(consume(a, 1), consume(b, 1));
+
+    umm best = option1;
+    if (best > option2) best = option2;
+    if (best > option3) best = option3;
+    return 1 + best;
+}
+
+static void helpful_error_for_missing_name(Compiler* ctx, String base_error, Token const* name,
+                                           Block* scope, Visibility visibility_limit,
+                                           bool allow_parent_traversal)
+{
+
+    Token const* best_alternative = NULL;
+    umm          best_distance    = UMM_MAX;
+
+    String identifier = get_identifier(ctx, name);
+    while (scope)
+    {
+        for (Expression id = (Expression) 0; id < scope->parsed_expressions.count; id = (Expression)(id + 1))
+        {
+            auto* expr = &scope->parsed_expressions[id];
+            if (expr->kind != EXPRESSION_DECLARATION) continue;
+
+            Token const* decl_name = &expr->declaration.name;
+            if (decl_name->atom == name->atom)
+            {
+                String hint = "Maybe you are referring to this, but you don't have visibility because of imperative order."_s;
+                if (visibility_limit == NO_VISIBILITY)
+                    hint = "Maybe you are referring to this, but you don't have visibility because it's in an outer scope."_s;
+                Report(ctx).part(name, base_error)
+                           .part(name, Format(temp, "Can't find name '%'.", identifier)).part(decl_name, hint)
+                           .done();
+                return;
+            }
+
+            String other_identifier = get_identifier(ctx, decl_name);
+            umm distance = edit_distance(identifier, other_identifier);
+            if (best_distance > distance && distance < identifier.length / 3)
+            {
+                best_distance = distance;
+                best_alternative = decl_name;
+            }
+        }
+
+        if (!allow_parent_traversal)
+            break;
+
+        visibility_limit = scope->parent_scope_visibility_limit;
+        scope            = scope->parent_scope;
+    }
+
+    if (best_alternative)
+    {
+        Report(ctx).part(name, base_error)
+                   .part(best_alternative, Format(temp, "Maybe you meant '%'?", get_identifier(ctx, best_alternative)))
+                   .done();
+        return;
+    }
+
+    Report(ctx).part(name, base_error).done();
+    return;
 }
 
 
@@ -289,23 +367,6 @@ void set_constant(Block* block, Expression expr, Type type_assertion, Constant* 
 
 
 
-static umm edit_distance(String a, String b)
-{
-    if (!a) return b.length;
-    if (!b) return a.length;
-
-    if (a[0] == b[0])
-        return edit_distance(consume(a, 1), consume(b, 1));
-
-    umm option1 = edit_distance(consume(a, 1), b);
-    umm option2 = edit_distance(a, consume(b, 1));
-    umm option3 = edit_distance(consume(a, 1), consume(b, 1));
-
-    umm best = option1;
-    if (best > option2) best = option2;
-    if (best > option3) best = option3;
-    return 1 + best;
-}
 
 static bool copy_constant(Block* to_block, Expression to_id, Block* from_block, Expression from_id, Type type_assertion)
 {
@@ -558,51 +619,10 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
         Expression decl_id;
         if (!find_declaration(name, block, expr->visibility_limit, &decl_scope, &decl_id))
         {
-            Token const* best_alternative = NULL;
-            umm          best_distance    = UMM_MAX;
-
-            String     identifier       = get_identifier(unit->ctx, name);
-            Block*     scope            = block;
-            Visibility visibility_limit = expr->visibility_limit;
-            while (scope)
-            {
-                for (Expression id = (Expression) 0; id < scope->parsed_expressions.count; id = (Expression)(id + 1))
-                {
-                    auto* expr = &scope->parsed_expressions[id];
-                    if (expr->kind != EXPRESSION_DECLARATION) continue;
-
-                    Token const* decl_name = &expr->declaration.name;
-                    if (decl_name->atom == name->atom)
-                    {
-                        String hint = "Maybe you are referring to this, but you don't have visibility because of imperative order."_s;
-                        if (visibility_limit == NO_VISIBILITY)
-                            hint = "Maybe you are referring to this, but you don't have visibility because it's in an outer scope."_s;
-                        Report(unit->ctx).part(name, Format(temp, "Can't find name '%'.", identifier)).part(decl_name, hint).done();
-                        return YIELD_ERROR;
-                    }
-
-                    String other_identifier = get_identifier(unit->ctx, decl_name);
-                    umm distance = edit_distance(identifier, other_identifier);
-                    if (best_distance > distance && distance < identifier.length / 3)
-                    {
-                        best_distance = distance;
-                        best_alternative = decl_name;
-                    }
-                }
-
-                visibility_limit = scope->parent_scope_visibility_limit;
-                scope            = scope->parent_scope;
-            }
-
-            if (best_alternative)
-            {
-                Report(unit->ctx).part(name, Format(temp, "Can't find name '%'.", identifier))
-                                 .part(best_alternative, Format(temp, "Maybe you meant '%'?", get_identifier(unit->ctx, best_alternative)))
-                                 .done();
-                return YIELD_ERROR;
-            }
-
-            Error("Can't find name '%'.", identifier);
+            String error = Format(temp, "Can't find '%'.", get_identifier(unit->ctx, name));
+            helpful_error_for_missing_name(unit->ctx, error, &expr->declaration.name,
+                                           block, expr->visibility_limit, /* allow_parent_traversal */ true);
+            return YIELD_ERROR;
         }
 
         Inferred_Expression* decl_infer = &decl_scope->inferred_expressions[decl_id];
@@ -644,8 +664,10 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
         if (!find_declaration(&expr->member.name, member_block, ALL_VISIBILITY, &decl_scope, &decl_id, /* allow_parent_traversal */ false))
         {
             String identifier = get_identifier(unit->ctx, &expr->member.name);
-            // @ErrorReporting suggest potential typos
-            Error("Can't find member '%' in %.", identifier, exact_type_description(unit, lhs_type));
+            String error = Format(temp, "Can't find member '%' in %.", identifier, exact_type_description(unit, lhs_type));
+            helpful_error_for_missing_name(unit->ctx, error, &expr->member.name,
+                                           member_block, ALL_VISIBILITY, /* allow_parent_traversal */ false);
+            return YIELD_ERROR;
         }
 
         Inferred_Expression* decl_infer = &decl_scope->inferred_expressions[decl_id];
@@ -1306,6 +1328,21 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
             {
                 if (!copy_constant(block, id, block, expr->declaration.value, value_infer->type))
                     WaitOperand(expr->declaration.value);
+
+                if (value_infer->type == TYPE_SOFT_TYPE)
+                {
+                    Type const* type = get_constant_type(block, expr->declaration.value);
+                    assert(type);
+                    if (is_user_defined_type(*type))
+                    {
+                        User_Type* data = get_user_type_data(unit->ctx, *type);
+                        if (!data->has_alias)
+                        {
+                            data->alias = expr->declaration.name;
+                            data->has_alias = true;
+                        }
+                    }
+                }
             }
             else
             {

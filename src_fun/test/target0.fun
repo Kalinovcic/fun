@@ -31,11 +31,14 @@ debug storage.y;
 
 Point :: unit
 {
+    DIMENSIONS :: 2;
     x: u64;
     y: u64;
 }
 
 p1: Point;
+debug p1.DIMENSOINS;
+
 p1.x = cast(u64, 12);
 p1.y = cast(u64, 34);
 
