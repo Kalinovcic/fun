@@ -373,7 +373,7 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
     {
         bool is_struct = (start->atom == ATOM_STRUCT);
 
-        Block* block = parse_block(stream, BLOCK_IS_UNIT | BLOCK_HAS_STRUCTURE_PLACEMENT);
+        Block* block = parse_block(stream, BLOCK_IS_UNIT | (is_struct ? BLOCK_HAS_STRUCTURE_PLACEMENT : 0));
         if (!block)
             return false;
 
@@ -447,6 +447,10 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
             {
                 flags &= ~EXPRESSION_DECLARATION_IS_ORDERED;
                 flags |=  EXPRESSION_DECLARATION_IS_ALIAS;
+
+                if (maybe_take_atom(stream, ATOM_UNDERSCORE))
+                    return ReportError(stream->ctx, stream->cursor - 1, "Can't have an uninitialized alias declaration."_s);
+
                 if (!parse_expression(stream, builder, &value, InheritFlags(PARSE_ALLOW_BLOCKS | PARSE_ALLOW_INFERRED_TYPE_ALIAS)))
                     return false;
                 if (builder->expressions[value].flags & EXPRESSION_HAS_TO_BE_EXTERNALLY_INFERRED)
@@ -454,6 +458,9 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
             }
             else if (maybe_take_atom(stream, ATOM_EQUAL))
             {
+                if (maybe_take_atom(stream, ATOM_UNDERSCORE))
+                    return ReportError(stream->ctx, stream->cursor - 1, "Can't have an uninitialized variable without a type."_s);
+
                 if (!parse_expression(stream, builder, &value, parse_flags))
                     return false;
             }
@@ -461,9 +468,19 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
             {
                 if (!parse_expression_leaf(stream, builder, &type, parse_flags | PARSE_ALLOW_INFERRED_TYPE_ALIAS))
                     return false;
+
                 if (maybe_take_atom(stream, ATOM_EQUAL))
-                    if (!parse_expression(stream, builder, &value, parse_flags))
-                        return false;
+                {
+                    if (maybe_take_atom(stream, ATOM_UNDERSCORE))
+                    {
+                        flags |= EXPRESSION_DECLARATION_IS_UNINITIALIZED;
+                    }
+                    else
+                    {
+                        if (!parse_expression(stream, builder, &value, parse_flags))
+                            return false;
+                    }
+                }
             }
 
             Parsed_Expression* expr = add_expression(builder, EXPRESSION_DECLARATION, start, stream->cursor - 1, out_expression);

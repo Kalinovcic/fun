@@ -23,7 +23,12 @@ void free_compiler(Compiler* ctx)
 
 extern "C" int main(int argc, char** argv)
 {
-    if (argc != 2 && argc != 3)
+    Dynamic_Array<String> non_flag_args = {};
+    for (umm i = 1; i < argc; i++)
+        if (argv[i][0] != '-')
+            *reserve_item(&non_flag_args) = wrap_string(argv[i]);
+
+    if (non_flag_args.count != 1 && non_flag_args.count != 2)
     {
         fprintf(stderr, "Usage: %s file.fun [argument_list]\n", argv[0]);
         return 1;
@@ -34,10 +39,10 @@ extern "C" int main(int argc, char** argv)
     Defer(free_compiler(ctx));
 
     Block* main;
-    if (argc == 3)
-        main = parse_top_level_from_memory(ctx, "<string>"_s, concatenate(temp, "debug "_s, make_string(argv[2]), ";"_s));
+    if (non_flag_args.count == 2)
+        main = parse_top_level_from_memory(ctx, "<string>"_s, concatenate(temp, "debug "_s, non_flag_args[1], ";"_s));
     else
-        main = parse_top_level_from_file(ctx, make_string(argv[1]));
+        main = parse_top_level_from_file(ctx, non_flag_args[0]);
     if (!main) return 1;
     Unit* unit = materialize_unit(ctx, main);
     if (!unit) return 1;

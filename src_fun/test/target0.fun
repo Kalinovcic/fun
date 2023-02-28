@@ -3,16 +3,8 @@
 // debug a + b;
 
 
-/*Vec :: ()
-{
-    a: f64;
-    b: f64;
-}
-
-unit(Vec)*/
 
 
-/*
 U :: unit
 {
     x: u64 = cast(u64, 420);
@@ -26,23 +18,13 @@ goto(codeof U, &storage);
 
 debug storage.x;
 debug storage.y;
-*/
-
-
-/*Point :: unit($T: type)
-{
-    x: T;
-    y: T;
-}
-
-p: Point(u32);
 
 
 
 adder_coroutine :: unit
 {
-    a: u64;
-    b: u64;
+    a: u64 = _;
+    b: u64 = _;
     result := a + b;
 }
 
@@ -50,7 +32,7 @@ co: adder_coroutine;
 co.a = cast(u64, 123);
 co.b = cast(u64, 123);
 goto(codeof co, &co);
-debug co.result;*/
+debug co.result;
 
 
 /*
@@ -62,12 +44,10 @@ max(cast(u32, 123), cast(u32, 45));
 */
 
 
-/*
-N :: sizeof(Point);
 
 Point :: struct
 {
-    SIZE :: N;
+    SIZE :: sizeof(Point);
     x: u64;
     y: u64;
 }
@@ -87,7 +67,6 @@ debug p1.y;
 debug p2.x;
 debug p2.y;
 debug p1.SIZE;
-*/
 
 
 
@@ -114,7 +93,6 @@ if cast(u64, 1)
     debug 69;
 }
 
-/*
 set_to_69 :: (what: &u64)
 {
     *what = cast(u64, 69);
@@ -145,6 +123,7 @@ else
  => debug 420;
 
 
+
 N :: 10;
 M :: 420e100;
 
@@ -157,6 +136,7 @@ repeat :: ($N: u32, $a: block)
     while n
     {
         a();
+        debug n;
         n = n - cast(u8, 1);
     }
     foo();
@@ -180,7 +160,6 @@ debug var2;
 
 *ptr = *ptr + cast(u32, 1);
 debug var;
-*/
 
 
 /*

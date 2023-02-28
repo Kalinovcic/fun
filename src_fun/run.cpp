@@ -148,10 +148,13 @@ static Memory* run_expression(Unit* unit, byte* storage, Block* block, Expressio
     case EXPRESSION_SIZEOF: Unreachable;
     case EXPRESSION_CODEOF:
     {
-        Type const* type = get_constant_type(block, expr->unary_operand);
-        assert(type);
-        assert(is_user_defined_type(*type));
-        Unit* result = get_user_type_data(unit->ctx, *type)->unit;
+        auto* op_infer = &block->inferred_expressions[expr->unary_operand];
+        Type unit_type;
+        if (is_user_defined_type(op_infer->type))
+            unit_type = op_infer->type;
+        else
+            unit_type = *get_constant_type(block, expr->unary_operand);
+        Unit* result = get_user_type_data(unit->ctx, unit_type)->unit;
         assert(result);
         address->as_address = (byte*) result;
     } break;

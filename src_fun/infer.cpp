@@ -8,6 +8,24 @@
 EnterApplicationNamespace
 
 
+#define STRESS_TEST 1
+
+#if STRESS_TEST
+static Random rng = {};
+GlobalBlock
+{
+    u64 seed64 = get_command_line_integer("seed"_s);
+    if (!seed64)
+    {
+        seed(&rng);
+        seed64 = next_u64(&rng);
+    }
+
+    fprintf(stderr, "using random seed %llu\n", (unsigned long long) seed64);
+    seed(&rng, 6010837357958729528ull, 1);
+};
+#endif
+
 
 static Block* materialize_block(Unit* unit, Block* materialize_from,
                                 Block* parent_scope, Visibility parent_scope_visibility_limit)
@@ -349,7 +367,15 @@ static void set_inferred_type(Block* block, Expression id, Type type)
     auto* infer = &block->inferred_expressions[id];
 
     assert(type != INVALID_TYPE);
-    assert(infer->type == INVALID_TYPE || infer->type == type);
+    if (infer->type == INVALID_TYPE)
+    {
+        assert(infer->size   == INVALID_STORAGE_SIZE);
+        assert(infer->offset == INVALID_STORAGE_OFFSET);
+    }
+    else
+    {
+        assert(infer->type == type);
+    }
 
     if (type == TYPE_SOFT_ZERO)
         assert(expr->kind == EXPRESSION_ZERO);
@@ -359,9 +385,6 @@ static void set_inferred_type(Block* block, Expression id, Type type)
         infer->flags |= INFERRED_EXPRESSION_DOES_NOT_ALLOCATE_STORAGE;
     }
     infer->type = type;
-
-    assert(infer->size   == INVALID_STORAGE_SIZE);
-    assert(infer->offset == INVALID_STORAGE_OFFSET);
 }
 
 
@@ -656,6 +679,7 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
                                                block, expr->visibility_limit, /* allow_parent_traversal */ true);
                 return YIELD_ERROR;
             }
+            assert(!(block->flags & BLOCK_NAME_FIXUP_COMPLETED));
             set(&block->resolved_names, &id, &resolved);
         }
 
@@ -696,6 +720,7 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
                                                member_block, ALL_VISIBILITY, /* allow_parent_traversal */ false);
                 return YIELD_ERROR;
             }
+            assert(!(block->flags & BLOCK_NAME_FIXUP_COMPLETED));
             set(&block->resolved_names, &id, &resolved);
         }
 
@@ -854,13 +879,16 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
         Inferred_Expression* op_infer = &block->inferred_expressions[expr->unary_operand];
         if (op_infer->type == INVALID_TYPE) WaitOperand(expr->unary_operand);
 
-        if (op_infer->type != TYPE_SOFT_TYPE)
-            Error("Expected a unit as operand to 'codeof', but got %.", vague_type_description(unit, op_infer->type));
+        if (!is_user_defined_type(op_infer->type))
+        {
+            if (op_infer->type != TYPE_SOFT_TYPE)
+                Error("Expected a unit as operand to 'codeof', but got %.", vague_type_description(unit, op_infer->type));
 
-        Type const* type = get_constant_type(block, expr->unary_operand);
-        if (!type) WaitOperand(expr->unary_operand);
-        if (!is_user_defined_type(*type))
-            Error("Expected a unit as operand to 'codeof', but got %.", exact_type_description(unit, *type));
+            Type const* type = get_constant_type(block, expr->unary_operand);
+            if (!type) WaitOperand(expr->unary_operand);
+            if (!is_user_defined_type(*type))
+                Error("Expected a unit as operand to 'codeof', but got %.", exact_type_description(unit, *type));
+        }
 
         InferenceComplete();
     } break;
@@ -1322,7 +1350,7 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
 
     case EXPRESSION_DECLARATION:
     {
-        if (expr->flags & EXPRESSION_DECLARATION_IS_PARAMETER)
+        if (expr->flags & (EXPRESSION_DECLARATION_IS_PARAMETER | EXPRESSION_DECLARATION_IS_UNINITIALIZED))
             infer->flags |= INFERRED_EXPRESSION_IS_NOT_EVALUATED_AT_RUNTIME;
 
         Type type = INVALID_TYPE;
@@ -1437,12 +1465,8 @@ static Yield_Result infer_block(Pipeline_Task* task)
     Unit*  unit  = task->unit;
     Block* block = task->block;
 
-#define STRESS_TEST 1
 
 #if STRESS_TEST
-    static Random rng = {};
-    OnlyOnce seed(&rng);
-
     Array<Expression> visit_order = allocate_array<Expression>(NULL, block->parsed_expressions.count);
     for (umm i = 0; i < visit_order.count; i++)
         visit_order[i] = (Expression) i;
@@ -1521,8 +1545,6 @@ static Yield_Result infer_block(Pipeline_Task* task)
             if (infer->flags & INFERRED_EXPRESSION_DOES_NOT_ALLOCATE_STORAGE)
                 continue;
 
-            assert(!(infer->flags & INFERRED_EXPRESSION_IS_NOT_EVALUATED_AT_RUNTIME));
-
             u64 alignment = get_type_alignment(unit, infer->type);
             if (unit->storage_alignment < alignment)
                 unit->storage_alignment = alignment;
@@ -1551,6 +1573,16 @@ static Yield_Result infer_block(Pipeline_Task* task)
 
     if ((block->flags & BLOCK_PLACEMENT_COMPLETED) && !(block->flags & BLOCK_NAME_FIXUP_COMPLETED))
     {
+        // check if we are ready to do name fixup
+        For (block->resolved_names)
+        {
+            auto* infer = &block->inferred_expressions[it->key];
+            if (is_soft_type(infer->type)) continue;
+            if (!(it->value.scope->flags & BLOCK_PLACEMENT_COMPLETED))
+                goto skip_name_fixup;
+        }
+
+        // do name fixup
         For (block->resolved_names)
         {
             auto* expr  = &block->parsed_expressions  [it->key];
@@ -1564,22 +1596,20 @@ static Yield_Result infer_block(Pipeline_Task* task)
             if (is_soft_type(infer->type))
                 continue;
 
-            if (infer->offset != INVALID_STORAGE_OFFSET)
-                continue;
-            if (!(resolved.scope->flags & BLOCK_PLACEMENT_COMPLETED))
-            {
-                waiting = true;
-                continue;
-            }
+            assert(infer->offset == INVALID_STORAGE_OFFSET);
+            assert(resolved.scope->flags & BLOCK_PLACEMENT_COMPLETED);
 
             assert(infer->size != INVALID_STORAGE_SIZE);
             assert(infer->size == decl_infer->size);
             assert(decl_infer->offset != INVALID_STORAGE_OFFSET);
             infer->offset = decl_infer->offset;
-            made_progress = true;
         }
 
         block->flags |= BLOCK_NAME_FIXUP_COMPLETED;
+        made_progress = true;
+
+        if (false) skip_name_fixup:
+            waiting = true;
     }
 
     if (waiting)
@@ -1613,6 +1643,10 @@ bool pump_pipeline(Compiler* ctx)
 {
     while (ctx->pipeline.count)
     {
+#if STRESS_TEST
+        shuffle_array(&rng, ctx->pipeline);
+#endif
+
         bool made_progress = false;
         for (umm it_index = 0; it_index < ctx->pipeline.count; it_index++)
         {
