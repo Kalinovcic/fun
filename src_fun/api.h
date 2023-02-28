@@ -426,6 +426,9 @@ struct Soft_Block
 {
     struct Block* materialized_parent;
     struct Block* parsed_child;
+
+    bool          has_alias;
+    Token         alias;
 };
 
 union Constant

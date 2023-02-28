@@ -37,8 +37,6 @@ Point :: unit
 }
 
 p1: Point;
-debug p1.DIMENSOINS;
-
 p1.x = cast(u64, 12);
 p1.y = cast(u64, 34);
 
@@ -52,6 +50,11 @@ debug p1.x;
 debug p1.y;
 debug p2.x;
 debug p2.y;
+
+
+foo :: (x: u64) {}
+thing :: foo;
+thing();
 
 
 

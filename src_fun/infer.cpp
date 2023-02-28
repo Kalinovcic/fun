@@ -104,8 +104,7 @@ String vague_type_description(Unit* unit, Type type, bool point_out_soft_types)
     }
 
     assert(is_user_defined_type(type));
-    // @ErrorReporting more detail, what type of custom type
-    return "a custom type value"_s;
+    return "a unit"_s;
 }
 
 String vague_type_description_in_compile_time_context(Unit* unit, Type type)
@@ -152,11 +151,12 @@ String exact_type_description(Unit* unit, Type type)
     }
 
     assert(is_user_defined_type(type));
-    // @ErrorReporting more detail, what type of custom type
     User_Type* data = get_user_type_data(unit->ctx, type);
     if (data->has_alias)
         return get_identifier(unit->ctx, &data->alias);
-    return "<user defined type>"_s;
+
+    // @ErrorReporting more detail, what unit?
+    return "unit"_s;
 }
 
 
@@ -368,7 +368,7 @@ void set_constant(Block* block, Expression expr, Type type_assertion, Constant* 
 
 
 
-static bool copy_constant(Block* to_block, Expression to_id, Block* from_block, Expression from_id, Type type_assertion)
+static bool copy_constant(Compiler* ctx, Block* to_block, Expression to_id, Block* from_block, Expression from_id, Type type_assertion, Token const* alias = NULL)
 {
     Constant* constant_ptr = get_constant(from_block, from_id, type_assertion);
     if (!constant_ptr) return false;
@@ -376,10 +376,34 @@ static bool copy_constant(Block* to_block, Expression to_id, Block* from_block, 
 
     switch (type_assertion)
     {
-    case TYPE_SOFT_NUMBER: constant.number = fract_clone(&constant.number); break;
-    case TYPE_SOFT_BOOL:  break; // nothing to do
-    case TYPE_SOFT_TYPE:  break; // nothing to do
-    case TYPE_SOFT_BLOCK: break; // nothing to do
+
+    case TYPE_SOFT_NUMBER:
+        constant.number = fract_clone(&constant.number);
+        break;
+
+    case TYPE_SOFT_BOOL:
+        break;
+
+    case TYPE_SOFT_TYPE:
+        if (alias && is_user_defined_type(constant.type))
+        {
+            User_Type* data = get_user_type_data(ctx, constant.type);
+            if (!data->has_alias)
+            {
+                data->has_alias = true;
+                data->alias = *alias;
+            }
+        }
+        break;
+
+    case TYPE_SOFT_BLOCK:
+        if (alias && !constant.block.has_alias)
+        {
+            constant.block.has_alias = true;
+            constant.block.alias = *alias;
+        }
+        break;
+
     IllegalDefaultCase;
     }
 
@@ -631,7 +655,7 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
 
         if (is_soft_type(decl_infer->type))
         {
-            if (!copy_constant(block, id, decl_scope, decl_id, decl_infer->type))
+            if (!copy_constant(unit->ctx, block, id, decl_scope, decl_id, decl_infer->type))
                 Wait(WAITING_ON_DECLARATION, decl_id, decl_scope);
         }
         else
@@ -676,7 +700,7 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
 
         if (is_soft_type(decl_infer->type))
         {
-            if (!copy_constant(block, id, decl_scope, decl_id, decl_infer->type))
+            if (!copy_constant(unit->ctx, block, id, decl_scope, decl_id, decl_infer->type))
                 Wait(WAITING_ON_DECLARATION, decl_id, decl_scope);
         }
         else
@@ -1055,6 +1079,10 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
                 Error("Internal error: Expected a block as the baked block parameter. But this should always be the case? It's %.", exact_type_description(unit, block_infer->type));
         }
 
+        String callee_name = "Callee"_s;
+        if (soft_callee->has_alias)
+            callee_name = get_identifier(unit->ctx, &soft_callee->alias);
+
         // First stage: materializing the callee
         if (!infer->called_block)
         {
@@ -1065,8 +1093,8 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
 
             bool expects_block = lhs_block->flags & BLOCK_HAS_BLOCK_PARAMETER;
             bool have_block    = expr->call.block != NO_EXPRESSION;
-            if (expects_block && !have_block) Error("Callee expects a block parameter.");
-            if (!expects_block && have_block) Error("Callee doesn't expect a block parameter.");
+            if (expects_block && !have_block) Error("% expects a block parameter.",        callee_name);
+            if (!expects_block && have_block) Error("% doesn't expect a block parameter.", callee_name);
 
             umm regular_parameter_count = 0;
             For (lhs_block->imperative_order)
@@ -1075,8 +1103,8 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
             if (expects_block)
                 regular_parameter_count--;
             if (regular_parameter_count != args->count)
-                Error("Callee expects % %, but you provided %.",
-                    regular_parameter_count, plural(regular_parameter_count, "argument"_s, "arguments"_s),
+                Error("% expects % %, but you provided %.",
+                    callee_name, regular_parameter_count, plural(regular_parameter_count, "argument"_s, "arguments"_s),
                     args->count);
 
             // Now materialize the callee
@@ -1326,23 +1354,8 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
 
             if (is_soft_type(value_infer->type))
             {
-                if (!copy_constant(block, id, block, expr->declaration.value, value_infer->type))
+                if (!copy_constant(unit->ctx, block, id, block, expr->declaration.value, value_infer->type, &expr->declaration.name))
                     WaitOperand(expr->declaration.value);
-
-                if (value_infer->type == TYPE_SOFT_TYPE)
-                {
-                    Type const* type = get_constant_type(block, expr->declaration.value);
-                    assert(type);
-                    if (is_user_defined_type(*type))
-                    {
-                        User_Type* data = get_user_type_data(unit->ctx, *type);
-                        if (!data->has_alias)
-                        {
-                            data->alias = expr->declaration.name;
-                            data->has_alias = true;
-                        }
-                    }
-                }
             }
             else
             {
