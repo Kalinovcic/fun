@@ -12,14 +12,16 @@
 unit(Vec)*/
 
 
-
 U :: unit
 {
-    debug 42069;
+    x: u64 = cast(u64, 420);
+    y: u64 = cast(u64, 69);
+    z := x * cast(u64, 100) + y;
+    debug z;
 }
-U();
+// U();
 
-// goto(&U, debug_alloc sizeof U);
+goto(codeof U, debug_alloc U);
 
 
 /*

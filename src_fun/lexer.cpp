@@ -66,6 +66,9 @@ static void lex_init(Compiler* ctx)
     AddKeyword(ATOM_YIELD,        "yield"_s);
     AddKeyword(ATOM_DEFER,        "defer"_s);
     AddKeyword(ATOM_CAST,         "cast"_s);
+    AddKeyword(ATOM_SIZEOF,       "sizeof"_s);
+    AddKeyword(ATOM_ALIGNOF,      "alignof"_s);
+    AddKeyword(ATOM_CODEOF,       "codeof"_s);
 #undef AddKeyword
 }
 

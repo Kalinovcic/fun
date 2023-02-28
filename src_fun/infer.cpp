@@ -32,6 +32,9 @@ static Block* materialize_block(Unit* unit, Block* materialize_from,
     block->parent_scope                  = parent_scope;
     block->parent_scope_visibility_limit = parent_scope_visibility_limit;
 
+    assert(unit->blocks_in_flight != 0 || unit->materialized_block_count == 0);
+    unit->blocks_in_flight++;
+
     unit->materialized_block_count++;
     unit->most_recent_materialized_block = block;
 
@@ -42,6 +45,31 @@ static Block* materialize_block(Unit* unit, Block* materialize_from,
     return block;
 }
 
+
+
+User_Type* get_user_type_data(Compiler* ctx, Type type)
+{
+    assert(type >= TYPE_FIRST_USER_TYPE);
+    return &ctx->user_types[type - TYPE_FIRST_USER_TYPE];
+}
+
+static Type create_user_type(Compiler* ctx, Block* created_by_block, Expression created_by_expression, Unit* unit)
+{
+    Type type = (Type)(TYPE_FIRST_USER_TYPE + ctx->user_types.count);
+    User_Type* data = reserve_item(&ctx->user_types);
+    data->created_by_block      = created_by_block;
+    data->created_by_expression = created_by_expression;
+    data->unit                  = unit;
+    return type;
+}
+
+static bool is_user_type_sizeable(Compiler* ctx, Type type)
+{
+    assert(is_user_defined_type(type));
+    User_Type* data = get_user_type_data(ctx, type);
+    assert(data->unit);
+    return data->unit->completed_inference;
+}
 
 
 String vague_type_description(Unit* unit, Type type, bool point_out_soft_types)
@@ -73,7 +101,6 @@ String vague_type_description(Unit* unit, Type type, bool point_out_soft_types)
     case TYPE_SOFT_TYPE:   return "a type value"_s;
     case TYPE_SOFT_ZERO:   return "a zero"_s;
     case TYPE_SOFT_BLOCK:  return "a block"_s;
-    case TYPE_SOFT_UNIT:   return "a unit"_s;
     }
 
     assert(is_user_defined_type(type));
@@ -122,10 +149,10 @@ String exact_type_description(Unit* unit, Type type)
     case TYPE_SOFT_TYPE:   return "compile-time type"_s;
     case TYPE_SOFT_ZERO:   return "zero"_s;
     case TYPE_SOFT_BLOCK:  return "block"_s;
-    case TYPE_SOFT_UNIT:   return "unit"_s;
     }
 
     assert(is_user_defined_type(type));
+    // @ErrorReporting more detail, what type of custom type
     return "<user defined type>"_s;
 }
 
@@ -160,13 +187,19 @@ bool find_declaration(Unit* unit, Token const* name,
 
 
 
+
 u64 get_type_size(Unit* unit, Type type)
 {
     if (get_indirection(type))
         return unit->pointer_size;
 
     if (is_user_defined_type(type))
-        NotImplemented;
+    {
+        User_Type* data = get_user_type_data(unit->ctx, type);
+        assert(data->unit);
+        assert(data->unit->completed_inference);
+        return data->unit->next_storage_offset;
+    }
 
     switch (type)
     {
@@ -274,7 +307,6 @@ static bool copy_constant(Block* to_block, Expression to_id, Block* from_block, 
     case TYPE_SOFT_BOOL:  break; // nothing to do
     case TYPE_SOFT_TYPE:  break; // nothing to do
     case TYPE_SOFT_BLOCK: break; // nothing to do
-    case TYPE_SOFT_UNIT:  break; // nothing to do
     IllegalDefaultCase;
     }
 
@@ -501,8 +533,9 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
     case EXPRESSION_UNIT:
     {
         Unit* new_unit = materialize_unit(unit->ctx, expr->parsed_block);
-        set_constant_unit(block, id, new_unit);
-        Infer(TYPE_SOFT_UNIT);
+        Type type = create_user_type(unit->ctx, block, id, new_unit);
+        set_constant_type(block, id, type);
+        Infer(TYPE_SOFT_TYPE);
     } break;
 
     case EXPRESSION_NAME:
@@ -667,6 +700,42 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
         }
     } break;
 
+    case EXPRESSION_SIZEOF:
+    {
+        Inferred_Expression* op_infer = &block->inferred_expressions[expr->unary_operand];
+        if (op_infer->type == INVALID_TYPE) WaitOperand(expr->unary_operand);
+
+        if (!is_type_type(op_infer->type))
+            Error("Expected a type as operand to 'sizeof', but got %.", vague_type_description(unit, op_infer->type));
+        if (op_infer->type != TYPE_SOFT_TYPE)
+            Error("The operand to 'sizeof' is a type not known at compile-time.");
+
+        Type const* type = get_constant_type(block, expr->unary_operand);
+        if (!type) WaitOperand(expr->unary_operand);
+
+        if (is_user_defined_type(*type) && !is_user_type_sizeable(unit->ctx, *type))
+            WaitOperand(expr->unary_operand);
+        set_constant_number(block, id, fract_make_u64(get_type_size(unit, *type)));
+
+        Infer(TYPE_SOFT_NUMBER);
+    } break;
+
+    case EXPRESSION_CODEOF:
+    {
+        Inferred_Expression* op_infer = &block->inferred_expressions[expr->unary_operand];
+        if (op_infer->type == INVALID_TYPE) WaitOperand(expr->unary_operand);
+
+        if (op_infer->type != TYPE_SOFT_TYPE)
+            Error("Expected a unit as operand to 'codeof', but got %.", vague_type_description(unit, op_infer->type));
+
+        Type const* type = get_constant_type(block, expr->unary_operand);
+        if (!type) WaitOperand(expr->unary_operand);
+        if (!is_user_defined_type(*type))
+            Error("Expected a unit as operand to 'codeof', but got %.", exact_type_description(unit, *type));
+
+        Infer(set_indirection(TYPE_VOID, 1));
+    } break;
+
     case EXPRESSION_DEBUG:
     {
         Inferred_Expression* op_infer = &block->inferred_expressions[expr->unary_operand];
@@ -811,6 +880,19 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
         }
 
         Infer(cast_type);
+    } break;
+
+    case EXPRESSION_GOTO_UNIT:
+    {
+        auto* lhs_infer = &block->inferred_expressions[expr->binary.lhs];
+        auto* rhs_infer = &block->inferred_expressions[expr->binary.rhs];
+        if (lhs_infer->type == INVALID_TYPE) WaitOperand(expr->binary.lhs);
+        if (rhs_infer->type == INVALID_TYPE) WaitOperand(expr->binary.rhs);
+        if (!is_pointer_type(lhs_infer->type))
+            Error("Expected a pointer type as the first operand to 'goto', but got %.", vague_type_description(unit, lhs_infer->type));
+        if (!is_pointer_type(rhs_infer->type))
+            Error("Expected a pointer type as the second operand to 'goto', but got %.", vague_type_description(unit, rhs_infer->type));
+        Infer(TYPE_VOID);
     } break;
 
     case EXPRESSION_BRANCH:
@@ -1275,6 +1357,42 @@ Unit* materialize_unit(Compiler* ctx, Block* initiator)
 }
 
 
+static void allocate_remaining_storage(Unit* unit, Block* block)
+{
+    assert(block->materialized_by_unit == unit);
+    if (block->flags & BLOCK_RUNTIME_ALLOCATED)
+        return;
+
+    for (umm i = 0; i < block->inferred_expressions.count; i++)
+    {
+        auto* expr  = &block->parsed_expressions[i];
+        auto* infer = &block->inferred_expressions[i];
+        if (infer->called_block)
+            allocate_remaining_storage(unit, infer->called_block);
+
+        if (infer->flags & INFERRED_EXPRESSION_IS_NOT_EVALUATED_AT_RUNTIME) continue;
+        if (infer->offset != INVALID_STORAGE_OFFSET) continue;
+        assert(infer->type != INVALID_TYPE);
+
+        if (infer->flags & INFERRED_EXPRESSION_DOES_NOT_ALLOCATE_STORAGE)
+        {
+            infer->size = get_type_size(unit, infer->type);
+            continue;
+        }
+        allocate_unit_storage(unit, infer->type, &infer->size, &infer->offset);
+    }
+
+    block->flags |= BLOCK_RUNTIME_ALLOCATED;
+}
+
+static void complete_unit_inference(Unit* unit)
+{
+    assert(unit->blocks_in_flight == 0);
+    allocate_remaining_storage(unit, unit->entry_block);
+    unit->completed_inference = true;
+}
+
+
 bool pump_pipeline(Compiler* ctx)
 {
     while (true)
@@ -1289,7 +1407,10 @@ bool pump_pipeline(Compiler* ctx)
             Yield_Result result = infer_block(&ctx->pipeline[it_index]);
             switch (result)
             {
-            case YIELD_COMPLETED:       ctx->pipeline[it_index].block = NULL;  // fallthrough
+            case YIELD_COMPLETED:       ctx->pipeline[it_index].block = NULL;
+                                        if (--ctx->pipeline[it_index].unit->blocks_in_flight == 0)
+                                            complete_unit_inference(ctx->pipeline[it_index].unit);
+                                        // fallthrough
             case YIELD_MADE_PROGRESS:   made_progress = true;                  // fallthrough
             case YIELD_NO_PROGRESS:     break;
             case YIELD_ERROR:           return false;

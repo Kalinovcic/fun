@@ -105,6 +105,14 @@ static void quick_asserts(Fraction const* f)
     assert(!int_is_zero(&f->den));
 }
 
+Fraction fract_make_u64(u64 integer)
+{
+    Fraction result = {};
+    int_setu64(&result.num, integer);
+    int_setu64(&result.den, 1);
+    return result;
+}
+
 Fraction fract_make(Integer const* num, Integer const* den)
 {
     assert(!int_is_zero(den));

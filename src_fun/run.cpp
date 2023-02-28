@@ -139,6 +139,17 @@ static Memory* run_expression(Unit* unit, byte* storage, Block* block, Expressio
         address = (Memory*) op->as_address;
     } break;
 
+    case EXPRESSION_SIZEOF: Unreachable;
+    case EXPRESSION_CODEOF:
+    {
+        Type const* type = get_constant_type(block, expr->unary_operand);
+        assert(type);
+        assert(is_user_defined_type(*type));
+        Unit* result = get_user_type_data(unit->ctx, *type)->unit;
+        assert(result);
+        address->as_address = (byte*) result;
+    } break;
+
     case EXPRESSION_DEBUG:
     {
         auto* op_infer = &block->inferred_expressions[expr->unary_operand];
@@ -257,6 +268,15 @@ static Memory* run_expression(Unit* unit, byte* storage, Block* block, Expressio
         }
     } break;
 
+    case EXPRESSION_GOTO_UNIT:
+    {
+        assert(block->inferred_expressions[expr->binary.lhs].size == sizeof(void*));
+        assert(block->inferred_expressions[expr->binary.rhs].size == sizeof(void*));
+        Memory* rhs = run_expression(unit, storage, block, expr->binary.rhs);
+        Memory* lhs = run_expression(unit, storage, block, expr->binary.lhs);
+        run_unit((Unit*) lhs->as_address, rhs->as_address);
+    } break;
+
     case EXPRESSION_BRANCH:
     {
         if (expr->branch.condition == NO_EXPRESSION)
@@ -353,46 +373,16 @@ static void run_block(Unit* unit, byte* storage, Block* block)
 }
 
 
-static void allocate_block_storage(Unit* unit, Block* block)
+void run_unit(Unit* unit, byte* storage)
 {
-    assert(block->materialized_by_unit == unit);
-    if (block->flags & BLOCK_RUNTIME_ALLOCATED)
-        return;
-
-    for (umm i = 0; i < block->inferred_expressions.count; i++)
-    {
-        auto* expr  = &block->parsed_expressions[i];
-        auto* infer = &block->inferred_expressions[i];
-        if (infer->called_block)
-            allocate_block_storage(unit, infer->called_block);
-
-        if (infer->flags & INFERRED_EXPRESSION_IS_NOT_EVALUATED_AT_RUNTIME) continue;
-        if (infer->offset != INVALID_STORAGE_OFFSET) continue;
-        assert(infer->type != INVALID_TYPE);
-
-        if (infer->flags & INFERRED_EXPRESSION_DOES_NOT_ALLOCATE_STORAGE)
-        {
-            infer->size = get_type_size(unit, infer->type);
-            continue;
-        }
-        allocate_unit_storage(unit, infer->type, &infer->size, &infer->offset);
-    }
-
-    block->flags |= BLOCK_RUNTIME_ALLOCATED;
-}
-
-void allocate_unit_storage(Unit* unit)
-{
-    allocate_block_storage(unit, unit->entry_block);
+    run_block(unit, storage, unit->entry_block);
 }
 
 void run_unit(Unit* unit)
 {
-    allocate_unit_storage(unit);
     byte* storage = alloc<byte>(NULL, unit->next_storage_offset);
     Defer(free(storage));
-
-    run_block(unit, storage, unit->entry_block);
+    run_unit(unit, storage);
 
 #if TRACE
     for (int i = 0; i < 20; i++)
