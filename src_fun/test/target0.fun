@@ -29,6 +29,30 @@ debug storage.y;
 */
 
 
+/*Point :: unit($T: type)
+{
+    x: T;
+    y: T;
+}
+
+p: Point(u32);
+
+
+
+adder_coroutine :: unit
+{
+    a: u64;
+    b: u64;
+    result := a + b;
+}
+
+co: adder_coroutine;
+co.a = cast(u64, 123);
+co.b = cast(u64, 123);
+goto(codeof co, &co);
+debug co.result;*/
+
+
 Point :: unit
 {
     DIMENSIONS :: 2;
@@ -52,9 +76,6 @@ debug p2.x;
 debug p2.y;
 
 
-foo :: (x: u64) {}
-thing :: foo;
-thing();
 
 
 

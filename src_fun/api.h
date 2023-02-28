@@ -440,6 +440,13 @@ union Constant
 };
 
 
+struct Resolved_Name
+{
+    Block*     scope;
+    Expression declaration;
+};
+
+
 enum Wait_Reason: u32
 {
     WAITING_ON_OPERAND,              // most boring wait reason, skipped in chain reporting because it's obvious
@@ -459,12 +466,13 @@ struct Wait_Info
 
 enum: flags32
 {
-    BLOCK_IS_MATERIALIZED     = 0x0001,
-    BLOCK_IS_PARAMETER_BLOCK  = 0x0002,
-    BLOCK_HAS_BLOCK_PARAMETER = 0x0004,
-    BLOCK_RUNTIME_ALLOCATED   = 0x0008,
-    BLOCK_IS_TOP_LEVEL        = 0x0010,
-    BLOCK_IS_UNIT             = 0x0020,
+    BLOCK_IS_MATERIALIZED         = 0x0001,
+    BLOCK_IS_PARAMETER_BLOCK      = 0x0002,
+    BLOCK_HAS_BLOCK_PARAMETER     = 0x0004,
+    BLOCK_PLACEMENT_COMPLETED     = 0x0008,
+    BLOCK_IS_TOP_LEVEL            = 0x0010,
+    BLOCK_IS_UNIT                 = 0x0020,
+    BLOCK_HAS_STRUCTURE_PLACEMENT = 0x0040,
 };
 
 struct Block
@@ -483,7 +491,8 @@ struct Block
     Array<struct Inferred_Expression> inferred_expressions;  // parallel to parsed_expressions
     Dynamic_Array<Constant> constants;
 
-    Table(Expression, Wait_Info, hash_u32) waiting_expressions;
+    Table(Expression, Resolved_Name, hash_u32) resolved_names;
+    Table(Expression, Wait_Info,     hash_u32) waiting_expressions;
 
     Block*     parent_scope;
     Visibility parent_scope_visibility_limit;
@@ -524,8 +533,16 @@ struct Unit
 ////////////////////////////////////////////////////////////////////////////////
 
 
+enum Pipeline_Task_Kind
+{
+    INVALID_PIPELINE_TASK,
+    PIPELINE_TASK_INFER_BLOCK,
+    PIPELINE_TASK_COMPLETE_UNIT,
+};
+
 struct Pipeline_Task
 {
+    Pipeline_Task_Kind kind;
     Unit*  unit;
     Block* block;
 };

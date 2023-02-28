@@ -369,9 +369,11 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
         expr->flags |= EXPRESSION_BLOCK_IS_IMPORTED;
         expr->parsed_block = imported_block;
     }
-    else if (maybe_take_atom(stream, ATOM_UNIT))
+    else if (maybe_take_atom(stream, ATOM_UNIT) || maybe_take_atom(stream, ATOM_STRUCT))
     {
-        Block* block = parse_block(stream, BLOCK_IS_UNIT);
+        bool is_struct = (start->atom == ATOM_STRUCT);
+
+        Block* block = parse_block(stream, BLOCK_IS_UNIT | BLOCK_HAS_STRUCTURE_PLACEMENT);
         if (!block)
             return false;
 

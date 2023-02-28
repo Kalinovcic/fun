@@ -368,7 +368,7 @@ static Memory* run_expression(Unit* unit, byte* storage, Block* block, Expressio
 static void run_block(Unit* unit, byte* storage, Block* block)
 {
     assert(block->flags & BLOCK_IS_MATERIALIZED);
-    assert(block->flags & BLOCK_RUNTIME_ALLOCATED);
+    assert(block->flags & BLOCK_PLACEMENT_COMPLETED);
     // report_error(unit->ctx, &block->from, Format(temp, "entered block: %", block));
     For (block->imperative_order)
         if (!(block->inferred_expressions[*it].flags & INFERRED_EXPRESSION_IS_NOT_EVALUATED_AT_RUNTIME))

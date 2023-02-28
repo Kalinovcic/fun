@@ -39,6 +39,7 @@ static Block* materialize_block(Unit* unit, Block* materialize_from,
     unit->most_recent_materialized_block = block;
 
     Pipeline_Task task = {};
+    task.kind  = PIPELINE_TASK_INFER_BLOCK;
     task.unit  = unit;
     task.block = block;
     add_item(&unit->ctx->pipeline, &task);
@@ -476,11 +477,12 @@ static void set_inferred_type(Block* block, Expression id, Type type)
     {
         infer->flags |= INFERRED_EXPRESSION_IS_NOT_EVALUATED_AT_RUNTIME;
         infer->flags |= INFERRED_EXPRESSION_DOES_NOT_ALLOCATE_STORAGE;
-        assert(infer->size   == INVALID_STORAGE_SIZE);
-        assert(infer->offset == INVALID_STORAGE_OFFSET);
     }
     infer->type = type;
     remove(&block->waiting_expressions, &id);
+
+    assert(infer->size   == INVALID_STORAGE_SIZE);
+    assert(infer->offset == INVALID_STORAGE_OFFSET);
 }
 
 static bool pattern_matching_inference(Unit* unit, Block* block, Expression id, Type type,
@@ -639,32 +641,31 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
     {
         Token const* name = &expr->name.token;
 
-        Block*     decl_scope;
-        Expression decl_id;
-        if (!find_declaration(name, block, expr->visibility_limit, &decl_scope, &decl_id))
+        Resolved_Name resolved = get(&block->resolved_names, &id);
+        if (!resolved.scope)
         {
-            String error = Format(temp, "Can't find '%'.", get_identifier(unit->ctx, name));
-            helpful_error_for_missing_name(unit->ctx, error, &expr->declaration.name,
-                                           block, expr->visibility_limit, /* allow_parent_traversal */ true);
-            return YIELD_ERROR;
+            if (!find_declaration(name, block, expr->visibility_limit, &resolved.scope, &resolved.declaration))
+            {
+                String error = Format(temp, "Can't find '%'.", get_identifier(unit->ctx, name));
+                helpful_error_for_missing_name(unit->ctx, error, &expr->declaration.name,
+                                               block, expr->visibility_limit, /* allow_parent_traversal */ true);
+                return YIELD_ERROR;
+            }
+            set(&block->resolved_names, &id, &resolved);
         }
 
-        Inferred_Expression* decl_infer = &decl_scope->inferred_expressions[decl_id];
+        Inferred_Expression* decl_infer = &resolved.scope->inferred_expressions[resolved.declaration];
         if (decl_infer->type == INVALID_TYPE)
-            Wait(WAITING_ON_DECLARATION, decl_id, decl_scope);
+            Wait(WAITING_ON_DECLARATION, resolved.declaration, resolved.scope);
 
         if (is_soft_type(decl_infer->type))
         {
-            if (!copy_constant(unit->ctx, block, id, decl_scope, decl_id, decl_infer->type))
-                Wait(WAITING_ON_DECLARATION, decl_id, decl_scope);
+            if (!copy_constant(unit->ctx, block, id, resolved.scope, resolved.declaration, decl_infer->type))
+                Wait(WAITING_ON_DECLARATION, resolved.declaration, resolved.scope);
         }
         else
         {
-            assert(decl_infer->size   != INVALID_STORAGE_SIZE);
-            assert(decl_infer->offset != INVALID_STORAGE_OFFSET);
             infer->flags |= INFERRED_EXPRESSION_DOES_NOT_ALLOCATE_STORAGE;
-            infer->size   = decl_infer->size;
-            infer->offset = decl_infer->offset;
         }
 
         Infer(decl_infer->type);
@@ -683,33 +684,32 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
         Block* member_block = data->unit->entry_block;
         assert(member_block);
 
-        Block* decl_scope;
-        Expression decl_id;
-        if (!find_declaration(&expr->member.name, member_block, ALL_VISIBILITY, &decl_scope, &decl_id, /* allow_parent_traversal */ false))
+        Resolved_Name resolved = get(&block->resolved_names, &id);
+        if (!resolved.scope)
         {
-            String identifier = get_identifier(unit->ctx, &expr->member.name);
-            String error = Format(temp, "Can't find member '%' in %.", identifier, exact_type_description(unit, lhs_type));
-            helpful_error_for_missing_name(unit->ctx, error, &expr->member.name,
-                                           member_block, ALL_VISIBILITY, /* allow_parent_traversal */ false);
-            return YIELD_ERROR;
+            if (!find_declaration(&expr->member.name, member_block, ALL_VISIBILITY, &resolved.scope, &resolved.declaration, /* allow_parent_traversal */ false))
+            {
+                String identifier = get_identifier(unit->ctx, &expr->member.name);
+                String error = Format(temp, "Can't find member '%' in %.", identifier, exact_type_description(unit, lhs_type));
+                helpful_error_for_missing_name(unit->ctx, error, &expr->member.name,
+                                               member_block, ALL_VISIBILITY, /* allow_parent_traversal */ false);
+                return YIELD_ERROR;
+            }
+            set(&block->resolved_names, &id, &resolved);
         }
 
-        Inferred_Expression* decl_infer = &decl_scope->inferred_expressions[decl_id];
+        Inferred_Expression* decl_infer = &resolved.scope->inferred_expressions[resolved.declaration];
         if (decl_infer->type == INVALID_TYPE)
-            Wait(WAITING_ON_DECLARATION, decl_id, decl_scope);
+            Wait(WAITING_ON_DECLARATION, resolved.declaration, resolved.scope);
 
         if (is_soft_type(decl_infer->type))
         {
-            if (!copy_constant(unit->ctx, block, id, decl_scope, decl_id, decl_infer->type))
-                Wait(WAITING_ON_DECLARATION, decl_id, decl_scope);
+            if (!copy_constant(unit->ctx, block, id, resolved.scope, resolved.declaration, decl_infer->type))
+                Wait(WAITING_ON_DECLARATION, resolved.declaration, resolved.scope);
         }
         else
         {
-            assert(decl_infer->size   != INVALID_STORAGE_SIZE);
-            assert(decl_infer->offset != INVALID_STORAGE_OFFSET);
             infer->flags |= INFERRED_EXPRESSION_DOES_NOT_ALLOCATE_STORAGE;
-            infer->size   = decl_infer->size;
-            infer->offset = decl_infer->offset;
         }
 
         Infer(decl_infer->type);
@@ -1196,7 +1196,6 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
                     continue;
                 }
 
-                param_infer->flags |= INFERRED_EXPRESSION_IS_NOT_EVALUATED_AT_RUNTIME;
                 set_constant_block(callee, param_id, *soft);
                 set_inferred_type(callee, param_id, TYPE_SOFT_BLOCK);
                 override_made_progress = true;  // We made progress by inferring the callee's param type.
@@ -1235,7 +1234,6 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
                         if (!check_constant_fits_in_runtime_type(unit, arg_expr, fraction, param_type))
                             return YIELD_ERROR;
 
-                        param_infer->flags |= INFERRED_EXPRESSION_IS_NOT_EVALUATED_AT_RUNTIME;
                         set_constant_number(callee, param_id, fract_clone(fraction));
                         set_inferred_type(callee, param_id, TYPE_SOFT_NUMBER);
                         override_made_progress = true;  // We made progress by inferring the callee's param type.
@@ -1252,7 +1250,6 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
                             waiting_on_an_argument = arg_id;
                             continue;
                         }
-                        param_infer->flags |= INFERRED_EXPRESSION_IS_NOT_EVALUATED_AT_RUNTIME;
                         set_constant_bool(callee, param_id, *constant);
                         set_inferred_type(callee, param_id, TYPE_SOFT_BOOL);
                         override_made_progress = true;  // We made progress by inferring the callee's param type.
@@ -1269,7 +1266,6 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
                             waiting_on_an_argument = arg_id;
                             continue;
                         }
-                        param_infer->flags |= INFERRED_EXPRESSION_IS_NOT_EVALUATED_AT_RUNTIME;
                         set_constant_type(callee, param_id, *constant);
                         set_inferred_type(callee, param_id, TYPE_SOFT_TYPE);
                         override_made_progress = true;  // We made progress by inferring the callee's param type.
@@ -1394,10 +1390,6 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
                       exact_type_description(unit, type),
                       exact_type_description(unit, value_type));
 
-            if (is_user_defined_type(type) && !is_user_type_sizeable(unit->ctx, type))
-                WaitOperand(expr->unary_operand);
-
-            allocate_unit_storage(unit, type, &infer->size, &infer->offset);
             Infer(type);
         }
     } break;
@@ -1478,7 +1470,7 @@ Unit* materialize_unit(Compiler* ctx, Block* initiator)
     unit->initiator_from = initiator->from;
     unit->initiator_to   = initiator->to;
 
-    unit->pointer_size      = sizeof(void*);
+    unit->pointer_size      = sizeof (void*);
     unit->pointer_alignment = alignof(void*);
 
     unit->entry_block = materialize_block(unit, initiator, NULL, NO_VISIBILITY);
@@ -1486,81 +1478,175 @@ Unit* materialize_unit(Compiler* ctx, Block* initiator)
 }
 
 
-static void allocate_remaining_storage(Unit* unit, Block* block)
+static Yield_Result place_block(Unit* unit, Block* block)
 {
     assert(block->materialized_by_unit == unit);
-    if (block->flags & BLOCK_RUNTIME_ALLOCATED)
-        return;
+    if (block->flags & BLOCK_PLACEMENT_COMPLETED)
+        return YIELD_COMPLETED;
+
+    Yield_Result wait_result = YIELD_NO_PROGRESS;
 
     for (umm i = 0; i < block->inferred_expressions.count; i++)
     {
-        auto* expr  = &block->parsed_expressions[i];
+        auto* expr  = &block->parsed_expressions  [i];
         auto* infer = &block->inferred_expressions[i];
-        if (infer->called_block)
-            allocate_remaining_storage(unit, infer->called_block);
-
-        if (infer->flags & INFERRED_EXPRESSION_IS_NOT_EVALUATED_AT_RUNTIME) continue;
-        if (infer->offset != INVALID_STORAGE_OFFSET) continue;
         assert(infer->type != INVALID_TYPE);
+
+        if (infer->size != INVALID_STORAGE_SIZE) continue;
+
+        if (!(infer->flags & INFERRED_EXPRESSION_IS_NOT_EVALUATED_AT_RUNTIME) &&
+            block->flags & BLOCK_HAS_STRUCTURE_PLACEMENT &&
+            expr->kind != EXPRESSION_DECLARATION)
+        {
+            report_error(unit->ctx, expr, "Blocks with structured placement may not contain any expressions evaluated at runtime."_s);
+            return YIELD_ERROR;
+        }
+
+        if (is_user_defined_type(infer->type))
+            if (!is_user_type_sizeable(unit->ctx, infer->type))
+                return wait_result;
 
         if (infer->flags & INFERRED_EXPRESSION_DOES_NOT_ALLOCATE_STORAGE)
         {
-            infer->size = get_type_size(unit, infer->type);
+            if (!is_soft_type(infer->type))
+            {
+                wait_result = YIELD_MADE_PROGRESS;
+                infer->size = get_type_size(unit, infer->type);
+            }
             continue;
         }
+
+        assert(!(infer->flags & INFERRED_EXPRESSION_IS_NOT_EVALUATED_AT_RUNTIME));
+
         allocate_unit_storage(unit, infer->type, &infer->size, &infer->offset);
+        wait_result = YIELD_MADE_PROGRESS;
     }
 
-    block->flags |= BLOCK_RUNTIME_ALLOCATED;
+    for (umm i = 0; i < block->inferred_expressions.count; i++)
+    {
+        auto* expr  = &block->parsed_expressions  [i];
+        auto* infer = &block->inferred_expressions[i];
+        if (infer->called_block)
+        {
+            if (block->flags & BLOCK_HAS_STRUCTURE_PLACEMENT)
+            {
+                report_error(unit->ctx, expr, "You can't make calls inside a block with structured placement."_s);
+                return YIELD_ERROR;
+            }
+
+            Yield_Result result = place_block(unit, infer->called_block);
+            if (result == YIELD_NO_PROGRESS) return wait_result;
+            if (result != YIELD_COMPLETED)   return result;
+        }
+    }
+
+    block->flags |= BLOCK_PLACEMENT_COMPLETED;
+    return YIELD_COMPLETED;
 }
 
-static void complete_unit_inference(Unit* unit)
+static void fix_names(Unit* unit, Block* block)
 {
+    For (block->resolved_names)
+    {
+        auto* expr  = &block->parsed_expressions  [it->key];
+        auto* infer = &block->inferred_expressions[it->key];
+
+        Resolved_Name resolved = it->value;
+        auto* decl_expr  = &resolved.scope->parsed_expressions  [resolved.declaration];
+        auto* decl_infer = &resolved.scope->inferred_expressions[resolved.declaration];
+
+        assert(infer->type == decl_infer->type);
+        if (is_soft_type(infer->type))
+            continue;
+
+        assert(infer->offset == INVALID_STORAGE_OFFSET);
+        assert(infer->size != INVALID_STORAGE_SIZE);
+        assert(infer->size == decl_infer->size);
+        assert(decl_infer->offset != INVALID_STORAGE_OFFSET);
+        infer->offset = decl_infer->offset;
+    }
+
+    For (block->inferred_expressions)
+        if (it->called_block)
+            fix_names(unit, it->called_block);
+}
+
+static Yield_Result complete_unit_inference(Pipeline_Task* task)
+{
+    Unit* unit = task->unit;
     assert(unit->blocks_in_flight == 0);
-    allocate_remaining_storage(unit, unit->entry_block);
-    unit->completed_inference = true;
+
+    Yield_Result result = place_block(unit, unit->entry_block);
+    if (result != YIELD_COMPLETED)
+        return result;
+
+    fix_names(unit, unit->entry_block);
+
     unit->storage_size = unit->next_storage_offset;
     if (!unit->storage_alignment)
         unit->storage_alignment = 1;
+    unit->completed_inference = true;
+    return YIELD_COMPLETED;
 }
 
 
 bool pump_pipeline(Compiler* ctx)
 {
-    while (true)
+    while (ctx->pipeline.count)
     {
         bool made_progress = false;
-        bool tried_to_make_progress = false;
         for (umm it_index = 0; it_index < ctx->pipeline.count; it_index++)
         {
-            if (!ctx->pipeline[it_index].block) continue;  // already completed
-            tried_to_make_progress = true;
-
-            Yield_Result result = infer_block(&ctx->pipeline[it_index]);
-            switch (result)
+            bool task_completed = false;
+            Pipeline_Task* task = &ctx->pipeline[it_index];
+            if (task->kind == PIPELINE_TASK_INFER_BLOCK)
             {
-            case YIELD_COMPLETED:       ctx->pipeline[it_index].block = NULL;
-                                        if (--ctx->pipeline[it_index].unit->blocks_in_flight == 0)
-                                            complete_unit_inference(ctx->pipeline[it_index].unit);
-                                        // fallthrough
-            case YIELD_MADE_PROGRESS:   made_progress = true;                  // fallthrough
-            case YIELD_NO_PROGRESS:     break;
-            case YIELD_ERROR:           return false;
-            IllegalDefaultCase;
+                Unit* unit = task->unit;
+                switch (infer_block(task))
+                {
+                case YIELD_COMPLETED:       task_completed = true;
+                                            if (--unit->blocks_in_flight == 0)
+                                            {
+                                                Pipeline_Task new_task = {};
+                                                new_task.kind  = PIPELINE_TASK_COMPLETE_UNIT;
+                                                new_task.unit  = unit;
+                                                add_item(&ctx->pipeline, &new_task);
+                                            }
+                                            // fallthrough
+                case YIELD_MADE_PROGRESS:   made_progress = true;  // fallthrough
+                case YIELD_NO_PROGRESS:     break;
+                case YIELD_ERROR:           return false;
+                IllegalDefaultCase;
+                }
+
+                if (unit->materialized_block_count >= MAX_BLOCKS_PER_UNIT)
+                {
+                    Report(ctx).part(&unit->initiator_from, Format(temp, "Too many blocks instantiated in this unit. Maximum is %.", MAX_BLOCKS_PER_UNIT))
+                               .part(&unit->most_recent_materialized_block->from, "The most recent instantiated block is here. It may or may not be part of the problem."_s)
+                               .done();
+                    return false;
+                }
             }
-
-            Unit* unit = ctx->pipeline[it_index].unit;
-            if (unit->materialized_block_count >= MAX_BLOCKS_PER_UNIT)
+            else if (task->kind == PIPELINE_TASK_COMPLETE_UNIT)
             {
-                Report(ctx).part(&unit->initiator_from, Format(temp, "Too many blocks instantiated in this unit. Maximum is %.", MAX_BLOCKS_PER_UNIT))
-                           .part(&unit->most_recent_materialized_block->from, "The most recent instantiated block is here. It may or may not be part of the problem."_s)
-                           .done();
-                return false;
+                switch (complete_unit_inference(task))
+                {
+                case YIELD_COMPLETED:       task_completed = true;  // fallthrough
+                case YIELD_MADE_PROGRESS:   made_progress = true;   // fallthrough
+                case YIELD_NO_PROGRESS:     break;
+                case YIELD_ERROR:           return false;
+                IllegalDefaultCase;
+                }
+            }
+            else Unreachable;
+
+            if (task_completed)
+            {
+                ctx->pipeline[it_index] = ctx->pipeline[ctx->pipeline.count - 1];
+                ctx->pipeline.count--;
+                it_index--;
             }
         }
-
-        if (!tried_to_make_progress)
-            break;
 
         if (!made_progress)
         {
@@ -1569,8 +1655,8 @@ bool pump_pipeline(Compiler* ctx)
             report.message("Can't make inference progress."_s);
             For (ctx->pipeline)
             {
+                if (it->kind != PIPELINE_TASK_INFER_BLOCK) continue;
                 Block* block = it->block;
-                if (!block) continue;
                 For (block->waiting_expressions)
                 {
                     auto* expr = &block->parsed_expressions[it->key];
