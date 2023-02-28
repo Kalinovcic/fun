@@ -662,6 +662,7 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
             assert(decl_infer->size   != INVALID_STORAGE_SIZE);
             assert(decl_infer->offset != INVALID_STORAGE_OFFSET);
             infer->flags |= INFERRED_EXPRESSION_DOES_NOT_ALLOCATE_STORAGE;
+            infer->size   = decl_infer->size;
             infer->offset = decl_infer->offset;
         }
 
@@ -774,6 +775,26 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
         Infer(TYPE_SOFT_NUMBER);
     } break;
 
+    case EXPRESSION_ALIGNOF:
+    {
+        Inferred_Expression* op_infer = &block->inferred_expressions[expr->unary_operand];
+        if (op_infer->type == INVALID_TYPE) WaitOperand(expr->unary_operand);
+
+        if (!is_type_type(op_infer->type))
+            Error("Expected a type as operand to 'sizeof', but got %.", vague_type_description(unit, op_infer->type));
+        if (op_infer->type != TYPE_SOFT_TYPE)
+            Error("The operand to 'sizeof' is a type not known at compile-time.");
+
+        Type const* type = get_constant_type(block, expr->unary_operand);
+        if (!type) WaitOperand(expr->unary_operand);
+
+        if (is_user_defined_type(*type) && !is_user_type_sizeable(unit->ctx, *type))
+            WaitOperand(expr->unary_operand);
+        set_constant_number(block, id, fract_make_u64(get_type_alignment(unit, *type)));
+
+        Infer(TYPE_SOFT_NUMBER);
+    } break;
+
     case EXPRESSION_CODEOF:
     {
         Inferred_Expression* op_infer = &block->inferred_expressions[expr->unary_operand];
@@ -827,8 +848,9 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
     case EXPRESSION_ASSIGNMENT:
     {
         if (block->parsed_expressions[expr->binary.lhs].kind != EXPRESSION_NAME &&
+            block->parsed_expressions[expr->binary.lhs].kind != EXPRESSION_MEMBER &&
             block->parsed_expressions[expr->binary.lhs].kind != EXPRESSION_DEREFERENCE)
-            Error("Expected a variable name or dereference expression on the left side of the assignment.");
+            Error("Expected a variable name, member, or dereference expression on the left side of the assignment.");
 
         Type lhs_type = block->inferred_expressions[expr->binary.lhs].type;
         Type rhs_type = block->inferred_expressions[expr->binary.rhs].type;

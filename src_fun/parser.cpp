@@ -382,6 +382,7 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
     else if (maybe_take_atom(stream, ATOM_AMPERSAND))   { if (!make_unary(EXPRESSION_ADDRESS,     InheritFlags(PARSE_ALLOW_INFERRED_TYPE_ALIAS))) return false; }
     else if (maybe_take_atom(stream, ATOM_STAR))        { if (!make_unary(EXPRESSION_DEREFERENCE, InheritFlags(PARSE_ALLOW_INFERRED_TYPE_ALIAS))) return false; }
     else if (maybe_take_atom(stream, ATOM_SIZEOF))      { if (!make_unary(EXPRESSION_SIZEOF,      parse_flags))                                   return false; }
+    else if (maybe_take_atom(stream, ATOM_ALIGNOF))     { if (!make_unary(EXPRESSION_ALIGNOF,     parse_flags))                                   return false; }
     else if (maybe_take_atom(stream, ATOM_CODEOF))      { if (!make_unary(EXPRESSION_CODEOF,      parse_flags))                                   return false; }
     else if (maybe_take_atom(stream, ATOM_DEBUG))       { if (!make_unary(EXPRESSION_DEBUG,       parse_flags))                                   return false; }
     else if (maybe_take_atom(stream, ATOM_DEBUG_ALLOC)) { if (!make_unary(EXPRESSION_DEBUG_ALLOC, parse_flags))                                   return false; }

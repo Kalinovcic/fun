@@ -12,6 +12,7 @@
 unit(Vec)*/
 
 
+/*
 U :: unit
 {
     x: u64 = cast(u64, 420);
@@ -25,6 +26,29 @@ goto(codeof U, &storage);
 
 debug storage.x;
 debug storage.y;
+*/
+
+
+Point :: unit
+{
+    x: u64;
+    y: u64;
+}
+
+p1: Point;
+p1.x = cast(u64, 12);
+p1.y = cast(u64, 34);
+
+p2 := p1;
+p1.x = cast(u64, 56);
+p1.y = cast(u64, 78);
+
+debug sizeof Point;
+debug alignof Point;
+debug p1.x;
+debug p1.y;
+debug p2.x;
+debug p2.y;
 
 
 
