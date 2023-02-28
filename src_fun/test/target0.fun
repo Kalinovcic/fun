@@ -53,13 +53,19 @@ goto(codeof co, &co);
 debug co.result;*/
 
 
-x: u32;
-if cast(u64, 1)
-=> debug x;
+/*
+max :: (a: $T, b: T)
+{
+}
 
+max(cast(u32, 123), cast(u32, 45));
+*/
+
+
+/*
 N :: sizeof(Point);
 
-Point :: unit
+Point :: struct
 {
     SIZE :: N;
     x: u64;
@@ -81,12 +87,10 @@ debug p1.y;
 debug p2.x;
 debug p2.y;
 debug p1.SIZE;
+*/
 
 
 
-
-
-/*
 poo := debug_alloc u32;
 debug poo;
 *poo = cast(u32, 123);
@@ -110,6 +114,7 @@ if cast(u64, 1)
     debug 69;
 }
 
+/*
 set_to_69 :: (what: &u64)
 {
     *what = cast(u64, 69);

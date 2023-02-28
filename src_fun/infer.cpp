@@ -340,6 +340,7 @@ static void complete_expression(Block* block, Expression id)
     if (is_soft_type(infer->type) && infer->type != TYPE_SOFT_ZERO)
         assert(infer->constant != INVALID_CONSTANT);
     infer->flags |= INFERRED_EXPRESSION_COMPLETED_INFERENCE;
+    remove(&block->waiting_expressions, &id);
 }
 
 static void set_inferred_type(Block* block, Expression id, Type type)
@@ -358,7 +359,6 @@ static void set_inferred_type(Block* block, Expression id, Type type)
         infer->flags |= INFERRED_EXPRESSION_DOES_NOT_ALLOCATE_STORAGE;
     }
     infer->type = type;
-    remove(&block->waiting_expressions, &id);
 
     assert(infer->size   == INVALID_STORAGE_SIZE);
     assert(infer->offset == INVALID_STORAGE_OFFSET);
@@ -577,16 +577,12 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
     Unit*  unit  = task->unit;
     Block* block = task->block;
 
-    bool override_made_progress = false;
-
     auto* expr  = &block->parsed_expressions[id];
     auto* infer = &block->inferred_expressions[id];
     assert(!(infer->flags & INFERRED_EXPRESSION_COMPLETED_INFERENCE));
 
 
-    #define InferType(type) set_inferred_type(block, id, type)
-    #define InferenceComplete() return (complete_expression(block, id), YIELD_COMPLETED)
-
+    bool override_made_progress = false;
     #define Wait(why, on_expression, on_block)                                      \
     {                                                                               \
         Wait_Info info = { why, on_expression, on_block };                          \
@@ -597,6 +593,10 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
     #define WaitOperand(on_expression) Wait(WAITING_ON_OPERAND, on_expression, block)
 
     #define Error(...) return (report_error(unit->ctx, expr, Format(temp, ##__VA_ARGS__)), YIELD_ERROR)
+
+    #define InferType(type) set_inferred_type(block, id, type)
+    #define InferenceComplete() return (complete_expression(block, id), YIELD_COMPLETED)
+
 
     if (expr->flags & EXPRESSION_HAS_TO_BE_EXTERNALLY_INFERRED)
         Wait(WAITING_ON_EXTERNAL_INFERENCE, NO_EXPRESSION, NULL);
@@ -1219,8 +1219,9 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
                     continue;
                 }
 
-                set_constant_block(callee, param_id, *soft);
                 set_inferred_type(callee, param_id, TYPE_SOFT_BLOCK);
+                set_constant_block(callee, param_id, *soft);
+                complete_expression(callee, param_id);
                 override_made_progress = true;  // We made progress by inferring the callee's param type.
             }
             else
@@ -1257,8 +1258,9 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
                         if (!check_constant_fits_in_runtime_type(unit, arg_expr, fraction, param_type))
                             return YIELD_ERROR;
 
-                        set_constant_number(callee, param_id, fract_clone(fraction));
                         set_inferred_type(callee, param_id, TYPE_SOFT_NUMBER);
+                        set_constant_number(callee, param_id, fract_clone(fraction));
+                        complete_expression(callee, param_id);
                         override_made_progress = true;  // We made progress by inferring the callee's param type.
                     }
                     else if (is_bool_type(param_type))
@@ -1273,8 +1275,9 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
                             waiting_on_an_argument = arg_id;
                             continue;
                         }
-                        set_constant_bool(callee, param_id, *constant);
                         set_inferred_type(callee, param_id, TYPE_SOFT_BOOL);
+                        set_constant_bool(callee, param_id, *constant);
+                        complete_expression(callee, param_id);
                         override_made_progress = true;  // We made progress by inferring the callee's param type.
                     }
                     else if (param_type == TYPE_TYPE)
@@ -1289,8 +1292,9 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
                             waiting_on_an_argument = arg_id;
                             continue;
                         }
-                        set_constant_type(callee, param_id, *constant);
                         set_inferred_type(callee, param_id, TYPE_SOFT_TYPE);
+                        set_constant_type(callee, param_id, *constant);
+                        complete_expression(callee, param_id);
                         override_made_progress = true;  // We made progress by inferring the callee's param type.
                     }
                     else Unreachable;

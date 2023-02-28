@@ -212,7 +212,9 @@ static Memory* run_expression(Unit* unit, byte* storage, Block* block, Expressio
 
     case EXPRESSION_DEBUG_FREE:
     {
-        NotImplemented;
+        assert(block->inferred_expressions[expr->unary_operand].size == sizeof(void*));
+        Memory* op = run_expression(unit, storage, block, expr->unary_operand);
+        free(op->as_address);
     } break;
 
     case EXPRESSION_ASSIGNMENT:
