@@ -61,7 +61,7 @@ N :: sizeof(Point);
 
 Point :: unit
 {
-    SIZE :: 2;
+    SIZE :: N;
     x: u64;
     y: u64;
 }
@@ -80,6 +80,7 @@ debug p1.x;
 debug p1.y;
 debug p2.x;
 debug p2.y;
+debug p1.SIZE;
 
 
 

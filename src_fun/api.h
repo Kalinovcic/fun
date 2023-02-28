@@ -474,6 +474,7 @@ enum: flags32
     BLOCK_IS_TOP_LEVEL            = 0x0010,
     BLOCK_IS_UNIT                 = 0x0020,
     BLOCK_HAS_STRUCTURE_PLACEMENT = 0x0040,
+    BLOCK_NAME_FIXUP_COMPLETED    = 0x0080,
 };
 
 struct Block
@@ -522,8 +523,8 @@ struct Unit
 
     u64    next_storage_offset;
 
-    umm    blocks_in_flight;
-    bool   completed_inference;
+    umm    unplaced_blocks_in_flight;
+    bool   completed_placement;
     u64    storage_alignment;
     u64    storage_size;
 };
@@ -538,7 +539,6 @@ enum Pipeline_Task_Kind
 {
     INVALID_PIPELINE_TASK,
     PIPELINE_TASK_INFER_BLOCK,
-    PIPELINE_TASK_COMPLETE_UNIT,
 };
 
 struct Pipeline_Task

@@ -32,8 +32,9 @@ static Block* materialize_block(Unit* unit, Block* materialize_from,
     block->parent_scope                  = parent_scope;
     block->parent_scope_visibility_limit = parent_scope_visibility_limit;
 
-    assert(unit->blocks_in_flight != 0 || unit->materialized_block_count == 0);
-    unit->blocks_in_flight++;
+    assert(!unit->completed_placement);
+    assert(unit->unplaced_blocks_in_flight != 0 || unit->materialized_block_count == 0);
+    unit->unplaced_blocks_in_flight++;
 
     unit->materialized_block_count++;
     unit->most_recent_materialized_block = block;
@@ -69,7 +70,7 @@ static bool is_user_type_sizeable(Compiler* ctx, Type type)
     assert(is_user_defined_type(type));
     User_Type* data = get_user_type_data(ctx, type);
     assert(data->unit);
-    return data->unit->completed_inference;
+    return data->unit->completed_placement;
 }
 
 
@@ -280,7 +281,7 @@ u64 get_type_size(Unit* unit, Type type)
     {
         User_Type* data = get_user_type_data(unit->ctx, type);
         assert(data->unit);
-        assert(data->unit->completed_inference);
+        assert(data->unit->completed_placement);
         return data->unit->storage_size;
     }
 
@@ -320,7 +321,7 @@ u64 get_type_alignment(Unit* unit, Type type)
     {
         User_Type* data = get_user_type_data(unit->ctx, type);
         assert(data->unit);
-        assert(data->unit->completed_inference);
+        assert(data->unit->completed_placement);
         return data->unit->storage_alignment;
     }
 
@@ -1075,8 +1076,6 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
 
     case EXPRESSION_CALL:
     {
-        InferType(TYPE_VOID);  // @Incomplete - yield type
-
         // Make sure everything on our side is inferred.
         auto* lhs_infer = &block->inferred_expressions[expr->call.lhs];
         if (lhs_infer->type == INVALID_TYPE) WaitOperand(expr->call.lhs);
@@ -1139,6 +1138,8 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
 
             override_made_progress = true;  // We made progress by materializing the callee.
         }
+
+        InferType(TYPE_VOID);  // @Incomplete - yield type
 
         Expression waiting_on_a_parameter = NO_EXPRESSION;
         Expression waiting_on_an_argument = NO_EXPRESSION;
@@ -1527,12 +1528,54 @@ static Yield_Result infer_block(Pipeline_Task* task)
             infer->offset = unit->next_storage_offset;
             unit->next_storage_offset += infer->size;
         }
-
         block->flags |= BLOCK_PLACEMENT_COMPLETED;
+
+        // maybe complete unit placement
+        if (--unit->unplaced_blocks_in_flight == 0)
+        {
+            unit->storage_size = unit->next_storage_offset;
+            if (!unit->storage_alignment)
+                unit->storage_alignment = 1;
+            unit->completed_placement = true;
+        }
+
         made_progress = true;
 
         if (false) skip_placement:
             waiting = true;
+    }
+
+    if ((block->flags & BLOCK_PLACEMENT_COMPLETED) && !(block->flags & BLOCK_NAME_FIXUP_COMPLETED))
+    {
+        For (block->resolved_names)
+        {
+            auto* expr  = &block->parsed_expressions  [it->key];
+            auto* infer = &block->inferred_expressions[it->key];
+
+            Resolved_Name resolved = it->value;
+            auto* decl_expr  = &resolved.scope->parsed_expressions  [resolved.declaration];
+            auto* decl_infer = &resolved.scope->inferred_expressions[resolved.declaration];
+
+            assert(infer->type == decl_infer->type);
+            if (is_soft_type(infer->type))
+                continue;
+
+            if (infer->offset != INVALID_STORAGE_OFFSET)
+                continue;
+            if (!(resolved.scope->flags & BLOCK_PLACEMENT_COMPLETED))
+            {
+                waiting = true;
+                continue;
+            }
+
+            assert(infer->size != INVALID_STORAGE_SIZE);
+            assert(infer->size == decl_infer->size);
+            assert(decl_infer->offset != INVALID_STORAGE_OFFSET);
+            infer->offset = decl_infer->offset;
+            made_progress = true;
+        }
+
+        block->flags |= BLOCK_NAME_FIXUP_COMPLETED;
     }
 
     if (waiting)
@@ -1562,47 +1605,6 @@ Unit* materialize_unit(Compiler* ctx, Block* initiator, Block* materialized_pare
 }
 
 
-static void fix_names(Unit* unit, Block* block)
-{
-    For (block->resolved_names)
-    {
-        auto* expr  = &block->parsed_expressions  [it->key];
-        auto* infer = &block->inferred_expressions[it->key];
-
-        Resolved_Name resolved = it->value;
-        auto* decl_expr  = &resolved.scope->parsed_expressions  [resolved.declaration];
-        auto* decl_infer = &resolved.scope->inferred_expressions[resolved.declaration];
-
-        assert(infer->type == decl_infer->type);
-        if (is_soft_type(infer->type))
-            continue;
-
-        assert(infer->offset == INVALID_STORAGE_OFFSET);
-        assert(infer->size != INVALID_STORAGE_SIZE);
-        assert(infer->size == decl_infer->size);
-        assert(decl_infer->offset != INVALID_STORAGE_OFFSET);
-        infer->offset = decl_infer->offset;
-    }
-
-    For (block->inferred_expressions)
-        if (it->called_block)
-            fix_names(unit, it->called_block);
-}
-
-static Yield_Result complete_unit_inference(Pipeline_Task* task)
-{
-    Unit* unit = task->unit;
-    assert(unit->blocks_in_flight == 0);
-    fix_names(unit, unit->entry_block);
-
-    unit->storage_size = unit->next_storage_offset;
-    if (!unit->storage_alignment)
-        unit->storage_alignment = 1;
-    unit->completed_inference = true;
-    return YIELD_COMPLETED;
-}
-
-
 bool pump_pipeline(Compiler* ctx)
 {
     while (ctx->pipeline.count)
@@ -1617,15 +1619,7 @@ bool pump_pipeline(Compiler* ctx)
                 Unit* unit = task->unit;
                 switch (infer_block(task))
                 {
-                case YIELD_COMPLETED:       task_completed = true;
-                                            if (--unit->blocks_in_flight == 0)
-                                            {
-                                                Pipeline_Task new_task = {};
-                                                new_task.kind  = PIPELINE_TASK_COMPLETE_UNIT;
-                                                new_task.unit  = unit;
-                                                add_item(&ctx->pipeline, &new_task);
-                                            }
-                                            // fallthrough
+                case YIELD_COMPLETED:       task_completed = true; // fallthrough
                 case YIELD_MADE_PROGRESS:   made_progress = true;  // fallthrough
                 case YIELD_NO_PROGRESS:     break;
                 case YIELD_ERROR:           return false;
@@ -1638,17 +1632,6 @@ bool pump_pipeline(Compiler* ctx)
                                .part(&unit->most_recent_materialized_block->from, "The most recent instantiated block is here. It may or may not be part of the problem."_s)
                                .done();
                     return false;
-                }
-            }
-            else if (task->kind == PIPELINE_TASK_COMPLETE_UNIT)
-            {
-                switch (complete_unit_inference(task))
-                {
-                case YIELD_COMPLETED:       task_completed = true;  // fallthrough
-                case YIELD_MADE_PROGRESS:   made_progress = true;   // fallthrough
-                case YIELD_NO_PROGRESS:     break;
-                case YIELD_ERROR:           return false;
-                IllegalDefaultCase;
                 }
             }
             else Unreachable;
