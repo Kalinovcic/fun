@@ -61,7 +61,7 @@ N :: sizeof(Point);
 
 Point :: unit
 {
-    SIZE :: N;
+    SIZE :: 2;
     x: u64;
     y: u64;
 }

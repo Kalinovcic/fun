@@ -331,21 +331,38 @@ u64 get_type_alignment(Unit* unit, Type type)
     return size;
 }
 
-void allocate_unit_storage(Unit* unit, Type type, u64* out_size, u64* out_offset)
+
+static void complete_expression(Block* block, Expression id)
 {
-    u64 size      = get_type_size     (unit, type);
-    u64 alignment = get_type_alignment(unit, type);
-
-    while (unit->next_storage_offset % alignment)
-        unit->next_storage_offset++;
-
-    *out_size   = size;
-    *out_offset = unit->next_storage_offset;
-    unit->next_storage_offset += size;
-
-    if (unit->storage_alignment < alignment)
-        unit->storage_alignment = alignment;
+    auto* infer = &block->inferred_expressions[id];
+    assert(infer->type != INVALID_TYPE);
+    if (is_soft_type(infer->type) && infer->type != TYPE_SOFT_ZERO)
+        assert(infer->constant != INVALID_CONSTANT);
+    infer->flags |= INFERRED_EXPRESSION_COMPLETED_INFERENCE;
 }
+
+static void set_inferred_type(Block* block, Expression id, Type type)
+{
+    auto* expr  = &block->parsed_expressions[id];
+    auto* infer = &block->inferred_expressions[id];
+
+    assert(type != INVALID_TYPE);
+    assert(infer->type == INVALID_TYPE || infer->type == type);
+
+    if (type == TYPE_SOFT_ZERO)
+        assert(expr->kind == EXPRESSION_ZERO);
+    if (is_soft_type(type))
+    {
+        infer->flags |= INFERRED_EXPRESSION_IS_NOT_EVALUATED_AT_RUNTIME;
+        infer->flags |= INFERRED_EXPRESSION_DOES_NOT_ALLOCATE_STORAGE;
+    }
+    infer->type = type;
+    remove(&block->waiting_expressions, &id);
+
+    assert(infer->size   == INVALID_STORAGE_SIZE);
+    assert(infer->offset == INVALID_STORAGE_OFFSET);
+}
+
 
 
 Constant* get_constant(Block* block, Expression expr, Type type_assertion)
@@ -360,7 +377,7 @@ Constant* get_constant(Block* block, Expression expr, Type type_assertion)
 void set_constant(Block* block, Expression expr, Type type_assertion, Constant* value)
 {
     auto* infer = &block->inferred_expressions[expr];
-    // assert(infer->type == type_assertion);  // @Incomplete
+    assert(infer->type == type_assertion);
     assert(infer->constant == INVALID_CONSTANT);
     infer->constant = block->constants.count;
     add_item(&block->constants, value);
@@ -463,29 +480,6 @@ static bool check_constant_fits_in_runtime_type(Unit* unit, Parsed_Expression co
     return true;
 }
 
-static void set_inferred_type(Block* block, Expression id, Type type)
-{
-    auto* expr  = &block->parsed_expressions[id];
-    auto* infer = &block->inferred_expressions[id];
-
-    assert(type != INVALID_TYPE);
-    if (type == TYPE_SOFT_ZERO)
-        assert(expr->kind == EXPRESSION_ZERO);
-    else if (is_soft_type(type))
-        assert(infer->constant != INVALID_CONSTANT);
-    if (is_soft_type(type))
-    {
-        infer->flags |= INFERRED_EXPRESSION_IS_NOT_EVALUATED_AT_RUNTIME;
-        infer->flags |= INFERRED_EXPRESSION_DOES_NOT_ALLOCATE_STORAGE;
-    }
-    infer->flags |= INFERRED_EXPRESSION_COMPLETED_INFERENCE;
-    infer->type = type;
-    remove(&block->waiting_expressions, &id);
-
-    assert(infer->size   == INVALID_STORAGE_SIZE);
-    assert(infer->offset == INVALID_STORAGE_OFFSET);
-}
-
 static bool pattern_matching_inference(Unit* unit, Block* block, Expression id, Type type,
                                        Parsed_Expression const* inferred_from, Type full_inferred_type)
 {
@@ -506,8 +500,9 @@ static bool pattern_matching_inference(Unit* unit, Block* block, Expression id, 
         {
             assert(expr->declaration.type  == NO_EXPRESSION);
             assert(expr->declaration.value == NO_EXPRESSION);
-            set_constant_type(block, id, type);
             set_inferred_type(block, id, TYPE_SOFT_TYPE);
+            set_constant_type(block, id, type);
+            complete_expression(block, id);
         }
         else if (expr->flags & EXPRESSION_DECLARATION_IS_ALIAS)
         {
@@ -515,8 +510,9 @@ static bool pattern_matching_inference(Unit* unit, Block* block, Expression id, 
             assert(expr->declaration.value != NO_EXPRESSION);
             if (!pattern_matching_inference(unit, block, expr->declaration.value, type, inferred_from, full_inferred_type))
                 return false;
-            set_constant_type(block, id, type);
             set_inferred_type(block, id, TYPE_SOFT_TYPE);
+            set_constant_type(block, id, type);
+            complete_expression(block, id);
         }
         else Unreachable;
     } break;
@@ -535,8 +531,9 @@ static bool pattern_matching_inference(Unit* unit, Block* block, Expression id, 
         Type reduced = set_indirection(type, get_indirection(type) - 1);
         if (!pattern_matching_inference(unit, block, expr->unary_operand, reduced, inferred_from, full_inferred_type))
             return false;
-        set_constant_type(block, id, type);
         set_inferred_type(block, id, TYPE_SOFT_TYPE);
+        set_constant_type(block, id, type);
+        complete_expression(block, id);
     } break;
 
     case EXPRESSION_DEREFERENCE:
@@ -553,8 +550,9 @@ static bool pattern_matching_inference(Unit* unit, Block* block, Expression id, 
         Type indirected = set_indirection(type, indirection);
         if (!pattern_matching_inference(unit, block, expr->unary_operand, indirected, inferred_from, full_inferred_type))
             return false;
-        set_constant_type(block, id, type);
         set_inferred_type(block, id, TYPE_SOFT_TYPE);
+        set_constant_type(block, id, type);
+        complete_expression(block, id);
     } break;
 
     IllegalDefaultCase;
@@ -582,10 +580,11 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
 
     auto* expr  = &block->parsed_expressions[id];
     auto* infer = &block->inferred_expressions[id];
-    assert(infer->type == INVALID_TYPE);
+    assert(!(infer->flags & INFERRED_EXPRESSION_COMPLETED_INFERENCE));
 
 
-    #define Infer(type) return (set_inferred_type(block, id, type), YIELD_COMPLETED);
+    #define InferType(type) set_inferred_type(block, id, type)
+    #define InferenceComplete() return (complete_expression(block, id), YIELD_COMPLETED)
 
     #define Wait(why, on_expression, on_block)                                      \
     {                                                                               \
@@ -604,38 +603,42 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
     switch (expr->kind)
     {
 
-    case EXPRESSION_ZERO:                   Infer(TYPE_SOFT_ZERO);
-    case EXPRESSION_TRUE:                   set_constant_bool(block, id, true);  Infer(TYPE_SOFT_BOOL);
-    case EXPRESSION_FALSE:                  set_constant_bool(block, id, false); Infer(TYPE_SOFT_BOOL);
+    case EXPRESSION_ZERO:   InferType(TYPE_SOFT_ZERO); InferenceComplete();
+    case EXPRESSION_TRUE:   InferType(TYPE_SOFT_BOOL); set_constant_bool(block, id, true);  InferenceComplete();
+    case EXPRESSION_FALSE:  InferType(TYPE_SOFT_BOOL); set_constant_bool(block, id, false); InferenceComplete();
     case EXPRESSION_NUMERIC_LITERAL:
     {
+        InferType(TYPE_SOFT_NUMBER);
         Token_Info_Number* token_info = (Token_Info_Number*) get_token_info(unit->ctx, &expr->literal);
         set_constant_number(block, id, fract_clone(&token_info->value));
-        Infer(TYPE_SOFT_NUMBER);
+        InferenceComplete();
     } break;
 
     case EXPRESSION_TYPE_LITERAL:
     {
+        InferType(TYPE_SOFT_TYPE);
         assert(is_primitive_type(expr->parsed_type));
         set_constant_type(block, id, expr->parsed_type);
-        Infer(TYPE_SOFT_TYPE);
+        InferenceComplete();
     } break;
 
     case EXPRESSION_BLOCK:
     {
+        InferType(TYPE_SOFT_BLOCK);
         Soft_Block soft = {};
         soft.materialized_parent = block;
         soft.parsed_child = expr->parsed_block;
         set_constant_block(block, id, soft);
-        Infer(TYPE_SOFT_BLOCK);
+        InferenceComplete();
     } break;
 
     case EXPRESSION_UNIT:
     {
+        InferType(TYPE_SOFT_TYPE);
         Unit* new_unit = materialize_unit(unit->ctx, expr->parsed_block, block);
         Type type = create_user_type(unit->ctx, block, id, new_unit);
         set_constant_type(block, id, type);
-        Infer(TYPE_SOFT_TYPE);
+        InferenceComplete();
     } break;
 
     case EXPRESSION_NAME:
@@ -658,18 +661,14 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
         Inferred_Expression* decl_infer = &resolved.scope->inferred_expressions[resolved.declaration];
         if (decl_infer->type == INVALID_TYPE)
             Wait(WAITING_ON_DECLARATION, resolved.declaration, resolved.scope);
+        infer->flags |= INFERRED_EXPRESSION_DOES_NOT_ALLOCATE_STORAGE;
+        InferType(decl_infer->type);
 
         if (is_soft_type(decl_infer->type))
-        {
             if (!copy_constant(unit->ctx, block, id, resolved.scope, resolved.declaration, decl_infer->type))
                 Wait(WAITING_ON_DECLARATION, resolved.declaration, resolved.scope);
-        }
-        else
-        {
-            infer->flags |= INFERRED_EXPRESSION_DOES_NOT_ALLOCATE_STORAGE;
-        }
 
-        Infer(decl_infer->type);
+        InferenceComplete();
     } break;
 
     case EXPRESSION_MEMBER:
@@ -702,18 +701,14 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
         Inferred_Expression* decl_infer = &resolved.scope->inferred_expressions[resolved.declaration];
         if (decl_infer->type == INVALID_TYPE)
             Wait(WAITING_ON_DECLARATION, resolved.declaration, resolved.scope);
+        infer->flags |= INFERRED_EXPRESSION_DOES_NOT_ALLOCATE_STORAGE;
+        InferType(decl_infer->type);
 
         if (is_soft_type(decl_infer->type))
-        {
             if (!copy_constant(unit->ctx, block, id, resolved.scope, resolved.declaration, decl_infer->type))
                 Wait(WAITING_ON_DECLARATION, resolved.declaration, resolved.scope);
-        }
-        else
-        {
-            infer->flags |= INFERRED_EXPRESSION_DOES_NOT_ALLOCATE_STORAGE;
-        }
 
-        Infer(decl_infer->type);
+        InferenceComplete();
     } break;
 
     case EXPRESSION_NEGATE:
@@ -724,6 +719,8 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
 
         if (!is_numeric_type(op_infer->type))
             Error("Unary operator '-' expects a numeric argument, but got %.", vague_type_description(unit, op_infer->type));
+        InferType(op_infer->type);
+
         if (op_infer->type == TYPE_SOFT_NUMBER)
         {
             Fraction const* value = get_constant_number(block, expr->unary_operand);
@@ -731,7 +728,7 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
             set_constant_number(block, id, fract_neg(value));
         }
 
-        Infer(op_infer->type);
+        InferenceComplete();
     } break;
 
     case EXPRESSION_ADDRESS:
@@ -744,6 +741,7 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
         {
             if (op_infer->type != TYPE_SOFT_TYPE)
                 Error("The operand to '&' is a type not known at compile-time.");
+            InferType(TYPE_SOFT_TYPE);
 
             Type const* type = get_constant_type(block, expr->unary_operand);
             if (!type) WaitOperand(expr->unary_operand);
@@ -751,7 +749,6 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
             if (indirection > TYPE_MAX_INDIRECTION)
                 Error("The operand to '&' is already at maximum indirection %!", TYPE_MAX_INDIRECTION);
             set_constant_type(block, id, set_indirection(*type, indirection));
-            Infer(TYPE_SOFT_TYPE);
         }
         else if (is_soft_type(op_infer->type))
         {
@@ -763,8 +760,10 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
             u32 indirection = get_indirection(type) + 1;
             if (indirection > TYPE_MAX_INDIRECTION)
                 Error("The operand to '&' is already at maximum indirection %!", TYPE_MAX_INDIRECTION);
-            Infer(set_indirection(type, indirection));
+            InferType(set_indirection(type, indirection));
         }
+
+        InferenceComplete();
     } break;
 
     case EXPRESSION_DEREFERENCE:
@@ -772,11 +771,13 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
         Inferred_Expression* op_infer = &block->inferred_expressions[expr->unary_operand];
         if (op_infer->type == INVALID_TYPE)
             WaitOperand(expr->unary_operand);
+        infer->flags |= INFERRED_EXPRESSION_DOES_NOT_ALLOCATE_STORAGE;
 
         if (is_type_type(op_infer->type))
         {
             if (op_infer->type != TYPE_SOFT_TYPE)
                 Error("The operand to '*' is a type not known at compile-time.");
+            InferType(TYPE_SOFT_TYPE);
 
             Type const* type = get_constant_type(block, expr->unary_operand);
             if (!type) WaitOperand(expr->unary_operand);
@@ -784,7 +785,6 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
             if (!indirection)
                 Error("Expected a pointer as operand to '*', but got %.", exact_type_description(unit, *type));
             set_constant_type(block, id, set_indirection(*type, indirection - 1));
-            Infer(TYPE_SOFT_TYPE);
         }
         else if (is_soft_type(op_infer->type))
         {
@@ -796,14 +796,16 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
             u32 indirection = get_indirection(type);
             if (!indirection)
                 Error("Expected a pointer as operand to '*', but got %.", exact_type_description(unit, type));
-
-            infer->flags |= INFERRED_EXPRESSION_DOES_NOT_ALLOCATE_STORAGE;
-            Infer(set_indirection(type, indirection - 1));
+            InferType(set_indirection(type, indirection - 1));
         }
+
+        InferenceComplete();
     } break;
 
     case EXPRESSION_SIZEOF:
     {
+        InferType(TYPE_SOFT_NUMBER);
+
         Inferred_Expression* op_infer = &block->inferred_expressions[expr->unary_operand];
         if (op_infer->type == INVALID_TYPE) WaitOperand(expr->unary_operand);
 
@@ -819,11 +821,13 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
             WaitOperand(expr->unary_operand);
         set_constant_number(block, id, fract_make_u64(get_type_size(unit, *type)));
 
-        Infer(TYPE_SOFT_NUMBER);
+        InferenceComplete();
     } break;
 
     case EXPRESSION_ALIGNOF:
     {
+        InferType(TYPE_SOFT_NUMBER);
+
         Inferred_Expression* op_infer = &block->inferred_expressions[expr->unary_operand];
         if (op_infer->type == INVALID_TYPE) WaitOperand(expr->unary_operand);
 
@@ -839,11 +843,13 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
             WaitOperand(expr->unary_operand);
         set_constant_number(block, id, fract_make_u64(get_type_alignment(unit, *type)));
 
-        Infer(TYPE_SOFT_NUMBER);
+        InferenceComplete();
     } break;
 
     case EXPRESSION_CODEOF:
     {
+        InferType(set_indirection(TYPE_VOID, 1));
+
         Inferred_Expression* op_infer = &block->inferred_expressions[expr->unary_operand];
         if (op_infer->type == INVALID_TYPE) WaitOperand(expr->unary_operand);
 
@@ -855,14 +861,15 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
         if (!is_user_defined_type(*type))
             Error("Expected a unit as operand to 'codeof', but got %.", exact_type_description(unit, *type));
 
-        Infer(set_indirection(TYPE_VOID, 1));
+        InferenceComplete();
     } break;
 
     case EXPRESSION_DEBUG:
     {
+        InferType(TYPE_VOID);
         Inferred_Expression* op_infer = &block->inferred_expressions[expr->unary_operand];
         if (op_infer->type == INVALID_TYPE) WaitOperand(expr->unary_operand);
-        Infer(TYPE_VOID);
+        InferenceComplete();
     } break;
 
     case EXPRESSION_DEBUG_ALLOC:
@@ -880,16 +887,18 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
         u32 indirection = get_indirection(*type) + 1;
         if (indirection > TYPE_MAX_INDIRECTION)
             Error("The operand to 'debug_alloc' is already at maximum indirection %! Can't yield a pointer to it.", TYPE_MAX_INDIRECTION);
-        Infer(set_indirection(*type, indirection));
+        InferType(set_indirection(*type, indirection));
+        InferenceComplete();
     } break;
 
     case EXPRESSION_DEBUG_FREE:
     {
+        InferType(TYPE_VOID);
         Inferred_Expression* op_infer = &block->inferred_expressions[expr->unary_operand];
         if (op_infer->type == INVALID_TYPE) WaitOperand(expr->unary_operand);
         if (!is_pointer_type(op_infer->type))
             Error("Expected a pointer as operand to 'debug_free', but got %.", vague_type_description(unit, op_infer->type));
-        Infer(TYPE_VOID);
+        InferenceComplete();
     } break;
 
     case EXPRESSION_ASSIGNMENT:
@@ -911,7 +920,8 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
                   "    rhs: %",
                   exact_type_description(unit, lhs_type),
                   exact_type_description(unit, rhs_type));
-        Infer(lhs_type);
+        InferType(lhs_type);
+        InferenceComplete();
     } break;
 
     case EXPRESSION_ADD:
@@ -932,6 +942,8 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
                   exact_type_description(unit, rhs_type));
         if (!is_numeric_type(lhs_type))
             Error("Expected a numeric operand, but got %.", vague_type_description(unit, lhs_type));
+
+        InferType(lhs_type);
 
         if (lhs_type == TYPE_SOFT_NUMBER)
         {
@@ -954,10 +966,12 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
                 if (!fract_div_fract(&result, lhs_fract, rhs_fract))
                     Error("Division by zero!");
             }
+
+            assert(infer->type == TYPE_SOFT_NUMBER);
             set_constant_number(block, id, result);
         }
 
-        Infer(lhs_type);
+        InferenceComplete();
     } break;
 
     case EXPRESSION_EQUAL:            NotImplemented;
@@ -988,13 +1002,14 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
         if (!is_numeric_type(cast_type))
             Error("Expected a numeric type as the first operand to 'cast', but got %.", exact_type_description(unit, cast_type));
 
+        InferType(cast_type);
+
         if (rhs_infer->type == TYPE_SOFT_NUMBER)
         {
             Fraction const* fraction = get_constant_number(block, expr->binary.rhs);
             if (!fraction) WaitOperand(expr->binary.rhs);
             if (!check_constant_fits_in_runtime_type(unit, &block->parsed_expressions[expr->binary.rhs], fraction, cast_type))
                 return YIELD_ERROR;
-            set_constant_number(block, id, fract_clone(fraction));
         }
         else
         {
@@ -1002,11 +1017,13 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
             // @Incomplete - check if cast is possible
         }
 
-        Infer(cast_type);
+        InferenceComplete();
     } break;
 
     case EXPRESSION_GOTO_UNIT:
     {
+        InferType(TYPE_VOID);
+
         auto* lhs_infer = &block->inferred_expressions[expr->binary.lhs];
         auto* rhs_infer = &block->inferred_expressions[expr->binary.rhs];
         if (lhs_infer->type == INVALID_TYPE) WaitOperand(expr->binary.lhs);
@@ -1015,7 +1032,8 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
             Error("Expected a pointer type as the first operand to 'goto', but got %.", vague_type_description(unit, lhs_infer->type));
         if (!is_pointer_type(rhs_infer->type))
             Error("Expected a pointer type as the second operand to 'goto', but got %.", vague_type_description(unit, rhs_infer->type));
-        Infer(TYPE_VOID);
+
+        InferenceComplete();
     } break;
 
     case EXPRESSION_BRANCH:
@@ -1050,11 +1068,15 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
                       "On failure, it yields %.",
                       exact_type_description(unit, success_type),
                       exact_type_description(unit, failure_type));
-        Infer(success_type);
+
+        InferType(success_type);
+        InferenceComplete();
     } break;
 
     case EXPRESSION_CALL:
     {
+        InferType(TYPE_VOID);  // @Incomplete - yield type
+
         // Make sure everything on our side is inferred.
         auto* lhs_infer = &block->inferred_expressions[expr->call.lhs];
         if (lhs_infer->type == INVALID_TYPE) WaitOperand(expr->call.lhs);
@@ -1161,7 +1183,6 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
                     return YIELD_ERROR;
 
                 param_infer->flags |= INFERRED_EXPRESSION_IS_NOT_EVALUATED_AT_RUNTIME;
-                allocate_unit_storage(unit, arg_type, &param_infer->size, &param_infer->offset);
                 set_inferred_type(callee, param_id, arg_type);
                 override_made_progress = true;  // We made progress by inferring the callee's param type.
             }
@@ -1291,8 +1312,7 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
         if (waiting_on_an_argument != NO_EXPRESSION)
             WaitOperand(waiting_on_an_argument);
 
-        // @Incomplete - yield type
-        Infer(TYPE_VOID);
+        InferenceComplete();
     } break;
 
     case EXPRESSION_DECLARATION:
@@ -1348,6 +1368,7 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
             auto* value_expr  = &block->parsed_expressions  [expr->declaration.value];
             auto* value_infer = &block->inferred_expressions[expr->declaration.value];
             if (value_infer->type == INVALID_TYPE) WaitOperand(expr->declaration.value);
+            InferType(value_infer->type);
 
             if (is_soft_type(value_infer->type))
             {
@@ -1361,8 +1382,6 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
                                  .done();
                 return YIELD_ERROR;
             }
-
-            Infer(value_infer->type);
         }
         else
         {
@@ -1391,8 +1410,10 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
                       exact_type_description(unit, type),
                       exact_type_description(unit, value_type));
 
-            Infer(type);
+            InferType(type);
         }
+
+        InferenceComplete();
     } break;
 
     IllegalDefaultCase;
@@ -1488,16 +1509,23 @@ static Yield_Result infer_block(Pipeline_Task* task)
             auto* expr  = &block->parsed_expressions  [i];
             auto* infer = &block->inferred_expressions[i];
             assert(infer->type != INVALID_TYPE);
+            if (is_soft_type(infer->type))
+                continue;
+
+            infer->size = get_type_size(unit, infer->type);
             if (infer->flags & INFERRED_EXPRESSION_DOES_NOT_ALLOCATE_STORAGE)
-            {
-                if (!is_soft_type(infer->type))
-                    infer->size = get_type_size(unit, infer->type);
-            }
-            else
-            {
-                assert(!(infer->flags & INFERRED_EXPRESSION_IS_NOT_EVALUATED_AT_RUNTIME));
-                allocate_unit_storage(unit, infer->type, &infer->size, &infer->offset);
-            }
+                continue;
+
+            assert(!(infer->flags & INFERRED_EXPRESSION_IS_NOT_EVALUATED_AT_RUNTIME));
+
+            u64 alignment = get_type_alignment(unit, infer->type);
+            if (unit->storage_alignment < alignment)
+                unit->storage_alignment = alignment;
+
+            while (unit->next_storage_offset % alignment)
+                unit->next_storage_offset++;
+            infer->offset = unit->next_storage_offset;
+            unit->next_storage_offset += infer->size;
         }
 
         block->flags |= BLOCK_PLACEMENT_COMPLETED;

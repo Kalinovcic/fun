@@ -640,9 +640,8 @@ bool find_declaration(Token const* name,
                       Block** out_decl_scope, Expression* out_decl_expr,
                       bool allow_parent_traversal = true);
 
-u64  get_type_size        (Unit* unit, Type type);
-u64  get_type_alignment   (Unit* unit, Type type);
-void allocate_unit_storage(Unit* unit, Type type, u64* out_size, u64* out_offset);
+u64 get_type_size     (Unit* unit, Type type);
+u64 get_type_alignment(Unit* unit, Type type);
 
 Constant* get_constant(Block* block, Expression expr, Type type_assertion);
 void set_constant(Block* block, Expression expr, Type type_assertion, Constant* value);
