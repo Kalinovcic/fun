@@ -53,9 +53,15 @@ goto(codeof co, &co);
 debug co.result;*/
 
 
+x: u32;
+if cast(u64, 1)
+=> debug x;
+
+N :: sizeof(Point);
+
 Point :: unit
 {
-    DIMENSIONS :: 2;
+    SIZE :: N;
     x: u64;
     y: u64;
 }

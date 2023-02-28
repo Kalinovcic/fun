@@ -478,6 +478,7 @@ static void set_inferred_type(Block* block, Expression id, Type type)
         infer->flags |= INFERRED_EXPRESSION_IS_NOT_EVALUATED_AT_RUNTIME;
         infer->flags |= INFERRED_EXPRESSION_DOES_NOT_ALLOCATE_STORAGE;
     }
+    infer->flags |= INFERRED_EXPRESSION_COMPLETED_INFERENCE;
     infer->type = type;
     remove(&block->waiting_expressions, &id);
 
@@ -631,7 +632,7 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
 
     case EXPRESSION_UNIT:
     {
-        Unit* new_unit = materialize_unit(unit->ctx, expr->parsed_block);
+        Unit* new_unit = materialize_unit(unit->ctx, expr->parsed_block, block);
         Type type = create_user_type(unit->ctx, block, id, new_unit);
         set_constant_type(block, id, type);
         Infer(TYPE_SOFT_TYPE);
@@ -1433,12 +1434,15 @@ static Yield_Result infer_block(Pipeline_Task* task)
     for (Expression id = (Expression) 0; id < block->parsed_expressions.count; id = (Expression)(id + 1))
     {
 #endif
-
-        if (block->inferred_expressions[id].type != INVALID_TYPE) continue;
+        auto* infer = &block->inferred_expressions[id];
+        if (infer->flags & INFERRED_EXPRESSION_COMPLETED_INFERENCE) continue;
 
         Yield_Result result = infer_expression(task, id);
         if (result == YIELD_COMPLETED || result == YIELD_MADE_PROGRESS)
+        {
+            assert(result != YIELD_COMPLETED || (infer->flags & INFERRED_EXPRESSION_COMPLETED_INFERENCE));
             made_progress = true;
+        }
         else if (result == YIELD_NO_PROGRESS)
             waiting = true;
         else if (result == YIELD_ERROR)
@@ -1451,13 +1455,65 @@ static Yield_Result infer_block(Pipeline_Task* task)
 #endif
     }
 
+    if (!(block->flags & BLOCK_PLACEMENT_COMPLETED))
+    {
+        // check if we are ready to do placement
+        for (umm i = 0; i < block->inferred_expressions.count; i++)
+        {
+            auto* expr  = &block->parsed_expressions  [i];
+            auto* infer = &block->inferred_expressions[i];
+
+            if (infer->type == INVALID_TYPE)
+                goto skip_placement;
+
+            if (!(infer->flags & INFERRED_EXPRESSION_IS_NOT_EVALUATED_AT_RUNTIME) &&
+                block->flags & BLOCK_HAS_STRUCTURE_PLACEMENT &&
+                expr->kind != EXPRESSION_DECLARATION)
+            {
+                report_error(unit->ctx, expr, "Blocks with structured placement may not contain any expressions evaluated at runtime."_s);
+                return YIELD_ERROR;
+            }
+
+            if ((infer->flags & INFERRED_EXPRESSION_DOES_NOT_ALLOCATE_STORAGE) && is_soft_type(infer->type))
+                continue;
+
+            if (is_user_defined_type(infer->type))
+                if (!is_user_type_sizeable(unit->ctx, infer->type))
+                    goto skip_placement;
+        }
+
+        // do placement
+        for (umm i = 0; i < block->inferred_expressions.count; i++)
+        {
+            auto* expr  = &block->parsed_expressions  [i];
+            auto* infer = &block->inferred_expressions[i];
+            assert(infer->type != INVALID_TYPE);
+            if (infer->flags & INFERRED_EXPRESSION_DOES_NOT_ALLOCATE_STORAGE)
+            {
+                if (!is_soft_type(infer->type))
+                    infer->size = get_type_size(unit, infer->type);
+            }
+            else
+            {
+                assert(!(infer->flags & INFERRED_EXPRESSION_IS_NOT_EVALUATED_AT_RUNTIME));
+                allocate_unit_storage(unit, infer->type, &infer->size, &infer->offset);
+            }
+        }
+
+        block->flags |= BLOCK_PLACEMENT_COMPLETED;
+        made_progress = true;
+
+        if (false) skip_placement:
+            waiting = true;
+    }
+
     if (waiting)
         return made_progress ? YIELD_MADE_PROGRESS : YIELD_NO_PROGRESS;
     return YIELD_COMPLETED;
 }
 
 
-Unit* materialize_unit(Compiler* ctx, Block* initiator)
+Unit* materialize_unit(Compiler* ctx, Block* initiator, Block* materialized_parent)
 {
     Unit* unit;
     {
@@ -1473,76 +1529,10 @@ Unit* materialize_unit(Compiler* ctx, Block* initiator)
     unit->pointer_size      = sizeof (void*);
     unit->pointer_alignment = alignof(void*);
 
-    unit->entry_block = materialize_block(unit, initiator, NULL, NO_VISIBILITY);
+    unit->entry_block = materialize_block(unit, initiator, materialized_parent, NO_VISIBILITY);
     return unit;
 }
 
-
-static Yield_Result place_block(Unit* unit, Block* block)
-{
-    assert(block->materialized_by_unit == unit);
-    if (block->flags & BLOCK_PLACEMENT_COMPLETED)
-        return YIELD_COMPLETED;
-
-    Yield_Result wait_result = YIELD_NO_PROGRESS;
-
-    for (umm i = 0; i < block->inferred_expressions.count; i++)
-    {
-        auto* expr  = &block->parsed_expressions  [i];
-        auto* infer = &block->inferred_expressions[i];
-        assert(infer->type != INVALID_TYPE);
-
-        if (infer->size != INVALID_STORAGE_SIZE) continue;
-
-        if (!(infer->flags & INFERRED_EXPRESSION_IS_NOT_EVALUATED_AT_RUNTIME) &&
-            block->flags & BLOCK_HAS_STRUCTURE_PLACEMENT &&
-            expr->kind != EXPRESSION_DECLARATION)
-        {
-            report_error(unit->ctx, expr, "Blocks with structured placement may not contain any expressions evaluated at runtime."_s);
-            return YIELD_ERROR;
-        }
-
-        if (is_user_defined_type(infer->type))
-            if (!is_user_type_sizeable(unit->ctx, infer->type))
-                return wait_result;
-
-        if (infer->flags & INFERRED_EXPRESSION_DOES_NOT_ALLOCATE_STORAGE)
-        {
-            if (!is_soft_type(infer->type))
-            {
-                wait_result = YIELD_MADE_PROGRESS;
-                infer->size = get_type_size(unit, infer->type);
-            }
-            continue;
-        }
-
-        assert(!(infer->flags & INFERRED_EXPRESSION_IS_NOT_EVALUATED_AT_RUNTIME));
-
-        allocate_unit_storage(unit, infer->type, &infer->size, &infer->offset);
-        wait_result = YIELD_MADE_PROGRESS;
-    }
-
-    for (umm i = 0; i < block->inferred_expressions.count; i++)
-    {
-        auto* expr  = &block->parsed_expressions  [i];
-        auto* infer = &block->inferred_expressions[i];
-        if (infer->called_block)
-        {
-            if (block->flags & BLOCK_HAS_STRUCTURE_PLACEMENT)
-            {
-                report_error(unit->ctx, expr, "You can't make calls inside a block with structured placement."_s);
-                return YIELD_ERROR;
-            }
-
-            Yield_Result result = place_block(unit, infer->called_block);
-            if (result == YIELD_NO_PROGRESS) return wait_result;
-            if (result != YIELD_COMPLETED)   return result;
-        }
-    }
-
-    block->flags |= BLOCK_PLACEMENT_COMPLETED;
-    return YIELD_COMPLETED;
-}
 
 static void fix_names(Unit* unit, Block* block)
 {
@@ -1575,11 +1565,6 @@ static Yield_Result complete_unit_inference(Pipeline_Task* task)
 {
     Unit* unit = task->unit;
     assert(unit->blocks_in_flight == 0);
-
-    Yield_Result result = place_block(unit, unit->entry_block);
-    if (result != YIELD_COMPLETED)
-        return result;
-
     fix_names(unit, unit->entry_block);
 
     unit->storage_size = unit->next_storage_offset;

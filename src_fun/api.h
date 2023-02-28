@@ -407,6 +407,7 @@ enum: flags32
 {
     INFERRED_EXPRESSION_IS_NOT_EVALUATED_AT_RUNTIME = 0x0001,
     INFERRED_EXPRESSION_DOES_NOT_ALLOCATE_STORAGE   = 0x0002,
+    INFERRED_EXPRESSION_COMPLETED_INFERENCE         = 0x0004,
 };
 
 struct Inferred_Expression
@@ -628,7 +629,7 @@ Block* parse_top_level_from_memory(Compiler* ctx, String name, String code);
 ////////////////////////////////////////////////////////////////////////////////
 // Inference
 
-Unit* materialize_unit(Compiler* ctx, Block* initiator);
+Unit* materialize_unit(Compiler* ctx, Block* initiator, Block* materialized_parent = NULL);
 
 String vague_type_description(Unit* unit, Type type, bool point_out_soft_types = false);
 String vague_type_description_in_compile_time_context(Unit* unit, Type type);
