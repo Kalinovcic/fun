@@ -78,12 +78,15 @@ enum Atom: u32
     ATOM_CODE_BLOCK,            // code_block
     ATOM_GLOBAL,                // global
     ATOM_THREAD_LOCAL,          // thread_local
+    ATOM_UNIT,                  // unit
     ATOM_UNIT_LOCAL,            // unit_local
     ATOM_UNIT_DATA,             // unit_data
     ATOM_UNIT_CODE,             // unit_code
     ATOM_LABEL,                 // label
     ATOM_GOTO,                  // goto
     ATOM_DEBUG,                 // debug
+    ATOM_DEBUG_ALLOC,           // debug_alloc
+    ATOM_DEBUG_FREE,            // debug_free
     ATOM_IF,                    // if
     ATOM_ELSE,                  // else
     ATOM_WHILE,                 // while
@@ -221,6 +224,7 @@ enum Type: u32
     TYPE_SOFT_BLOCK,            // refers to a constant parsed block, not yet materialized
                                 // @Reconsider - materialized blocks do not have values at the moment,
                                 //               but we might need that for unit instantiation?
+    TYPE_SOFT_UNIT,
 
     TYPE_ONE_PAST_LAST_PRIMITIVE_TYPE,
 
@@ -241,7 +245,8 @@ inline bool is_primitive_type       (Type type) { return type >= TYPE_VOID  && t
 inline bool is_user_defined_type    (Type type) { return type >= TYPE_FIRST_USER_TYPE;                                    }
 inline bool is_type_type            (Type type) { return type == TYPE_TYPE  || type == TYPE_SOFT_TYPE;                    }
 inline bool is_block_type           (Type type) { return type == TYPE_SOFT_BLOCK;                                         }
-inline bool is_soft_type            (Type type) { return type == TYPE_SOFT_ZERO || type == TYPE_SOFT_NUMBER || type == TYPE_SOFT_BOOL || type == TYPE_SOFT_TYPE || type == TYPE_SOFT_BLOCK; }
+inline bool is_unit_type            (Type type) { return type == TYPE_SOFT_UNIT;                                          }
+inline bool is_soft_type            (Type type) { return type == TYPE_SOFT_ZERO || type == TYPE_SOFT_NUMBER || type == TYPE_SOFT_BOOL || type == TYPE_SOFT_TYPE || type == TYPE_SOFT_BLOCK || type == TYPE_SOFT_UNIT; }
 inline bool is_pointer_type         (Type type) { return get_indirection(type) > 0; }
 
 
@@ -278,6 +283,7 @@ enum Expression_Kind: u16
     EXPRESSION_NUMERIC_LITERAL,
     EXPRESSION_TYPE_LITERAL,
     EXPRESSION_BLOCK,
+    EXPRESSION_UNIT,
 
     EXPRESSION_NAME,
 
@@ -285,6 +291,9 @@ enum Expression_Kind: u16
     EXPRESSION_NEGATE,
     EXPRESSION_ADDRESS,
     EXPRESSION_DEREFERENCE,
+    EXPRESSION_DEBUG,
+    EXPRESSION_DEBUG_ALLOC,
+    EXPRESSION_DEBUG_FREE,
 
     // binary operators
     EXPRESSION_ASSIGNMENT,
@@ -307,8 +316,6 @@ enum Expression_Kind: u16
 
     // other
     EXPRESSION_DECLARATION,
-    EXPRESSION_RUN,
-    EXPRESSION_DEBUG,
 };
 
 enum: flags16
@@ -377,15 +384,9 @@ struct Parsed_Expression
 CompileTimeAssert(sizeof(Parsed_Expression) == 40);
 
 
-static constexpr u64 INVALID_CONSTANT_INDEX = U64_MAX;
+static constexpr u64 INVALID_CONSTANT       = U64_MAX;
 static constexpr u64 INVALID_STORAGE_SIZE   = U64_MAX;
 static constexpr u64 INVALID_STORAGE_OFFSET = U64_MAX;
-
-struct Soft_Block
-{
-    struct Block* materialized_parent;
-    struct Block* parsed_child;
-};
 
 enum: flags32
 {
@@ -400,16 +401,26 @@ struct Inferred_Expression
     u64           size;
     u64           offset;
     struct Block* called_block;
-    union
-    {
-        u64        constant_index;
-        bool       constant_bool;
-        Type       constant_type;
-        Soft_Block constant_block;
-    };
+    u64           constant;
 };
 
-CompileTimeAssert(sizeof(Inferred_Expression) == 48);
+CompileTimeAssert(sizeof(Inferred_Expression) == 40);
+
+
+struct Soft_Block
+{
+    struct Block* materialized_parent;
+    struct Block* parsed_child;
+};
+
+union Constant
+{
+    Fraction     number;
+    bool         boolean;
+    Type         type;
+    Soft_Block   block;
+    struct Unit* unit;
+};
 
 
 enum Wait_Reason: u32
@@ -436,6 +447,7 @@ enum: flags32
     BLOCK_HAS_BLOCK_PARAMETER = 0x0004,
     BLOCK_RUNTIME_ALLOCATED   = 0x0008,
     BLOCK_IS_TOP_LEVEL        = 0x0010,
+    BLOCK_IS_UNIT             = 0x0020,
 };
 
 struct Block
@@ -449,9 +461,12 @@ struct Block
     Array<Expression const> imperative_order;
 
     // Filled out in inference:
-    Block* materialized_from;
+    struct Unit* materialized_by_unit;
+    Block*       materialized_from;
     Array<struct Inferred_Expression> inferred_expressions;  // parallel to parsed_expressions
-    Dynamic_Array<Fraction> constants;
+    Dynamic_Array<Constant> constants;
+
+    Unit*        unit;  // set only for BLOCK_IS_UNIT
 
     Table(Expression, Wait_Info, hash_u32) waiting_expressions;
 
@@ -579,12 +594,28 @@ u64  get_type_size        (Unit* unit, Type type);
 u64  get_type_alignment   (Unit* unit, Type type);
 void allocate_unit_storage(Unit* unit, Type type, u64* out_size, u64* out_offset);
 
+Constant* get_constant(Block* block, Expression expr, Type type_assertion);
+void set_constant(Block* block, Expression expr, Type type_assertion, Constant* value);
+
+inline void set_constant_number(Block* block, Expression expr, Fraction   value) {                Constant c = {}; c.number  = value; set_constant(block, expr, TYPE_SOFT_NUMBER, &c); }
+inline void set_constant_bool  (Block* block, Expression expr, bool       value) {                Constant c = {}; c.boolean = value; set_constant(block, expr, TYPE_SOFT_BOOL,   &c); }
+inline void set_constant_type  (Block* block, Expression expr, Type       value) {                Constant c = {}; c.type    = value; set_constant(block, expr, TYPE_SOFT_TYPE,   &c); }
+inline void set_constant_block (Block* block, Expression expr, Soft_Block value) {                Constant c = {}; c.block   = value; set_constant(block, expr, TYPE_SOFT_BLOCK,  &c); }
+inline void set_constant_unit  (Block* block, Expression expr, Unit*      value) { assert(value); Constant c = {}; c.unit    = value; set_constant(block, expr, TYPE_SOFT_UNIT,   &c); }
+
+inline Fraction   const* get_constant_number(Block* block, Expression expr) { Constant* c = get_constant(block, expr, TYPE_SOFT_NUMBER); return c ? &c->number  : NULL; }
+inline bool       const* get_constant_bool  (Block* block, Expression expr) { Constant* c = get_constant(block, expr, TYPE_SOFT_BOOL);   return c ? &c->boolean : NULL; }
+inline Type       const* get_constant_type  (Block* block, Expression expr) { Constant* c = get_constant(block, expr, TYPE_SOFT_TYPE);   return c ? &c->type    : NULL; }
+inline Soft_Block const* get_constant_block (Block* block, Expression expr) { Constant* c = get_constant(block, expr, TYPE_SOFT_BLOCK);  return c ? &c->block   : NULL; }
+inline Unit*             get_constant_unit  (Block* block, Expression expr) { Constant* c = get_constant(block, expr, TYPE_SOFT_UNIT);   return c ?  c->unit    : NULL; }
+
 bool pump_pipeline(Compiler* ctx);
 
 
 ////////////////////////////////////////////////////////////////////////////////
 // Runtime
 
+void allocate_unit_storage(Unit* unit);
 void run_unit(Unit* unit);
 
 

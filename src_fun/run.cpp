@@ -139,6 +139,65 @@ static Memory* run_expression(Unit* unit, byte* storage, Block* block, Expressio
         address = (Memory*) op->as_address;
     } break;
 
+    case EXPRESSION_DEBUG:
+    {
+        auto* op_infer = &block->inferred_expressions[expr->unary_operand];
+        switch (op_infer->type)
+        {
+        case TYPE_VOID:                 printf("void\n"); break;
+        case TYPE_SOFT_ZERO:            printf("zero\n"); break;
+        case TYPE_SOFT_NUMBER:
+        {
+            String str = fract_display(get_constant_number(block, expr->unary_operand));
+            printf("%.*s\n", StringArgs(str));
+        } break;
+        case TYPE_SOFT_BOOL:            printf("%s\n", *get_constant_bool(block, expr->unary_operand) ? "true" : "false"); break;
+        case TYPE_SOFT_TYPE:
+        {
+            String type = exact_type_description(unit, *get_constant_type(block, expr->unary_operand));
+            printf("%.*s\n", StringArgs(type));
+        } break;
+        case TYPE_SOFT_BLOCK:
+        {
+            Token_Info info;
+            {
+                Soft_Block constant_block = *get_constant_block(block, expr->unary_operand);
+                Token_Info* from_info = get_token_info(unit->ctx, &constant_block.parsed_child->from);
+                Token_Info* to_info   = get_token_info(unit->ctx, &constant_block.parsed_child->to);
+                info = *from_info;
+                info.length = to_info->offset + to_info->length - from_info->offset;
+            }
+            String location = Report(unit->ctx).snippet(info, false, 0, 0).return_without_reporting();
+            printf("<soft block>\n%.*s\n", StringArgs(location));
+        } break;
+        default:
+            Memory* value = run_expression(unit, storage, block, expr->unary_operand);
+            if (is_pointer_type(op_infer->type))
+                printf("%p\n", value->as_address);
+            else
+                specialize(op_infer->type, value, [](auto* v)
+                {
+                    String text = Format(temp, "%", *v);
+                    printf("%.*s\n", StringArgs(text));
+                });
+        }
+    } break;
+
+    case EXPRESSION_DEBUG_ALLOC:
+    {
+        Type type = infer->type;
+        assert(is_pointer_type(type));
+        Type to_alloc = set_indirection(type, get_indirection(type) - 1);
+        umm size = get_type_size(unit, to_alloc);
+        // @Reconsider - what about alignment?
+        address->as_address = alloc<byte>(NULL, size);
+    } break;
+
+    case EXPRESSION_DEBUG_FREE:
+    {
+        NotImplemented;
+    } break;
+
     case EXPRESSION_ASSIGNMENT:
     {
         u64 size = infer->size;
@@ -168,11 +227,12 @@ static Memory* run_expression(Unit* unit, byte* storage, Block* block, Expressio
 
     case EXPRESSION_CAST:
     {
-        if (infer->constant_index != INVALID_CONSTANT_INDEX)
+        if (is_soft_type(block->inferred_expressions[expr->binary.rhs].type))
         {
             if (is_integer_type(infer->type))
             {
-                Fraction* fract = &block->constants[infer->constant_index];
+                Fraction const* fract = get_constant_number(block, expr->binary.rhs);
+                assert(fract);
                 assert(fract_is_integer(fract));
 
                 u64 abs = 0;
@@ -273,49 +333,6 @@ static Memory* run_expression(Unit* unit, byte* storage, Block* block, Expressio
         }
     } break;
 
-    case EXPRESSION_DEBUG:
-    {
-        auto* op_infer = &block->inferred_expressions[expr->unary_operand];
-        switch (op_infer->type)
-        {
-        case TYPE_VOID:                 printf("void\n"); break;
-        case TYPE_SOFT_ZERO:            printf("zero\n"); break;
-        case TYPE_SOFT_NUMBER:
-        {
-            String str = fract_display(&block->constants[op_infer->constant_index]);
-            printf("%.*s\n", StringArgs(str));
-        } break;
-        case TYPE_SOFT_BOOL:            printf("%s\n", op_infer->constant_bool ? "true" : "false"); break;
-        case TYPE_SOFT_TYPE:
-        {
-            String type = exact_type_description(unit, op_infer->constant_type);
-            printf("%.*s\n", StringArgs(type));
-        } break;
-        case TYPE_SOFT_BLOCK:
-        {
-            Token_Info info;
-            {
-                Token_Info* from_info = get_token_info(unit->ctx, &op_infer->constant_block.parsed_child->from);
-                Token_Info* to_info   = get_token_info(unit->ctx, &op_infer->constant_block.parsed_child->to);
-                info = *from_info;
-                info.length = to_info->offset + to_info->length - from_info->offset;
-            }
-            String location = Report(unit->ctx).snippet(info, false, 0, 0).return_without_reporting();
-            printf("<soft block>\n%.*s\n", StringArgs(location));
-        } break;
-        default:
-            Memory* value = run_expression(unit, storage, block, expr->unary_operand);
-            if (is_pointer_type(op_infer->type))
-                printf("%p\n", value->as_address);
-            else
-                specialize(op_infer->type, value, [](auto* v)
-                {
-                    String text = Format(temp, "%", *v);
-                    printf("%.*s\n", StringArgs(text));
-                });
-        }
-    } break;
-
     IllegalDefaultCase;
     }
 
@@ -336,14 +353,18 @@ static void run_block(Unit* unit, byte* storage, Block* block)
 }
 
 
-static void allocate_remaining_unit_storage(Unit* unit, Block* block)
+static void allocate_block_storage(Unit* unit, Block* block)
 {
+    assert(block->materialized_by_unit == unit);
+    if (block->flags & BLOCK_RUNTIME_ALLOCATED)
+        return;
+
     for (umm i = 0; i < block->inferred_expressions.count; i++)
     {
         auto* expr  = &block->parsed_expressions[i];
         auto* infer = &block->inferred_expressions[i];
         if (infer->called_block)
-            allocate_remaining_unit_storage(unit, infer->called_block);
+            allocate_block_storage(unit, infer->called_block);
 
         if (infer->flags & INFERRED_EXPRESSION_IS_NOT_EVALUATED_AT_RUNTIME) continue;
         if (infer->offset != INVALID_STORAGE_OFFSET) continue;
@@ -360,9 +381,14 @@ static void allocate_remaining_unit_storage(Unit* unit, Block* block)
     block->flags |= BLOCK_RUNTIME_ALLOCATED;
 }
 
+void allocate_unit_storage(Unit* unit)
+{
+    allocate_block_storage(unit, unit->entry_block);
+}
+
 void run_unit(Unit* unit)
 {
-    allocate_remaining_unit_storage(unit, unit->entry_block);
+    allocate_unit_storage(unit);
     byte* storage = alloc<byte>(NULL, unit->next_storage_offset);
     Defer(free(storage));
 

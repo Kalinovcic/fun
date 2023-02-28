@@ -3,6 +3,33 @@
 // debug a + b;
 
 
+/*Vec :: ()
+{
+    a: f64;
+    b: f64;
+}
+
+unit(Vec)*/
+
+
+
+U :: unit
+{
+    debug 42069;
+}
+U();
+
+// goto(&U, debug_alloc sizeof U);
+
+
+/*
+poo := debug_alloc u32;
+debug poo;
+*poo = cast(u32, 123);
+debug *poo;
+debug &poo;
+debug_free poo;
+
 if cast(u64, 1)
 {
     x: u32 = cast(u32, 123);
@@ -19,7 +46,6 @@ if cast(u64, 1)
     debug 69;
 }
 
-/*
 set_to_69 :: (what: &u64)
 {
     *what = cast(u64, 69);
@@ -85,7 +111,7 @@ debug var2;
 
 *ptr = *ptr + cast(u32, 1);
 debug var;
-
+*/
 
 
 /*
@@ -120,7 +146,4 @@ proc_b :: ()
 }
 
 proc_b();
-*/
-
-
 */

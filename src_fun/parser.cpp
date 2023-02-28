@@ -369,9 +369,21 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
         expr->flags |= EXPRESSION_BLOCK_IS_IMPORTED;
         expr->parsed_block = imported_block;
     }
-    else if (maybe_take_atom(stream, ATOM_MINUS))     { if (!make_unary(EXPRESSION_NEGATE,      parse_flags))                                 return false; }
-    else if (maybe_take_atom(stream, ATOM_AMPERSAND)) { if (!make_unary(EXPRESSION_ADDRESS,     InheritFlags(PARSE_ALLOW_INFERRED_TYPE_ALIAS))) return false; }
-    else if (maybe_take_atom(stream, ATOM_STAR))      { if (!make_unary(EXPRESSION_DEREFERENCE, InheritFlags(PARSE_ALLOW_INFERRED_TYPE_ALIAS))) return false; }
+    else if (maybe_take_atom(stream, ATOM_UNIT))
+    {
+        Block* block = parse_block(stream, BLOCK_IS_UNIT);
+        if (!block)
+            return false;
+
+        Parsed_Expression* expr = add_expression(builder, EXPRESSION_UNIT, start, stream->cursor - 1, out_expression);
+        expr->parsed_block = block;
+    }
+    else if (maybe_take_atom(stream, ATOM_MINUS))       { if (!make_unary(EXPRESSION_NEGATE,      parse_flags))                                   return false; }
+    else if (maybe_take_atom(stream, ATOM_AMPERSAND))   { if (!make_unary(EXPRESSION_ADDRESS,     InheritFlags(PARSE_ALLOW_INFERRED_TYPE_ALIAS))) return false; }
+    else if (maybe_take_atom(stream, ATOM_STAR))        { if (!make_unary(EXPRESSION_DEREFERENCE, InheritFlags(PARSE_ALLOW_INFERRED_TYPE_ALIAS))) return false; }
+    else if (maybe_take_atom(stream, ATOM_DEBUG))       { if (!make_unary(EXPRESSION_DEBUG,       parse_flags))                                   return false; }
+    else if (maybe_take_atom(stream, ATOM_DEBUG_ALLOC)) { if (!make_unary(EXPRESSION_DEBUG_ALLOC, parse_flags))                                   return false; }
+    else if (maybe_take_atom(stream, ATOM_DEBUG_FREE))  { if (!make_unary(EXPRESSION_DEBUG_FREE,  parse_flags))                                   return false; }
     else if (maybe_take_atom(stream, ATOM_ZERO))  add_expression(builder, EXPRESSION_ZERO,  start, start, out_expression);
     else if (maybe_take_atom(stream, ATOM_TRUE))  add_expression(builder, EXPRESSION_TRUE,  start, start, out_expression);
     else if (maybe_take_atom(stream, ATOM_FALSE)) add_expression(builder, EXPRESSION_FALSE, start, start, out_expression);
@@ -532,15 +544,6 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
         expr->branch.condition  = expression;
         expr->branch.on_success = if_true;
         expr->branch.on_failure = NO_EXPRESSION;
-    }
-    else if (maybe_take_atom(stream, ATOM_DEBUG))
-    {
-        Expression expression;
-        if (!parse_expression(stream, builder, &expression, parse_flags))
-            return false;
-
-        Parsed_Expression* expr = add_expression(builder, EXPRESSION_DEBUG, start, stream->cursor - 1, out_expression);
-        expr->unary_operand = expression;
     }
     else
     {

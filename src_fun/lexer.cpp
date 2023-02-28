@@ -48,12 +48,15 @@ static void lex_init(Compiler* ctx)
     AddKeyword(ATOM_CODE_BLOCK,   "code_block"_s);
     AddKeyword(ATOM_GLOBAL,       "global"_s);
     AddKeyword(ATOM_THREAD_LOCAL, "thread_local"_s);
+    AddKeyword(ATOM_UNIT,         "unit"_s);
     AddKeyword(ATOM_UNIT_LOCAL,   "unit_local"_s);
     AddKeyword(ATOM_UNIT_DATA,    "unit_data"_s);
     AddKeyword(ATOM_UNIT_CODE,    "unit_code"_s);
     AddKeyword(ATOM_LABEL,        "label"_s);
     AddKeyword(ATOM_GOTO,         "goto"_s);
     AddKeyword(ATOM_DEBUG,        "debug"_s);
+    AddKeyword(ATOM_DEBUG_ALLOC,  "debug_alloc"_s);
+    AddKeyword(ATOM_DEBUG_FREE,   "debug_free"_s);
     AddKeyword(ATOM_IF,           "if"_s);
     AddKeyword(ATOM_ELSE,         "else"_s);
     AddKeyword(ATOM_WHILE,        "while"_s);
