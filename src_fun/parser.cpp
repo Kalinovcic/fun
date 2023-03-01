@@ -347,7 +347,7 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
     else if (maybe_take_atom(stream, ATOM_IMPORT))
     {
         Token* name = stream->cursor;
-        if (!take_atom(stream, ATOM_STRING, "Expected a string literal as the import path after 'import'."_s))
+        if (!take_atom(stream, ATOM_STRING_LITERAL, "Expected a string literal as the import path after 'import'."_s))
             return false;
 
         Token_Info_String* info = (Token_Info_String*) get_token_info(stream->ctx, name);
@@ -385,9 +385,14 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
     else if (maybe_take_atom(stream, ATOM_ZERO))  add_expression(builder, EXPRESSION_ZERO,  start, start, out_expression);
     else if (maybe_take_atom(stream, ATOM_TRUE))  add_expression(builder, EXPRESSION_TRUE,  start, start, out_expression);
     else if (maybe_take_atom(stream, ATOM_FALSE)) add_expression(builder, EXPRESSION_FALSE, start, start, out_expression);
-    else if (maybe_take_atom(stream, ATOM_NUMBER))
+    else if (maybe_take_atom(stream, ATOM_NUMBER_LITERAL))
     {
         Parsed_Expression* expr = add_expression(builder, EXPRESSION_NUMERIC_LITERAL, start, start, out_expression);
+        expr->literal = *start;
+    }
+    else if (maybe_take_atom(stream, ATOM_STRING_LITERAL))
+    {
+        Parsed_Expression* expr = add_expression(builder, EXPRESSION_STRING_LITERAL, start, start, out_expression);
         expr->literal = *start;
     }
     else if (maybe_take_atom(stream, ATOM_VOID))   make_type_literal(TYPE_VOID);
@@ -395,18 +400,18 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
     else if (maybe_take_atom(stream, ATOM_U16))    make_type_literal(TYPE_U16);
     else if (maybe_take_atom(stream, ATOM_U32))    make_type_literal(TYPE_U32);
     else if (maybe_take_atom(stream, ATOM_U64))    make_type_literal(TYPE_U64);
+    else if (maybe_take_atom(stream, ATOM_UMM))    make_type_literal(TYPE_UMM);
     else if (maybe_take_atom(stream, ATOM_S8))     make_type_literal(TYPE_S8);
     else if (maybe_take_atom(stream, ATOM_S16))    make_type_literal(TYPE_S16);
     else if (maybe_take_atom(stream, ATOM_S32))    make_type_literal(TYPE_S32);
     else if (maybe_take_atom(stream, ATOM_S64))    make_type_literal(TYPE_S64);
+    else if (maybe_take_atom(stream, ATOM_SMM))    make_type_literal(TYPE_SMM);
     else if (maybe_take_atom(stream, ATOM_F16))    make_type_literal(TYPE_F16);
     else if (maybe_take_atom(stream, ATOM_F32))    make_type_literal(TYPE_F32);
     else if (maybe_take_atom(stream, ATOM_F64))    make_type_literal(TYPE_F64);
-    else if (maybe_take_atom(stream, ATOM_BOOL8))  make_type_literal(TYPE_BOOL8);
-    else if (maybe_take_atom(stream, ATOM_BOOL16)) make_type_literal(TYPE_BOOL16);
-    else if (maybe_take_atom(stream, ATOM_BOOL32)) make_type_literal(TYPE_BOOL32);
-    else if (maybe_take_atom(stream, ATOM_BOOL64)) make_type_literal(TYPE_BOOL64);
+    else if (maybe_take_atom(stream, ATOM_BOOL))   make_type_literal(TYPE_BOOL);
     else if (maybe_take_atom(stream, ATOM_TYPE))   make_type_literal(TYPE_TYPE);
+    else if (maybe_take_atom(stream, ATOM_STRING)) make_type_literal(TYPE_STRING);
     else if (maybe_take_atom(stream, ATOM_BLOCK))  return ReportError(stream->ctx, start, "The 'block' keyword can only be used for the type of the last parameter of a block."_s);
     else if (maybe_take_atom(stream, ATOM_FIRST_IDENTIFIER))
     {
@@ -490,6 +495,9 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
     }
     else if (maybe_take_atom(stream, ATOM_DOLLAR))
     {
+        if (maybe_take_atom(stream, ATOM_IF))
+            goto parse_baked_if;
+
         if (!(original_parse_flags & PARSE_ALLOW_INFERRED_TYPE_ALIAS))
             return ReportError(stream->ctx, stream->cursor - 1, "Inferred type alias is not allowed here, as there would be nowhere to infer the type from."_s);
 
@@ -524,6 +532,12 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
     }
     else if (maybe_take_atom(stream, ATOM_IF))
     {
+        bool is_baked;
+        if (false) parse_baked_if:
+            is_baked = true;
+        else
+            is_baked = false;
+
         Expression expression;
         if (!parse_expression(stream, builder, &expression, parse_flags))
             return false;
@@ -540,6 +554,12 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
                 return false;
 
         Parsed_Expression* expr = add_expression(builder, EXPRESSION_BRANCH, start, stream->cursor - 1, out_expression);
+        if (is_baked)
+        {
+            expr->flags |= EXPRESSION_BRANCH_IS_BAKED;
+            if (if_true  != NO_EXPRESSION) builder->expressions[if_true ].flags |= EXPRESSION_HAS_CONDITIONAL_INFERENCE;
+            if (if_false != NO_EXPRESSION) builder->expressions[if_false].flags |= EXPRESSION_HAS_CONDITIONAL_INFERENCE;
+        }
         expr->branch.condition  = expression;
         expr->branch.on_success = if_true;
         expr->branch.on_failure = if_false;
@@ -675,6 +695,8 @@ static bool parse_expression(Token_Stream* stream, Block_Builder* builder, Expre
             case EXPRESSION_LESS_OR_EQUAL:     return 2;
             case EXPRESSION_ADD:               return 3;
             case EXPRESSION_SUBTRACT:          return 3;
+            case EXPRESSION_POINTER_ADD:       return 3;
+            case EXPRESSION_POINTER_SUBTRACT:  return 3;
             case EXPRESSION_MULTIPLY:          return 4;
             case EXPRESSION_DIVIDE_WHOLE:      return 4;
             case EXPRESSION_DIVIDE_FRACTIONAL: return 4;
@@ -707,18 +729,20 @@ static bool parse_expression(Token_Stream* stream, Block_Builder* builder, Expre
     while (true)
     {
         Expression_Kind op;
-             if (maybe_take_atom(stream, ATOM_EQUAL))         op = EXPRESSION_ASSIGNMENT;
-        else if (maybe_take_atom(stream, ATOM_PLUS))          op = EXPRESSION_ADD;
-        else if (maybe_take_atom(stream, ATOM_MINUS))         op = EXPRESSION_SUBTRACT;
-        else if (maybe_take_atom(stream, ATOM_STAR))          op = EXPRESSION_MULTIPLY;
-        else if (maybe_take_atom(stream, ATOM_BANG_SLASH))    op = EXPRESSION_DIVIDE_WHOLE;
-        else if (maybe_take_atom(stream, ATOM_PERCENT_SLASH)) op = EXPRESSION_DIVIDE_FRACTIONAL;
-        else if (maybe_take_atom(stream, ATOM_EQUAL))         op = EXPRESSION_EQUAL;
-        else if (maybe_take_atom(stream, ATOM_BANG_EQUAL))    op = EXPRESSION_NOT_EQUAL;
-        else if (maybe_take_atom(stream, ATOM_GREATER))       op = EXPRESSION_GREATER_THAN;
-        else if (maybe_take_atom(stream, ATOM_GREATER_EQUAL)) op = EXPRESSION_GREATER_OR_EQUAL;
-        else if (maybe_take_atom(stream, ATOM_LESS))          op = EXPRESSION_LESS_THAN;
-        else if (maybe_take_atom(stream, ATOM_LESS_EQUAL))    op = EXPRESSION_LESS_OR_EQUAL;
+             if (maybe_take_atom(stream, ATOM_EQUAL))           op = EXPRESSION_ASSIGNMENT;
+        else if (maybe_take_atom(stream, ATOM_PLUS))            op = EXPRESSION_ADD;
+        else if (maybe_take_atom(stream, ATOM_MINUS))           op = EXPRESSION_SUBTRACT;
+        else if (maybe_take_atom(stream, ATOM_STAR))            op = EXPRESSION_MULTIPLY;
+        else if (maybe_take_atom(stream, ATOM_BANG_SLASH))      op = EXPRESSION_DIVIDE_WHOLE;
+        else if (maybe_take_atom(stream, ATOM_PERCENT_SLASH))   op = EXPRESSION_DIVIDE_FRACTIONAL;
+        else if (maybe_take_atom(stream, ATOM_AMPERSAND_PLUS))  op = EXPRESSION_POINTER_ADD;
+        else if (maybe_take_atom(stream, ATOM_AMPERSAND_MINUS)) op = EXPRESSION_POINTER_SUBTRACT;
+        else if (maybe_take_atom(stream, ATOM_EQUAL))           op = EXPRESSION_EQUAL;
+        else if (maybe_take_atom(stream, ATOM_BANG_EQUAL))      op = EXPRESSION_NOT_EQUAL;
+        else if (maybe_take_atom(stream, ATOM_GREATER))         op = EXPRESSION_GREATER_THAN;
+        else if (maybe_take_atom(stream, ATOM_GREATER_EQUAL))   op = EXPRESSION_GREATER_OR_EQUAL;
+        else if (maybe_take_atom(stream, ATOM_LESS))            op = EXPRESSION_LESS_THAN;
+        else if (maybe_take_atom(stream, ATOM_LESS_EQUAL))      op = EXPRESSION_LESS_OR_EQUAL;
         else if (maybe_take_atom(stream, ATOM_SLASH))
         {
             return ReportError(stream->ctx, stream->cursor - 1,

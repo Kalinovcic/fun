@@ -3,8 +3,31 @@
 // debug a + b;
 
 
+consume :: (res: &string, str: &string, n: umm)
+{
+    res.length = n;
+    res.base   = str.base;
+    str.length = str.length - n;
+    str.base   = str.base  &+ n;
+}
+
+asdf: string = "asdf";
+consume(&lhs: string, &asdf, cast(umm, 1));
+debug lhs;
+debug asdf;
+
+$if false
+{
+    debug "yayyyy";
+}
+else
+{
+    debug "wot?";
+}
 
 
+
+/*
 U :: unit
 {
     x: u64 = cast(u64, 420);
@@ -120,7 +143,7 @@ test :: ($T: type, v: u64)
 test(u32, cast(u64, 123));
 
 
-print :: ($b: u32, $c: bool8)
+print :: ($b: u32, $c: bool)
  => debug b;
 
 if cast(u64, 1)
@@ -148,7 +171,7 @@ repeat :: ($N: u32, $a: block)
 }
 
 repeat(N)
- => debug 69;
+ => debug "ello! ^_^";
 
 
 two_blocks :: ($a: block, $b: block)
@@ -179,7 +202,7 @@ debug var2;
 
 *ptr = *ptr + cast(u32, 1);
 debug var;
-
+*/
 
 /*proc1  :: (x: u32) { debug x; }
 proc2  :: (x: u32) { proc1 (x * cast(u32, 2) + cast(u32, 0)); proc1 (x * cast(u32, 2) + cast(u32, 1)); }

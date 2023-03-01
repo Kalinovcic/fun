@@ -38,6 +38,17 @@ extern "C" int main(int argc, char** argv)
     Compiler* ctx = &compiler;
     Defer(free_compiler(ctx));
 
+    Unit* preload_unit = materialize_unit(ctx, parse_top_level_from_memory(ctx, "<preload>"_s, R"XXX(
+        `string`@ :: struct
+        {
+            length: umm;
+            base: &u8;
+        }
+    )XXX"_s));
+    assert(preload_unit);
+    assert(pump_pipeline(ctx));
+    assert(get_identifier(ctx, &get_user_type_data(ctx, TYPE_STRING)->alias) == "string"_s);
+
     Block* main;
     if (non_flag_args.count == 2)
         main = parse_top_level_from_memory(ctx, "<string>"_s, concatenate(temp, "debug "_s, non_flag_args[1], ";"_s));

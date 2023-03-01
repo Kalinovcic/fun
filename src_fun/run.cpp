@@ -12,15 +12,6 @@ EnterApplicationNamespace
 
 #define TRACE 0
 
-
-template <typename Base>
-struct Boolean
-{
-    Base value;
-    inline operator bool() { return value; }
-    inline void operator=(bool v) { this->value = v ? 1 : 0; }
-};
-
 union Memory
 {
     byte  base[0];
@@ -29,16 +20,20 @@ union Memory
     u16   as_u16;
     u32   as_u32;
     u64   as_u64;
+    u64   as_umm;
     s8    as_s8;
     s16   as_s16;
     s32   as_s32;
     s64   as_s64;
+    smm   as_smm;
     f32   as_f32;
     f64   as_f64;
-    Boolean<u8>  as_bool8;
-    Boolean<u16> as_bool16;
-    Boolean<u32> as_bool32;
-    Boolean<u64> as_bool64;
+    struct
+    {
+        u8 value;
+        inline operator bool()        { return value; }
+        inline void operator=(bool v) { value = v ? 1 : 0; }
+    } as_bool;
 };
 
 static void run_block(Unit* unit, byte* storage, Block* block);
@@ -77,16 +72,15 @@ static Memory* run_expression(Unit* unit, byte* storage, Block* block, Expressio
         case TYPE_U16:    lambda(&memory->as_u16);    break;
         case TYPE_U32:    lambda(&memory->as_u32);    break;
         case TYPE_U64:    lambda(&memory->as_u64);    break;
+        case TYPE_UMM:    lambda(&memory->as_umm);    break;
         case TYPE_S8:     lambda(&memory->as_s8);     break;
         case TYPE_S16:    lambda(&memory->as_s16);    break;
         case TYPE_S32:    lambda(&memory->as_s32);    break;
         case TYPE_S64:    lambda(&memory->as_s64);    break;
+        case TYPE_SMM:    lambda(&memory->as_smm);    break;
         case TYPE_F32:    lambda(&memory->as_f32);    break;
         case TYPE_F64:    lambda(&memory->as_f64);    break;
-        case TYPE_BOOL8:  lambda(&memory->as_bool8);  break;
-        case TYPE_BOOL16: lambda(&memory->as_bool16); break;
-        case TYPE_BOOL32: lambda(&memory->as_bool32); break;
-        case TYPE_BOOL64: lambda(&memory->as_bool64); break;
+        case TYPE_BOOL:   lambda(&memory->as_bool);   break;
         IllegalDefaultCase;
         }
     };
@@ -102,11 +96,11 @@ static Memory* run_expression(Unit* unit, byte* storage, Block* block, Expressio
 
     auto specialize_logic_binary = [&](auto&& lambda)
     {
-        assert(infer->type == TYPE_BOOL8);
+        assert(infer->type == TYPE_BOOL);
         assert(block->inferred_expressions[expr->binary.lhs].type == block->inferred_expressions[expr->binary.rhs].type);
         Memory* lhs = run_expression(unit, storage, block, expr->binary.lhs);
         Memory* rhs = run_expression(unit, storage, block, expr->binary.rhs);
-        specialize(infer->type, lhs, [&](auto* lhs) { lambda(&address->as_bool8, lhs, (decltype(lhs)) rhs); });
+        specialize(infer->type, lhs, [&](auto* lhs) { lambda(&address->as_bool, lhs, (decltype(lhs)) rhs); });
     };
 
     switch (expr->kind)
@@ -116,6 +110,15 @@ static Memory* run_expression(Unit* unit, byte* storage, Block* block, Expressio
     case EXPRESSION_TRUE:                   Unreachable;
     case EXPRESSION_FALSE:                  Unreachable;
     case EXPRESSION_NUMERIC_LITERAL:        Unreachable;
+
+    case EXPRESSION_STRING_LITERAL:
+    {
+        assert(expr->literal.atom == ATOM_STRING_LITERAL);
+        Token_Info_String* token = (Token_Info_String*) get_token_info(unit->ctx, &expr->literal);
+        assert(infer->size == sizeof(String));
+        *(String*) address = token->value;
+    } break;
+
     case EXPRESSION_BLOCK:                  Unreachable;
 
     case EXPRESSION_NAME: break;
@@ -123,6 +126,8 @@ static Memory* run_expression(Unit* unit, byte* storage, Block* block, Expressio
     case EXPRESSION_MEMBER:
     {
         Memory* lhs = run_expression(unit, storage, block, expr->member.lhs);
+        if (is_pointer_type(block->inferred_expressions[expr->member.lhs].type))
+            lhs = (Memory*) lhs->as_address;
         address = (Memory*)((byte*) lhs + infer->offset);
     } break;
 
@@ -196,6 +201,8 @@ static Memory* run_expression(Unit* unit, byte* storage, Block* block, Expressio
                 printf("%p\n", value->as_address);
             else if (op_infer->type == TYPE_TYPE)
                 printf("type id %u\n", value->as_u32);
+            else if (op_infer->type == TYPE_STRING)
+                printf("%.*s\n", StringArgs(*(String*) value));
             else
                 specialize(op_infer->type, value, [](auto* v)
                 {
@@ -241,6 +248,35 @@ static Memory* run_expression(Unit* unit, byte* storage, Block* block, Expressio
     // @Reconsider
     case EXPRESSION_DIVIDE_WHOLE:       specialize_numeric_binary([](auto* v, auto* l, auto* r) { *v = *l / *r; }); break;
     case EXPRESSION_DIVIDE_FRACTIONAL:  specialize_numeric_binary([](auto* v, auto* l, auto* r) { *v = *l / *r; }); break;
+
+    case EXPRESSION_POINTER_ADD:
+    {
+        auto* lhs_infer = &block->inferred_expressions[expr->binary.lhs];
+        auto* rhs_infer = &block->inferred_expressions[expr->binary.rhs];
+        assert(infer    ->size == sizeof(umm));
+        assert(lhs_infer->size == sizeof(umm));
+        assert(rhs_infer->size == sizeof(umm));
+
+        Memory* lhs = run_expression(unit, storage, block, expr->binary.lhs);
+        Memory* rhs = run_expression(unit, storage, block, expr->binary.rhs);
+
+        if (is_pointer_type(lhs_infer->type))
+        {
+            Type pointer_type = lhs_infer->type;
+            Type element_type = set_indirection(pointer_type, get_indirection(pointer_type) - 1);
+            umm  element_size = get_type_size(unit, element_type);
+            address->as_umm = lhs->as_umm + rhs->as_umm * element_size;
+        }
+        else
+        {
+            Type pointer_type = rhs_infer->type;
+            Type element_type = set_indirection(pointer_type, get_indirection(pointer_type) - 1);
+            umm  element_size = get_type_size(unit, element_type);
+            address->as_umm = rhs->as_umm + lhs->as_umm * element_size;
+        }
+    } break;
+
+    case EXPRESSION_POINTER_SUBTRACT: NotImplemented;
 
     case EXPRESSION_EQUAL:              specialize_logic_binary([](auto* v, auto* l, auto* r) { *v = *l == *r; }); break;
     case EXPRESSION_NOT_EQUAL:          specialize_logic_binary([](auto* v, auto* l, auto* r) { *v = *l != *r; }); break;
@@ -297,7 +333,14 @@ static Memory* run_expression(Unit* unit, byte* storage, Block* block, Expressio
 
     case EXPRESSION_BRANCH:
     {
-        if (expr->branch.condition == NO_EXPRESSION)
+        if (expr->flags & EXPRESSION_BRANCH_IS_BAKED)
+        {
+            if (expr->branch.on_success != NO_EXPRESSION && block->inferred_expressions[expr->branch.on_success].flags & INFERRED_EXPRESSION_CONDITION_ENABLED)
+                run_expression(unit, storage, block, expr->branch.on_success);
+            else if (expr->branch.on_failure != NO_EXPRESSION && block->inferred_expressions[expr->branch.on_failure].flags & INFERRED_EXPRESSION_CONDITION_ENABLED)
+                run_expression(unit, storage, block, expr->branch.on_failure);
+        }
+        else if (expr->branch.condition == NO_EXPRESSION)
         {
             assert(expr->branch.on_success != NO_EXPRESSION);
             run_expression(unit, storage, block, expr->branch.on_success);

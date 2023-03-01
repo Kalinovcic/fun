@@ -30,18 +30,18 @@ static void lex_init(Compiler* ctx)
     AddKeyword(ATOM_U16,          "u16"_s);
     AddKeyword(ATOM_U32,          "u32"_s);
     AddKeyword(ATOM_U64,          "u64"_s);
+    AddKeyword(ATOM_UMM,          "umm"_s);
     AddKeyword(ATOM_S8,           "s8"_s);
     AddKeyword(ATOM_S16,          "s16"_s);
     AddKeyword(ATOM_S32,          "s32"_s);
     AddKeyword(ATOM_S64,          "s64"_s);
+    AddKeyword(ATOM_SMM,          "smm"_s);
     AddKeyword(ATOM_F16,          "f16"_s);
     AddKeyword(ATOM_F32,          "f32"_s);
     AddKeyword(ATOM_F64,          "f64"_s);
-    AddKeyword(ATOM_BOOL8,        "bool8"_s);
-    AddKeyword(ATOM_BOOL16,       "bool16"_s);
-    AddKeyword(ATOM_BOOL32,       "bool32"_s);
-    AddKeyword(ATOM_BOOL64,       "bool64"_s);
+    AddKeyword(ATOM_BOOL,         "bool"_s);
     AddKeyword(ATOM_STRUCT,       "struct"_s);
+    AddKeyword(ATOM_STRING,       "string"_s);
     AddKeyword(ATOM_IMPORT,       "import"_s);
     AddKeyword(ATOM_TYPE,         "type"_s);
     AddKeyword(ATOM_BLOCK,        "block"_s);
@@ -289,7 +289,7 @@ bool lex_from_memory(Compiler* ctx, String name, String code, Array<Token>* out_
             }
 
             Token* token = reserve_item(&tokens);
-            token->atom       = ATOM_NUMBER;
+            token->atom       = ATOM_NUMBER_LITERAL;
             token->info_index = ctx->token_info_number.count;
 
             Token_Info_Number* info = reserve_item(&ctx->token_info_number);
@@ -442,7 +442,7 @@ bool lex_from_memory(Compiler* ctx, String name, String code, Array<Token>* out_
             }
 
             Token* token = reserve_item(&tokens);
-            token->atom       = ATOM_STRING;
+            token->atom       = ATOM_STRING_LITERAL;
             token->info_index = ctx->token_info_string.count;
 
             Token_Info_String* info = reserve_item(&ctx->token_info_string);
@@ -544,15 +544,35 @@ bool lex_from_memory(Compiler* ctx, String name, String code, Array<Token>* out_
                 assert(write - literal.data == literal_length);
             }
 
-            Token* token = reserve_item(&tokens);
-            token->atom       = ATOM_STRING;
-            token->info_index = ctx->token_info_string.count;
+            if (cursor < end && *cursor == '@')
+            {
+                cursor++;
 
-            Token_Info_String* info = reserve_item(&ctx->token_info_string);
-            info->source_index = source_index;
-            info->offset       = start_cursor - start;
-            info->length       = cursor - start_cursor;
-            info->value        = literal;
+                Atom atom = ctx->next_identifier_atom;
+                ctx->next_identifier_atom = (Atom)(ctx->next_identifier_atom + 1);
+                add_item(&ctx->identifiers, &literal);
+
+                Token* token = reserve_item(&tokens);
+                token->atom       = atom;
+                token->info_index = ctx->token_info_other.count;
+
+                Token_Info* info = reserve_item(&ctx->token_info_other);
+                info->source_index = source_index;
+                info->offset       = start_cursor - start;
+                info->length       = cursor - start_cursor;
+            }
+            else
+            {
+                Token* token = reserve_item(&tokens);
+                token->atom       = ATOM_STRING_LITERAL;
+                token->info_index = ctx->token_info_string.count;
+
+                Token_Info_String* info = reserve_item(&ctx->token_info_string);
+                info->source_index = source_index;
+                info->offset       = start_cursor - start;
+                info->length       = cursor - start_cursor;
+                info->value        = literal;
+            }
             continue;
         }
 
@@ -625,7 +645,12 @@ bool lex_from_memory(Compiler* ctx, String name, String code, Array<Token>* out_
             cursor++, atom = ATOM_PERCENT;
             if (cursor < end && *cursor == '/') cursor++, atom = ATOM_PERCENT_SLASH;
         }
-        else if (c == '&') cursor++, atom = ATOM_AMPERSAND;
+        else if (c == '&')
+        {
+            cursor++, atom = ATOM_AMPERSAND;
+                 if (cursor < end && *cursor == '+') cursor++, atom = ATOM_AMPERSAND_PLUS;
+            else if (cursor < end && *cursor == '-') cursor++, atom = ATOM_AMPERSAND_MINUS;
+        }
         else if (c == '!')
         {
             cursor++, atom = ATOM_BANG;

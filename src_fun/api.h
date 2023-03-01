@@ -46,8 +46,8 @@ enum Atom: u32
     ATOM_INVALID,
 
     // literals
-    ATOM_NUMBER,                // any numeric literal
-    ATOM_STRING,                // any string literal
+    ATOM_NUMBER_LITERAL,        // any numeric literal
+    ATOM_STRING_LITERAL,        // any string literal
     ATOM_ZERO,                  // zero
     ATOM_TRUE,                  // true
     ATOM_FALSE,                 // false
@@ -58,18 +58,18 @@ enum Atom: u32
     ATOM_U16,                   // u16
     ATOM_U32,                   // u32
     ATOM_U64,                   // u64
+    ATOM_UMM,                   // umm
     ATOM_S8,                    // s8
     ATOM_S16,                   // s16
     ATOM_S32,                   // s32
     ATOM_S64,                   // s64
+    ATOM_SMM,                   // smm
     ATOM_F16,                   // f16
     ATOM_F32,                   // f32
     ATOM_F64,                   // f64
-    ATOM_BOOL8,                 // bool8
-    ATOM_BOOL16,                // bool16
-    ATOM_BOOL32,                // bool32
-    ATOM_BOOL64,                // bool64
+    ATOM_BOOL,                  // bool
     ATOM_STRUCT,                // struct
+    ATOM_STRING,                // string
 
     // keywords
     ATOM_IMPORT,                // import
@@ -121,6 +121,8 @@ enum Atom: u32
     ATOM_PERCENT_SLASH,         // %/
     ATOM_PERCENT,               // %
     ATOM_AMPERSAND,             // &
+    ATOM_AMPERSAND_PLUS,        // &+
+    ATOM_AMPERSAND_MINUS,       // &-
     ATOM_BANG,                  // !
     ATOM_EQUAL_GREATER,         // =>
     ATOM_EQUAL_EQUAL,           // ==
@@ -208,19 +210,18 @@ enum Type: u32
     TYPE_U16,
     TYPE_U32,
     TYPE_U64,
+    TYPE_UMM,
     TYPE_S8,
     TYPE_S16,
     TYPE_S32,
     TYPE_S64,
+    TYPE_SMM,
     TYPE_F16,
     TYPE_F32,
     TYPE_F64,
     TYPE_SOFT_NUMBER,           // this is the type of compile-time evaluated floating-point expressions
 
-    TYPE_BOOL8,
-    TYPE_BOOL16,
-    TYPE_BOOL32,
-    TYPE_BOOL64,
+    TYPE_BOOL,
     TYPE_SOFT_BOOL,             // this is the type of compile-time evaluated logic expressions
 
     TYPE_TYPE,
@@ -233,18 +234,20 @@ enum Type: u32
     TYPE_ONE_PAST_LAST_PRIMITIVE_TYPE,
 
     TYPE_FIRST_USER_TYPE = TYPE_ONE_PAST_LAST_PRIMITIVE_TYPE,
+    TYPE_STRING = TYPE_FIRST_USER_TYPE,
 };
 
 inline Type get_base_type  (Type type)                  { return (Type)(type & TYPE_BASE_MASK); }
 inline u32  get_indirection(Type type)                  { return type >> TYPE_POINTER_SHIFT; }
 inline Type set_indirection(Type type, u32 indirection) { return (Type)((type & TYPE_BASE_MASK) | (indirection << TYPE_POINTER_SHIFT)); }
 
-inline bool is_integer_type         (Type type) { return type >= TYPE_U8    && type <= TYPE_S64;                          }
-inline bool is_unsigned_integer_type(Type type) { return type >= TYPE_U8    && type <= TYPE_U64;                          }
-inline bool is_signed_integer_type  (Type type) { return type >= TYPE_S8    && type <= TYPE_S64;                          }
+inline bool is_integer_type         (Type type) { return type >= TYPE_U8    && type <= TYPE_SMM;                          }
+inline bool is_unsigned_integer_type(Type type) { return type >= TYPE_U8    && type <= TYPE_UMM;                          }
+inline bool is_signed_integer_type  (Type type) { return type >= TYPE_S8    && type <= TYPE_SMM;                          }
+inline bool is_pointer_integer_type (Type type) { return type == TYPE_UMM || type == TYPE_SMM;                            }
 inline bool is_floating_point_type  (Type type) { return type >= TYPE_F16   && type <= TYPE_F64;                          }
 inline bool is_numeric_type         (Type type) { return is_integer_type(type) || is_floating_point_type(type) || type == TYPE_SOFT_NUMBER; }
-inline bool is_bool_type            (Type type) { return type >= TYPE_BOOL8 && type <= TYPE_SOFT_BOOL;                    }
+inline bool is_bool_type            (Type type) { return type == TYPE_BOOL || type == TYPE_SOFT_BOOL;                     }
 inline bool is_primitive_type       (Type type) { return type >= TYPE_VOID  && type < TYPE_ONE_PAST_LAST_PRIMITIVE_TYPE;  }
 inline bool is_user_defined_type    (Type type) { return get_indirection(type) == 0 && type >= TYPE_FIRST_USER_TYPE;      }
 inline bool is_type_type            (Type type) { return type == TYPE_TYPE  || type == TYPE_SOFT_TYPE;                    }
@@ -285,6 +288,7 @@ enum Expression_Kind: u16
     EXPRESSION_TRUE,
     EXPRESSION_FALSE,
     EXPRESSION_NUMERIC_LITERAL,
+    EXPRESSION_STRING_LITERAL,
     EXPRESSION_TYPE_LITERAL,
     EXPRESSION_BLOCK,
     EXPRESSION_UNIT,
@@ -310,6 +314,8 @@ enum Expression_Kind: u16
     EXPRESSION_MULTIPLY,
     EXPRESSION_DIVIDE_WHOLE,
     EXPRESSION_DIVIDE_FRACTIONAL,
+    EXPRESSION_POINTER_ADD,
+    EXPRESSION_POINTER_SUBTRACT,
     EXPRESSION_EQUAL,
     EXPRESSION_NOT_EQUAL,
     EXPRESSION_GREATER_THAN,
@@ -339,6 +345,8 @@ enum: flags16
     EXPRESSION_DECLARATION_IS_INFERRED_ALIAS = 0x0080,
     EXPRESSION_HAS_TO_BE_EXTERNALLY_INFERRED = 0x0100,
     EXPRESSION_DECLARATION_IS_UNINITIALIZED  = 0x0200,
+    EXPRESSION_BRANCH_IS_BAKED               = 0x0400,
+    EXPRESSION_HAS_CONDITIONAL_INFERENCE     = 0x0800,
 };
 
 struct Parsed_Expression
@@ -408,6 +416,8 @@ enum: flags32
     INFERRED_EXPRESSION_IS_NOT_EVALUATED_AT_RUNTIME = 0x0001,
     INFERRED_EXPRESSION_DOES_NOT_ALLOCATE_STORAGE   = 0x0002,
     INFERRED_EXPRESSION_COMPLETED_INFERENCE         = 0x0004,
+    INFERRED_EXPRESSION_CONDITION_DISABLED          = 0x0008,
+    INFERRED_EXPRESSION_CONDITION_ENABLED           = 0x0010,
 };
 
 struct Inferred_Expression
@@ -455,6 +465,7 @@ enum Wait_Reason: u32
     WAITING_ON_PARAMETER_INFERENCE,  // a call expression can wait for the callee to infer its parameter types
     WAITING_ON_EXTERNAL_INFERENCE,   // an alias parameter declaration can wait for the caller to infer it,
                                      // or an inferred type alias can wait for its surrounding expression to infer it
+    WAITING_ON_CONDITION_INFERENCE,  // a call expression of a baked branch can wait for the condition to be inferred
 };
 
 struct Wait_Info
@@ -592,9 +603,9 @@ bool lex_file(Compiler* ctx, String path, Array<Token>* out_tokens);
 
 inline Token_Info* get_token_info(Compiler* ctx, Token const* token)
 {
-    if (token->atom == ATOM_NUMBER)
+    if (token->atom == ATOM_NUMBER_LITERAL)
         return &ctx->token_info_number[token->info_index];
-    if (token->atom == ATOM_STRING)
+    if (token->atom == ATOM_STRING_LITERAL)
         return &ctx->token_info_string[token->info_index];
     return &ctx->token_info_other[token->info_index];
 }

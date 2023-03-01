@@ -111,11 +111,11 @@ String vague_type_description(Unit* unit, Type type, bool point_out_soft_types)
     {
     // run-time values
     case TYPE_VOID:        return "a void value"_s;
-    case TYPE_U8: case TYPE_U16: case TYPE_U32: case TYPE_U64:
-    case TYPE_S8: case TYPE_S16: case TYPE_S32: case TYPE_S64:
+    case TYPE_U8:  case TYPE_U16: case TYPE_U32: case TYPE_U64: case TYPE_UMM:
+    case TYPE_S8:  case TYPE_S16: case TYPE_S32: case TYPE_S64: case TYPE_SMM:
     case TYPE_F16: case TYPE_F32: case TYPE_F64:
     case TYPE_SOFT_NUMBER: return "a numeric value"_s;
-    case TYPE_BOOL8: case TYPE_BOOL16: case TYPE_BOOL32: case TYPE_BOOL64:
+    case TYPE_BOOL:
     case TYPE_SOFT_BOOL:   return "a bool value"_s;
     case TYPE_TYPE:
     case TYPE_SOFT_TYPE:   return "a type value"_s;
@@ -151,18 +151,17 @@ String exact_type_description(Unit* unit, Type type)
     case TYPE_U16:         return "u16"_s;
     case TYPE_U32:         return "u32"_s;
     case TYPE_U64:         return "u64"_s;
+    case TYPE_UMM:         return "umm"_s;
     case TYPE_S8:          return "s8"_s;
     case TYPE_S16:         return "s16"_s;
     case TYPE_S32:         return "s32"_s;
     case TYPE_S64:         return "s64"_s;
+    case TYPE_SMM:         return "smm"_s;
     case TYPE_F16:         return "f16"_s;
     case TYPE_F32:         return "f32"_s;
     case TYPE_F64:         return "f64"_s;
     case TYPE_SOFT_NUMBER: return "compile-time number"_s;
-    case TYPE_BOOL8:       return "bool8"_s;
-    case TYPE_BOOL16:      return "bool16"_s;
-    case TYPE_BOOL32:      return "bool32"_s;
-    case TYPE_BOOL64:      return "bool64"_s;
+    case TYPE_BOOL:        return "bool"_s;
     case TYPE_SOFT_BOOL:   return "compile-time bool"_s;
     case TYPE_TYPE:        return "type"_s;
     case TYPE_SOFT_TYPE:   return "compile-time type"_s;
@@ -311,18 +310,17 @@ u64 get_type_size(Unit* unit, Type type)
     case TYPE_U16:         return 2;
     case TYPE_U32:         return 4;
     case TYPE_U64:         return 8;
+    case TYPE_UMM:         return unit->pointer_size;
     case TYPE_S8:          return 1;
     case TYPE_S16:         return 2;
     case TYPE_S32:         return 4;
     case TYPE_S64:         return 8;
+    case TYPE_SMM:         return unit->pointer_size;
     case TYPE_F16:         return 2;
     case TYPE_F32:         return 4;
     case TYPE_F64:         return 8;
     case TYPE_SOFT_NUMBER: Unreachable;
-    case TYPE_BOOL8:       return 1;
-    case TYPE_BOOL16:      return 2;
-    case TYPE_BOOL32:      return 4;
-    case TYPE_BOOL64:      return 8;
+    case TYPE_BOOL:        return 1;
     case TYPE_SOFT_BOOL:   Unreachable;
     case TYPE_TYPE:        return 4;
     case TYPE_SOFT_TYPE:   Unreachable;
@@ -623,6 +621,21 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
     #define InferenceComplete() return (complete_expression(block, id), YIELD_COMPLETED)
 
 
+    if (expr->flags & EXPRESSION_HAS_CONDITIONAL_INFERENCE)
+    {
+        if (infer->flags & INFERRED_EXPRESSION_CONDITION_DISABLED)
+        {
+            infer->flags |= INFERRED_EXPRESSION_IS_NOT_EVALUATED_AT_RUNTIME;
+            infer->flags |= INFERRED_EXPRESSION_DOES_NOT_ALLOCATE_STORAGE;
+            InferType(TYPE_VOID);
+            InferenceComplete();
+        }
+        if (!(infer->flags & INFERRED_EXPRESSION_CONDITION_ENABLED))
+        {
+            Wait(WAITING_ON_CONDITION_INFERENCE, NO_EXPRESSION, NULL);
+        }
+    }
+
     if (expr->flags & EXPRESSION_HAS_TO_BE_EXTERNALLY_INFERRED)
         Wait(WAITING_ON_EXTERNAL_INFERENCE, NO_EXPRESSION, NULL);
 
@@ -640,10 +653,16 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
         InferenceComplete();
     } break;
 
+    case EXPRESSION_STRING_LITERAL:
+    {
+        InferType(TYPE_STRING);
+        InferenceComplete();
+    } break;
+
     case EXPRESSION_TYPE_LITERAL:
     {
         InferType(TYPE_SOFT_TYPE);
-        assert(is_primitive_type(expr->parsed_type));
+        assert(is_primitive_type(expr->parsed_type) || expr->parsed_type == TYPE_STRING);
         set_constant_type(block, id, expr->parsed_type);
         InferenceComplete();
     } break;
@@ -703,10 +722,13 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
         Type lhs_type = block->inferred_expressions[expr->member.lhs].type;
         if (lhs_type == INVALID_TYPE)
             WaitOperand(expr->member.lhs);
-        if (!is_user_defined_type(lhs_type))
+        Type user_type = lhs_type;
+        if (is_pointer_type(user_type))
+            user_type = set_indirection(user_type, get_indirection(user_type) - 1);
+        if (!is_user_defined_type(user_type))
             Error("Expected a unit type on the left side of the '.' operator, but got %.", vague_type_description(unit, lhs_type));
 
-        User_Type* data = get_user_type_data(unit->ctx, lhs_type);
+        User_Type* data = get_user_type_data(unit->ctx, user_type);
         assert(data->unit);
         Block* member_block = data->unit->entry_block;
         assert(member_block);
@@ -717,7 +739,7 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
             if (!find_declaration(&expr->member.name, member_block, ALL_VISIBILITY, &resolved.scope, &resolved.declaration, /* allow_parent_traversal */ false))
             {
                 String identifier = get_identifier(unit->ctx, &expr->member.name);
-                String error = Format(temp, "Can't find member '%' in %.", identifier, exact_type_description(unit, lhs_type));
+                String error = Format(temp, "Can't find member '%' in %.", identifier, exact_type_description(unit, user_type));
                 helpful_error_for_missing_name(unit->ctx, error, &expr->member.name,
                                                member_block, ALL_VISIBILITY, /* allow_parent_traversal */ false);
                 return YIELD_ERROR;
@@ -1024,6 +1046,35 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
         InferenceComplete();
     } break;
 
+    case EXPRESSION_POINTER_ADD:
+    {
+        Type lhs_type = block->inferred_expressions[expr->binary.lhs].type;
+        Type rhs_type = block->inferred_expressions[expr->binary.rhs].type;
+        if (lhs_type == INVALID_TYPE) WaitOperand(expr->binary.lhs);
+        if (rhs_type == INVALID_TYPE) WaitOperand(expr->binary.rhs);
+
+        Type pointer_type, integer_type;
+        if (is_pointer_type(lhs_type))
+            pointer_type = lhs_type, integer_type = rhs_type;
+        else
+            pointer_type = rhs_type, integer_type = lhs_type;
+
+        if (!is_pointer_type(pointer_type) || !is_pointer_integer_type(integer_type))
+            Error("Operands to '&+' must be a pointer and a pointer-sized integer."
+                  "    lhs: %\n"
+                  "    rhs: %",
+                  exact_type_description(unit, lhs_type),
+                  exact_type_description(unit, rhs_type));
+
+        InferType(pointer_type);
+        InferenceComplete();
+    } break;
+
+    case EXPRESSION_POINTER_SUBTRACT:
+    {
+        NotImplemented;
+    } break;
+
     case EXPRESSION_EQUAL:            NotImplemented;
     case EXPRESSION_NOT_EQUAL:        NotImplemented;
     case EXPRESSION_GREATER_THAN:     NotImplemented;
@@ -1094,30 +1145,79 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
 
     case EXPRESSION_BRANCH:
     {
-        if (expr->branch.condition != NO_EXPRESSION)
+        Expression condition  = expr->branch.condition;
+        Expression on_success = expr->branch.on_success;
+        Expression on_failure = expr->branch.on_failure;
+        if (condition != NO_EXPRESSION)
         {
-            Type type = block->inferred_expressions[expr->branch.condition].type;
-            if (type == INVALID_TYPE) WaitOperand(expr->branch.condition);
-            if (!is_integer_type(type) && !is_bool_type(type))
-                Error("Expected an integer or boolean value as the condition, but got %.", vague_type_description(unit, type));
-            if (is_soft_type(type))
-                Error("@Incomplete - condition may not be a compile-time value");
+            Type type = block->inferred_expressions[condition].type;
+            if (type == INVALID_TYPE) WaitOperand(condition);
+
+            if (expr->flags & EXPRESSION_BRANCH_IS_BAKED)
+            {
+                bool baked_condition;
+                if (type == TYPE_SOFT_NUMBER)
+                {
+                    Fraction const* value = get_constant_number(block, condition);
+                    if (!value) WaitOperand(condition);
+                    baked_condition = !fract_is_zero(value);
+                }
+                else if (type == TYPE_SOFT_BOOL)
+                {
+                    bool const* value = get_constant_bool(block, condition);
+                    if (!value) WaitOperand(condition);
+                    baked_condition = *value;
+                }
+                else
+                    Error("Expected a compile-time integer or boolean value as the condition, but got %.", vague_type_description_in_compile_time_context(unit, type));
+
+                if (baked_condition)
+                {
+                    if (on_success != NO_EXPRESSION) block->inferred_expressions[on_success].flags |= INFERRED_EXPRESSION_CONDITION_ENABLED;
+                    if (on_failure != NO_EXPRESSION) block->inferred_expressions[on_failure].flags |= INFERRED_EXPRESSION_CONDITION_DISABLED;
+                }
+                else
+                {
+                    if (on_success != NO_EXPRESSION) block->inferred_expressions[on_success].flags |= INFERRED_EXPRESSION_CONDITION_DISABLED;
+                    if (on_failure != NO_EXPRESSION) block->inferred_expressions[on_failure].flags |= INFERRED_EXPRESSION_CONDITION_ENABLED;
+                }
+            }
+            else
+            {
+                if (!is_integer_type(type) && !is_bool_type(type))
+                    Error("Expected an integer or boolean value as the condition, but got %.", vague_type_description(unit, type));
+                if (is_soft_type(type))
+                    Error("@Incomplete - condition may not be a compile-time value");
+            }
+        }
+        else
+        {
+            assert(!(expr->flags & EXPRESSION_BRANCH_IS_BAKED));
+        }
+
+        if (on_success != NO_EXPRESSION && block->inferred_expressions[on_success].flags & INFERRED_EXPRESSION_CONDITION_DISABLED) on_success = NO_EXPRESSION;
+        if (on_failure != NO_EXPRESSION && block->inferred_expressions[on_failure].flags & INFERRED_EXPRESSION_CONDITION_DISABLED) on_failure = NO_EXPRESSION;
+
+        if (on_success == NO_EXPRESSION && on_failure == NO_EXPRESSION)
+        {
+            InferType(TYPE_VOID);
+            InferenceComplete();
         }
 
         Type success_type = INVALID_TYPE;
         Type failure_type = INVALID_TYPE;
-        if (expr->branch.on_success != NO_EXPRESSION)
+        if (on_success != NO_EXPRESSION)
         {
-            success_type = block->inferred_expressions[expr->branch.on_success].type;
-            if (success_type == INVALID_TYPE) WaitOperand(expr->branch.on_success);
+            success_type = block->inferred_expressions[on_success].type;
+            if (success_type == INVALID_TYPE) WaitOperand(on_success);
         }
-        if (expr->branch.on_failure != NO_EXPRESSION)
+        if (on_failure != NO_EXPRESSION)
         {
-            failure_type = block->inferred_expressions[expr->branch.on_failure].type;
-            if (failure_type == INVALID_TYPE) WaitOperand(expr->branch.on_failure);
+            failure_type = block->inferred_expressions[on_failure].type;
+            if (failure_type == INVALID_TYPE) WaitOperand(on_failure);
         }
 
-        if (success_type != INVALID_TYPE && failure_type != INVALID_TYPE)
+        if (on_success != NO_EXPRESSION && on_failure != NO_EXPRESSION)
             if (success_type != failure_type)
                 Error("The expression yields a different type depending on the condition.\n"
                       "On success, it yields %.\n"
@@ -1125,7 +1225,7 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
                       exact_type_description(unit, success_type),
                       exact_type_description(unit, failure_type));
 
-        InferType(success_type);
+        InferType(on_success != NO_EXPRESSION ? success_type : failure_type);
         InferenceComplete();
     } break;
 
