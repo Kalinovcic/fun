@@ -366,6 +366,7 @@ static void set_inferred_type(Block* block, Expression id, Type type)
     auto* expr  = &block->parsed_expressions[id];
     auto* infer = &block->inferred_expressions[id];
 
+    assert(!(infer->flags & INFERRED_EXPRESSION_COMPLETED_INFERENCE));
     assert(type != INVALID_TYPE);
     if (infer->type == INVALID_TYPE)
     {
@@ -401,6 +402,7 @@ Constant* get_constant(Block* block, Expression expr, Type type_assertion)
 void set_constant(Block* block, Expression expr, Type type_assertion, Constant* value)
 {
     auto* infer = &block->inferred_expressions[expr];
+    assert(!(infer->flags & INFERRED_EXPRESSION_COMPLETED_INFERENCE));
     assert(infer->type == type_assertion);
     assert(infer->constant == INVALID_CONSTANT);
     infer->constant = block->constants.count;
@@ -1213,6 +1215,7 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
 
                 param_infer->flags |= INFERRED_EXPRESSION_IS_NOT_EVALUATED_AT_RUNTIME;
                 set_inferred_type(callee, param_id, arg_type);
+                complete_expression(callee, param_id);
                 override_made_progress = true;  // We made progress by inferring the callee's param type.
             }
 
