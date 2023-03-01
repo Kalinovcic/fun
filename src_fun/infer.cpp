@@ -1043,28 +1043,34 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
         if (lhs_infer->type != TYPE_SOFT_TYPE)
             Error("The first operand to 'cast' is not known at compile-time.");
 
-        if (!is_numeric_type(rhs_infer->type))  // @Incomplete
-            Error("Expected a numeric value as the second operand to 'cast', but got %.", vague_type_description(unit, rhs_infer->type));
-
         Type const* cast_type_ptr = get_constant_type(block, expr->binary.lhs);
         if (!cast_type_ptr) WaitOperand(expr->binary.lhs);
         Type cast_type = *cast_type_ptr;
-        if (!is_numeric_type(cast_type))
-            Error("Expected a numeric type as the first operand to 'cast', but got %.", exact_type_description(unit, cast_type));
 
+        assert(!is_soft_type(cast_type));
         InferType(cast_type);
 
-        if (rhs_infer->type == TYPE_SOFT_NUMBER)
+        if (cast_type == TYPE_TYPE)
         {
-            Fraction const* fraction = get_constant_number(block, expr->binary.rhs);
-            if (!fraction) WaitOperand(expr->binary.rhs);
-            if (!check_constant_fits_in_runtime_type(unit, &block->parsed_expressions[expr->binary.rhs], fraction, cast_type))
-                return YIELD_ERROR;
+            if (!is_type_type(rhs_infer->type))  // @Incomplete
+                Error("Expected a type value as the second operand to 'cast', but got %.", vague_type_description(unit, rhs_infer->type));
+        }
+        else if (is_numeric_type(cast_type))
+        {
+            if (!is_numeric_type(rhs_infer->type))  // @Incomplete
+                Error("Expected a numeric value as the second operand to 'cast', but got %.", vague_type_description(unit, rhs_infer->type));
+
+            if (rhs_infer->type == TYPE_SOFT_NUMBER)
+            {
+                Fraction const* fraction = get_constant_number(block, expr->binary.rhs);
+                if (!fraction) WaitOperand(expr->binary.rhs);
+                if (!check_constant_fits_in_runtime_type(unit, &block->parsed_expressions[expr->binary.rhs], fraction, cast_type))
+                    return YIELD_ERROR;
+            }
         }
         else
         {
-            assert(!is_soft_type(rhs_infer->type));
-            // @Incomplete - check if cast is possible
+            Error("Type '%' can't be cast to.", exact_type_description(unit, cast_type));
         }
 
         InferenceComplete();

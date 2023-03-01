@@ -20,6 +20,10 @@ debug storage.x;
 debug storage.y;
 
 
+runtime_type := cast(type, u32);
+debug runtime_type;
+
+
 
 adder_coroutine :: unit
 {

@@ -194,6 +194,8 @@ static Memory* run_expression(Unit* unit, byte* storage, Block* block, Expressio
             Memory* value = run_expression(unit, storage, block, expr->unary_operand);
             if (is_pointer_type(op_infer->type))
                 printf("%p\n", value->as_address);
+            else if (op_infer->type == TYPE_TYPE)
+                printf("type id %u\n", value->as_u32);
             else
                 specialize(op_infer->type, value, [](auto* v)
                 {
@@ -263,6 +265,11 @@ static Memory* run_expression(Unit* unit, byte* storage, Block* block, Expressio
                 if (fract->num.negative)
                     abs = -abs;
                 memcpy(address->base, &abs, infer->size);
+            }
+            else if (infer->type == TYPE_TYPE)
+            {
+                assert(infer->size == 4);
+                address->as_u32 = *get_constant_type(block, expr->binary.rhs);
             }
             else NotImplemented;
         }
