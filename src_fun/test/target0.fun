@@ -158,9 +158,9 @@ two_blocks :: ($a: block, $b: block)
     a();
 }
 
-two_blocks((() => debug 123), (() => debug 456));
+two_blocks(() => debug 123, () => debug 456);
 
-two_blocks((() => debug 123))
+two_blocks(() => debug 123)
  => debug 456;
 
 

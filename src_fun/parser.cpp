@@ -603,7 +603,7 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
                     return false;
 
                 Expression value;
-                if (!parse_expression(stream, builder, reserve_item(&args), parse_flags))
+                if (!parse_expression(stream, builder, reserve_item(&args), parse_flags | PARSE_ALLOW_BLOCKS))
                     return false;
             }
 
