@@ -142,7 +142,6 @@ repeat :: ($N: u32, $a: block)
     while n
     {
         a();
-        debug n;
         n = n - cast(u8, 1);
     }
     foo();
@@ -150,6 +149,20 @@ repeat :: ($N: u32, $a: block)
 
 repeat(N)
  => debug 69;
+
+
+two_blocks :: ($a: block, $b: block)
+{
+    a();
+    b();
+    a();
+}
+
+two_blocks((() => debug 123), (() => debug 456));
+
+two_blocks((() => debug 123))
+ => debug 456;
+
 
 a := cast(s64, POO :: 123); debug -a;
 b := cast(s64, POO * 2);    debug -b;
@@ -168,8 +181,7 @@ debug var2;
 debug var;
 
 
-/*
-proc1  :: (x: u32) { debug x; }
+/*proc1  :: (x: u32) { debug x; }
 proc2  :: (x: u32) { proc1 (x * cast(u32, 2) + cast(u32, 0)); proc1 (x * cast(u32, 2) + cast(u32, 1)); }
 proc3  :: (x: u32) { proc2 (x * cast(u32, 2) + cast(u32, 0)); proc2 (x * cast(u32, 2) + cast(u32, 1)); }
 proc4  :: (x: u32) { proc3 (x * cast(u32, 2) + cast(u32, 0)); proc3 (x * cast(u32, 2) + cast(u32, 1)); }
@@ -185,8 +197,7 @@ proc13 :: (x: u32) { proc12(x * cast(u32, 2) + cast(u32, 0)); proc12(x * cast(u3
 proc14 :: (x: u32) { proc13(x * cast(u32, 2) + cast(u32, 0)); proc13(x * cast(u32, 2) + cast(u32, 1)); }
 proc15 :: (x: u32) { proc14(x * cast(u32, 2) + cast(u32, 0)); proc14(x * cast(u32, 2) + cast(u32, 1)); }
 proc16 :: (x: u32) { proc15(x * cast(u32, 2) + cast(u32, 0)); proc15(x * cast(u32, 2) + cast(u32, 1)); }
-proc16(cast(u32, 0));
-*/
+proc16(cast(u32, 0));*/
 
 /*
 proc_a :: ()

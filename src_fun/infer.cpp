@@ -1148,14 +1148,6 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
             if (block->inferred_expressions[args->expressions[arg]].type == INVALID_TYPE)
                 WaitOperand(args->expressions[arg]);
 
-        if (expr->call.block != NO_EXPRESSION)
-        {
-            auto* block_infer = &block->inferred_expressions[expr->call.block];
-            if (block_infer->type == INVALID_TYPE) WaitOperand(expr->call.block);
-            if (block_infer->type != TYPE_SOFT_BLOCK)
-                Error("Internal error: Expected a block as the baked block parameter. But this should always be the case? It's %.", exact_type_description(unit, block_infer->type));
-        }
-
         String callee_name = "Callee"_s;
         if (soft_callee->has_alias)
             callee_name = get_identifier(unit->ctx, &soft_callee->alias);
@@ -1168,20 +1160,13 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
             Block* lhs_block  = soft_callee->parsed_child;
             assert(lhs_block);
 
-            bool expects_block = lhs_block->flags & BLOCK_HAS_BLOCK_PARAMETER;
-            bool have_block    = expr->call.block != NO_EXPRESSION;
-            if (expects_block && !have_block) Error("% expects a block parameter.",        callee_name);
-            if (!expects_block && have_block) Error("% doesn't expect a block parameter.", callee_name);
-
-            umm regular_parameter_count = 0;
+            umm parameter_count = 0;
             For (lhs_block->imperative_order)
                 if (lhs_block->parsed_expressions[*it].flags & EXPRESSION_DECLARATION_IS_PARAMETER)
-                    regular_parameter_count++;
-            if (expects_block)
-                regular_parameter_count--;
-            if (regular_parameter_count != args->count)
+                    parameter_count++;
+            if (parameter_count != args->count)
                 Error("% expects % %, but you provided %.",
-                    callee_name, regular_parameter_count, plural(regular_parameter_count, "argument"_s, "arguments"_s),
+                    callee_name, parameter_count, plural(parameter_count, "argument"_s, "arguments"_s),
                     args->count);
 
             // Now materialize the callee
@@ -1257,114 +1242,107 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
             assert(param_type_ptr);
             Type param_type = *param_type_ptr;
 
-            if (args->count == parameter_index)
+            assert(args->count > parameter_index);
+            auto  arg_id    = args->expressions[parameter_index];
+            auto* arg_expr  = &block->parsed_expressions  [arg_id];
+            auto* arg_infer = &block->inferred_expressions[arg_id];
+            Type  arg_type  = arg_infer->type;
+            if (param_expr->flags & EXPRESSION_DECLARATION_IS_ALIAS)
             {
                 if (param_infer->type != INVALID_TYPE) continue;  // already inferred
 
-                // The last parameter, which isn't in our expression list but is in the callee's
-                // parameter scope, is the block parameter.
-                assert(param_type == TYPE_SOFT_BLOCK);
-                assert(param_expr->flags & EXPRESSION_DECLARATION_IS_ALIAS);
-                assert(expr->call.block != NO_EXPRESSION);
-                assert(block->inferred_expressions[expr->call.block].type == TYPE_SOFT_BLOCK);
-
-                Soft_Block const* soft = get_constant_block(block, expr->call.block);
-                if (!soft)
+                if (is_numeric_type(param_type))
                 {
-                    waiting_on_an_argument = expr->call.block;
-                    continue;
-                }
+                    if (is_floating_point_type(param_type))
+                        NotImplemented;
 
-                set_inferred_type(callee, param_id, TYPE_SOFT_BLOCK);
-                set_constant_block(callee, param_id, *soft);
-                complete_expression(callee, param_id);
-                override_made_progress = true;  // We made progress by inferring the callee's param type.
+                    if (arg_type != TYPE_SOFT_NUMBER)
+                        Error("Argument #% ('%') is expected to be a compile-time integer, but is %.",
+                            parameter_index + 1, param_name,
+                            vague_type_description_in_compile_time_context(unit, arg_type));
+
+                    Fraction const* fraction = get_constant_number(block, arg_id);
+                    if (!fraction)
+                    {
+                        waiting_on_an_argument = arg_id;
+                        continue;
+                    }
+                    if (!fract_is_integer(fraction))
+                        Error("Argument #% ('%') is expected to be a compile-time integer, but is fractional.\n"
+                              "Value is %.", parameter_index + 1, param_name, fract_display(fraction));
+
+                    if (!check_constant_fits_in_runtime_type(unit, arg_expr, fraction, param_type))
+                        return YIELD_ERROR;
+
+                    set_inferred_type(callee, param_id, TYPE_SOFT_NUMBER);
+                    set_constant_number(callee, param_id, fract_clone(fraction));
+                    complete_expression(callee, param_id);
+                    override_made_progress = true;  // We made progress by inferring the callee's param type.
+                }
+                else if (is_bool_type(param_type))
+                {
+                    if (arg_type != TYPE_SOFT_BOOL)
+                        Error("Argument #% ('%') is expected to be a compile-time boolean, but is %.",
+                            parameter_index + 1, param_name,
+                            vague_type_description_in_compile_time_context(unit, arg_type));
+                    bool const* constant = get_constant_bool(block, arg_id);
+                    if (!constant)
+                    {
+                        waiting_on_an_argument = arg_id;
+                        continue;
+                    }
+                    set_inferred_type(callee, param_id, TYPE_SOFT_BOOL);
+                    set_constant_bool(callee, param_id, *constant);
+                    complete_expression(callee, param_id);
+                    override_made_progress = true;  // We made progress by inferring the callee's param type.
+                }
+                else if (param_type == TYPE_TYPE)
+                {
+                    if (arg_type != TYPE_SOFT_TYPE)
+                        Error("Argument #% ('%') is expected to be a compile-time type, but is %.",
+                            parameter_index + 1, param_name,
+                            vague_type_description_in_compile_time_context(unit, arg_type));
+                    Type const* constant = get_constant_type(block, arg_id);
+                    if (!constant)
+                    {
+                        waiting_on_an_argument = arg_id;
+                        continue;
+                    }
+                    set_inferred_type(callee, param_id, TYPE_SOFT_TYPE);
+                    set_constant_type(callee, param_id, *constant);
+                    complete_expression(callee, param_id);
+                    override_made_progress = true;  // We made progress by inferring the callee's param type.
+                }
+                else if (param_type == TYPE_SOFT_BLOCK)
+                {
+                    if (arg_type != TYPE_SOFT_BLOCK)
+                        Error("Argument #% ('%') is expected to be a block, but is %.",
+                            parameter_index + 1, param_name,
+                            vague_type_description_in_compile_time_context(unit, arg_type));
+
+                    Soft_Block const* soft = get_constant_block(block, arg_id);
+                    if (!soft)
+                    {
+                        waiting_on_an_argument = arg_id;
+                        continue;
+                    }
+
+                    set_inferred_type(callee, param_id, TYPE_SOFT_BLOCK);
+                    set_constant_block(callee, param_id, *soft);
+                    complete_expression(callee, param_id);
+                    override_made_progress = true;  // We made progress by inferring the callee's param type.
+                }
+                else Unreachable;
             }
             else
             {
-                assert(args->count > parameter_index);
-                auto  arg_id    = args->expressions[parameter_index];
-                auto* arg_expr  = &block->parsed_expressions  [arg_id];
-                auto* arg_infer = &block->inferred_expressions[arg_id];
-                Type  arg_type  = arg_infer->type;
-                if (param_expr->flags & EXPRESSION_DECLARATION_IS_ALIAS)
-                {
-                    if (param_infer->type != INVALID_TYPE) continue;  // already inferred
-
-                    if (is_numeric_type(param_type))
-                    {
-                        if (is_floating_point_type(param_type))
-                            NotImplemented;
-
-                        if (arg_type != TYPE_SOFT_NUMBER)
-                            Error("Argument #% ('%') is expected to be a compile-time integer, but is %.",
-                                parameter_index + 1, param_name,
-                                vague_type_description_in_compile_time_context(unit, arg_type));
-
-                        Fraction const* fraction = get_constant_number(block, arg_id);
-                        if (!fraction)
-                        {
-                            waiting_on_an_argument = arg_id;
-                            continue;
-                        }
-                        if (!fract_is_integer(fraction))
-                            Error("Argument #% ('%') is expected to be a compile-time integer, but is fractional.\n"
-                                  "Value is %.", parameter_index + 1, param_name, fract_display(fraction));
-
-                        if (!check_constant_fits_in_runtime_type(unit, arg_expr, fraction, param_type))
-                            return YIELD_ERROR;
-
-                        set_inferred_type(callee, param_id, TYPE_SOFT_NUMBER);
-                        set_constant_number(callee, param_id, fract_clone(fraction));
-                        complete_expression(callee, param_id);
-                        override_made_progress = true;  // We made progress by inferring the callee's param type.
-                    }
-                    else if (is_bool_type(param_type))
-                    {
-                        if (arg_type != TYPE_SOFT_BOOL)
-                            Error("Argument #% ('%') is expected to be a compile-time boolean, but is %.",
-                                parameter_index + 1, param_name,
-                                vague_type_description_in_compile_time_context(unit, arg_type));
-                        bool const* constant = get_constant_bool(block, arg_id);
-                        if (!constant)
-                        {
-                            waiting_on_an_argument = arg_id;
-                            continue;
-                        }
-                        set_inferred_type(callee, param_id, TYPE_SOFT_BOOL);
-                        set_constant_bool(callee, param_id, *constant);
-                        complete_expression(callee, param_id);
-                        override_made_progress = true;  // We made progress by inferring the callee's param type.
-                    }
-                    else if (param_type == TYPE_TYPE)
-                    {
-                        if (arg_type != TYPE_SOFT_TYPE)
-                            Error("Argument #% ('%') is expected to be a compile-time type, but is %.",
-                                parameter_index + 1, param_name,
-                                vague_type_description_in_compile_time_context(unit, arg_type));
-                        Type const* constant = get_constant_type(block, arg_id);
-                        if (!constant)
-                        {
-                            waiting_on_an_argument = arg_id;
-                            continue;
-                        }
-                        set_inferred_type(callee, param_id, TYPE_SOFT_TYPE);
-                        set_constant_type(callee, param_id, *constant);
-                        complete_expression(callee, param_id);
-                        override_made_progress = true;  // We made progress by inferring the callee's param type.
-                    }
-                    else Unreachable;
-                }
-                else
-                {
-                    if (param_type != arg_type)
-                        Error("Argument #% ('%') doesn't match the parameter type.\n"
-                              "    expected: %\n"
-                              "    received: %",
-                              parameter_index + 1, param_name,
-                              exact_type_description(unit, param_type),
-                              exact_type_description(unit, arg_type));
-                }
+                if (param_type != arg_type)
+                    Error("Argument #% ('%') doesn't match the parameter type.\n"
+                          "    expected: %\n"
+                          "    received: %",
+                          parameter_index + 1, param_name,
+                          exact_type_description(unit, param_type),
+                          exact_type_description(unit, arg_type));
             }
         }
 

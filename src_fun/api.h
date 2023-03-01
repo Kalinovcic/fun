@@ -384,7 +384,6 @@ struct Parsed_Expression
         struct
         {
             Expression lhs;
-            Expression block;
             Expression_List const* arguments;
         } call;
 
@@ -470,12 +469,11 @@ enum: flags32
 {
     BLOCK_IS_MATERIALIZED         = 0x0001,
     BLOCK_IS_PARAMETER_BLOCK      = 0x0002,
-    BLOCK_HAS_BLOCK_PARAMETER     = 0x0004,
-    BLOCK_PLACEMENT_COMPLETED     = 0x0008,
-    BLOCK_IS_TOP_LEVEL            = 0x0010,
-    BLOCK_IS_UNIT                 = 0x0020,
-    BLOCK_HAS_STRUCTURE_PLACEMENT = 0x0040,
-    BLOCK_NAME_FIXUP_COMPLETED    = 0x0080,
+    BLOCK_PLACEMENT_COMPLETED     = 0x0004,
+    BLOCK_IS_TOP_LEVEL            = 0x0008,
+    BLOCK_IS_UNIT                 = 0x0010,
+    BLOCK_HAS_STRUCTURE_PLACEMENT = 0x0020,
+    BLOCK_NAME_FIXUP_COMPLETED    = 0x0040,
 };
 
 struct Block

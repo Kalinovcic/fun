@@ -169,7 +169,6 @@ static bool parse_child_block(Token_Stream* stream, Block_Builder* builder, Expr
     call_expr->flags |= EXPRESSION_ALLOW_PARENT_SCOPE_VISIBILITY;
     call_expr->call.lhs       = block_expr_id;
     call_expr->call.arguments = make_expression_list(&stream->ctx->parser_memory, 0);
-    call_expr->call.block     = NO_EXPRESSION;
 
     *out_expression = call_expr_id;
     return true;
@@ -268,8 +267,7 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
                 Defer(finish_building(stream->ctx, &parameter_builder));
 
                 bool first_parameter = true;
-                bool ended_the_parameter_list = false;
-                while (!ended_the_parameter_list && !maybe_take_atom(stream, ATOM_RIGHT_PARENTHESIS))
+                while (!maybe_take_atom(stream, ATOM_RIGHT_PARENTHESIS))
                 {
                     if (first_parameter) first_parameter = false;
                     else if (!take_atom(stream, ATOM_COMMA, "Expected ',' between parameters."_s))
@@ -287,13 +285,8 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
                     if (maybe_take_atom(stream, ATOM_BLOCK))
                     {
                         Token* block_token = stream->cursor - 1;
-                        if (!take_atom(stream, ATOM_RIGHT_PARENTHESIS, "Expected ')' after 'block', as it must be the last parameter."_s))
-                            return false;
                         if (!is_baked)
                             return ReportError(stream->ctx, block_token, "The 'block' parameter must be baked. Put '$' in front of the parameter name."_s);
-
-                        ended_the_parameter_list = true;
-                        parameter_block->flags |= BLOCK_HAS_BLOCK_PARAMETER;
                         add_expression(&parameter_builder, EXPRESSION_TYPE_LITERAL, block_token, block_token, &type)->parsed_type = TYPE_SOFT_BLOCK;
                     }
                     else
@@ -614,13 +607,12 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
                     return false;
             }
 
-            Expression block_expr = NO_EXPRESSION;
             if (lookahead_atom(stream, ATOM_EQUAL_GREATER, 0) || lookahead_atom(stream, ATOM_LEFT_BRACE, 0))
             {
                 Block* child = parse_block(stream, 0);
                 if (!child)
                     return false;
-                add_expression(builder, EXPRESSION_BLOCK, &child->from, &child->to, &block_expr)->parsed_block = child;
+                add_expression(builder, EXPRESSION_BLOCK, &child->from, &child->to, reserve_item(&args))->parsed_block = child;
             }
 
             Expression_List* list = make_expression_list(&stream->ctx->parser_memory, args.count);
@@ -631,7 +623,6 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
             Parsed_Expression* expr = add_expression(builder, EXPRESSION_CALL, start, stream->cursor - 1, out_expression);
             expr->call.lhs       = lhs;
             expr->call.arguments = list;
-            expr->call.block     = block_expr;
         }
         else if (maybe_take_atom(stream, ATOM_DOT))
         {
