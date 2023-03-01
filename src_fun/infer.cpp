@@ -722,6 +722,7 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
                                                member_block, ALL_VISIBILITY, /* allow_parent_traversal */ false);
                 return YIELD_ERROR;
             }
+
             assert(!(block->flags & BLOCK_NAME_FIXUP_COMPLETED));
             set(&block->resolved_names, &id, &resolved);
         }
@@ -938,6 +939,24 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
             block->parsed_expressions[expr->binary.lhs].kind != EXPRESSION_MEMBER &&
             block->parsed_expressions[expr->binary.lhs].kind != EXPRESSION_DEREFERENCE)
             Error("Expected a variable name, member, or dereference expression on the left side of the assignment.");
+
+        if (block->parsed_expressions[expr->binary.lhs].kind == EXPRESSION_MEMBER)
+        {
+            Resolved_Name resolved = get(&block->resolved_names, &expr->binary.lhs);
+            if (resolved.scope &&
+                !(resolved.scope->flags & BLOCK_HAS_STRUCTURE_PLACEMENT) &&
+                !(resolved.scope->parsed_expressions[resolved.declaration].flags & EXPRESSION_DECLARATION_IS_UNINITIALIZED))
+            {
+                String identifier = get_identifier(unit->ctx, &block->parsed_expressions[expr->binary.lhs].member.name);
+                Report(unit->ctx)
+                    .intro(SEVERITY_WARNING, expr)
+                    .message(Format(temp, "Assignment to '%' will be overwritten by the declaration once the unit executes.\n"
+                                          "If you're trying to pass data to the unit, the declaration should be uninitialized.",
+                                          identifier))
+                    .snippet(expr)
+                    .done();
+            }
+        }
 
         Type lhs_type = block->inferred_expressions[expr->binary.lhs].type;
         Type rhs_type = block->inferred_expressions[expr->binary.rhs].type;
