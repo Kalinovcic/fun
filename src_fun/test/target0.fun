@@ -35,13 +35,15 @@ goto(codeof co, &co);
 debug co.result;
 
 
-/*
 max :: (a: $T, b: T)
 {
+    /*if a > b
+     => debug a;
+    else
+     => debug b;*/
 }
 
-max(cast(u32, 123), cast(u32, 45));
-*/
+max(cast(u32, 123), cast(u32, 321));
 
 
 
