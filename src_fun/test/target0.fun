@@ -3,7 +3,7 @@
 // debug a + b;
 
 
-consume :: (res: &string, str: &string, n: umm)
+/*consume :: (res: &string, str: &string, n: umm)
 {
     res.length = n;
     res.base   = str.base;
@@ -14,17 +14,32 @@ consume :: (res: &string, str: &string, n: umm)
 asdf: string = "asdf";
 consume(&lhs: string, &asdf, cast(umm, 1));
 debug lhs;
+debug asdf;*/
+
+junit :: unit
+{
+    debug "ello";
+}
+
+j: junit;
+goto(codeof j, &j);
+
+asdf: string = "asdf";
+debug asdf;
+
+asdf.length = cast(umm, 2);
 debug asdf;
 
 $if false
 {
-    debug "yayyyy";
+    this;
+    doesnt;
+    compile;
 }
 else
 {
-    debug "wot?";
+    debug "yay";
 }
-
 
 
 /*

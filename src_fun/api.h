@@ -418,19 +418,18 @@ enum: flags32
     INFERRED_EXPRESSION_COMPLETED_INFERENCE         = 0x0004,
     INFERRED_EXPRESSION_CONDITION_DISABLED          = 0x0008,
     INFERRED_EXPRESSION_CONDITION_ENABLED           = 0x0010,
+    INFERRED_EXPRESSION_MEMBER_IS_INDIRECT          = 0x0020,
 };
 
 struct Inferred_Expression
 {
     flags32       flags;
     Type          type;
-    u64           size;
-    u64           offset;
     struct Block* called_block;
     u64           constant;
 };
 
-CompileTimeAssert(sizeof(Inferred_Expression) == 40);
+CompileTimeAssert(sizeof(Inferred_Expression) == 24);
 
 
 struct Soft_Block
@@ -449,7 +448,6 @@ union Constant
     Type       type;
     Soft_Block block;
 };
-
 
 struct Resolved_Name
 {
@@ -480,11 +478,10 @@ enum: flags32
 {
     BLOCK_IS_MATERIALIZED         = 0x0001,
     BLOCK_IS_PARAMETER_BLOCK      = 0x0002,
-    BLOCK_PLACEMENT_COMPLETED     = 0x0004,
+    BLOCK_READY_FOR_PLACEMENT     = 0x0004,  // means types and sizes are inferred, but constants maybe not
     BLOCK_IS_TOP_LEVEL            = 0x0008,
     BLOCK_IS_UNIT                 = 0x0010,
     BLOCK_HAS_STRUCTURE_PLACEMENT = 0x0020,
-    BLOCK_NAME_FIXUP_COMPLETED    = 0x0040,
 };
 
 struct Block
@@ -508,16 +505,29 @@ struct Block
 
     Block*     parent_scope;
     Visibility parent_scope_visibility_limit;
+
+    // Filled out in bytecode generation:
+    Table(Expression, u64, hash_u32) declaration_placement;
+    umm first_instruction;
+    u64 return_address_offset;
 };
 
 
 
 static constexpr umm MAX_BLOCKS_PER_UNIT = 10000;
 
+enum: flags32
+{
+    UNIT_IS_STRUCT    = 0x0001,
+    UNIT_IS_PLACED    = 0x0002,
+    UNIT_IS_COMPLETED = 0x0004,
+};
+
 struct Unit
 {
     Region memory;
     Compiler* ctx;
+    flags32 flags;
 
     Token  initiator_from;
     Token  initiator_to;
@@ -533,11 +543,63 @@ struct Unit
 
     u64    next_storage_offset;
 
-    umm    unplaced_blocks_in_flight;
-    bool   completed_placement;
+    umm    blocks_not_completed;
+    umm    blocks_not_ready_for_placement;
     u64    storage_alignment;
     u64    storage_size;
+
+    bool   compiled_bytecode;
+    Array<struct Bytecode> bytecode;
 };
+
+
+
+enum Bytecode_Operation: u64
+{
+    INVALID_OP,
+
+    OP_ZERO,                    // r =  destination                s = size
+    OP_LITERAL,                 // r =  destination  a =  content  s = size
+    OP_LITERAL_INDIRECT,        // r =  destination  a = &content  s = size
+    OP_COPY,                    // r =  destination  a =  source   s = size
+    OP_COPY_FROM_INDIRECT,      // r =  destination  a = &source   s = size
+    OP_COPY_TO_INDIRECT,        // r = &destination  a =  source   s = szie
+    OP_ADDRESS,                 // r =  destination  a =  offset
+
+    OP_NEGATE,                  // r = result  a = operand
+    OP_ADD,                     // r = result  a = lhs  b = rhs  s = type
+    OP_SUBTRACT,                // r = result  a = lhs  b = rhs  s = type
+    OP_MULTIPLY,                // r = result  a = lhs  b = rhs  s = type
+    OP_DIVIDE_WHOLE,            // r = result  a = lhs  b = rhs  s = type
+    OP_DIVIDE_FRACTIONAL,       // r = result  a = lhs  b = rhs  s = type
+
+    OP_MOVE_POINTER_FORWARD,    // r = result  a = pointer  b = integer  s = multiplier
+    OP_MOVE_POINTER_BACKWARD,   // r = result  a = pointer  b = integer  s = multiplier
+    OP_POINTER_DISTANCE,        // r = result  a = pointer  b = pointer  s = divisor
+
+    OP_CAST,                    // r = result  a = value  b = value type  s = result tpye
+
+    OP_GOTO,                    // r = instruction index
+    OP_GOTO_IF_FALSE,           // r = instruction index  a = condition
+    OP_GOTO_INDIRECT,           // r = stored code address
+    OP_STORE_CODE_ADDRESS,      // r = instruction index  a = destination for code address
+    OP_SWITCH_UNIT,             // r = code pointer       a = storage pointer
+    OP_FINISH_UNIT,             //
+
+    OP_DEBUG_PRINT,             // r = operand                        s = type
+    OP_DEBUG_ALLOC,             // r = destination  a = size operand
+    OP_DEBUG_FREE,              // r = operand
+};
+
+struct Bytecode
+{
+    Bytecode_Operation op;
+    u64 r;
+    u64 a;
+    u64 b;
+    u64 s;
+};
+
 
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -672,9 +734,15 @@ bool pump_pipeline(Compiler* ctx);
 
 
 ////////////////////////////////////////////////////////////////////////////////
+// Bytecode
+
+void generate_bytecode_for_unit_placement(Unit* unit);
+void generate_bytecode_for_unit_completion(Unit* unit);
+
+
+////////////////////////////////////////////////////////////////////////////////
 // Runtime
 
-void run_unit(Unit* unit, byte* storage);
 void run_unit(Unit* unit);
 
 

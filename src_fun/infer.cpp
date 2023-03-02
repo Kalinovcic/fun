@@ -43,16 +43,18 @@ static Block* materialize_block(Unit* unit, Block* materialize_from,
     {
         it->constant = INVALID_CONSTANT;
         it->type     = INVALID_TYPE;
-        it->size     = INVALID_STORAGE_SIZE;
-        it->offset   = INVALID_STORAGE_OFFSET;
     }
 
     block->parent_scope                  = parent_scope;
     block->parent_scope_visibility_limit = parent_scope_visibility_limit;
 
-    assert(!unit->completed_placement);
-    assert(unit->unplaced_blocks_in_flight != 0 || unit->materialized_block_count == 0);
-    unit->unplaced_blocks_in_flight++;
+    assert(!(unit->flags & UNIT_IS_PLACED));
+    assert(unit->blocks_not_ready_for_placement != 0 || unit->materialized_block_count == 0);
+    unit->blocks_not_ready_for_placement++;
+
+    assert(!(unit->flags & UNIT_IS_COMPLETED));
+    assert(unit->blocks_not_completed != 0 || unit->materialized_block_count == 0);
+    unit->blocks_not_completed++;
 
     unit->materialized_block_count++;
     unit->most_recent_materialized_block = block;
@@ -88,7 +90,7 @@ static bool is_user_type_sizeable(Compiler* ctx, Type type)
     assert(is_user_defined_type(type));
     User_Type* data = get_user_type_data(ctx, type);
     assert(data->unit);
-    return data->unit->completed_placement;
+    return data->unit->flags & UNIT_IS_PLACED;
 }
 
 
@@ -298,7 +300,7 @@ u64 get_type_size(Unit* unit, Type type)
     {
         User_Type* data = get_user_type_data(unit->ctx, type);
         assert(data->unit);
-        assert(data->unit->completed_placement);
+        assert(data->unit->flags & UNIT_IS_PLACED);
         return data->unit->storage_size;
     }
 
@@ -337,7 +339,7 @@ u64 get_type_alignment(Unit* unit, Type type)
     {
         User_Type* data = get_user_type_data(unit->ctx, type);
         assert(data->unit);
-        assert(data->unit->completed_placement);
+        assert(data->unit->flags & UNIT_IS_PLACED);
         return data->unit->storage_alignment;
     }
 
@@ -366,15 +368,7 @@ static void set_inferred_type(Block* block, Expression id, Type type)
 
     assert(!(infer->flags & INFERRED_EXPRESSION_COMPLETED_INFERENCE));
     assert(type != INVALID_TYPE);
-    if (infer->type == INVALID_TYPE)
-    {
-        assert(infer->size   == INVALID_STORAGE_SIZE);
-        assert(infer->offset == INVALID_STORAGE_OFFSET);
-    }
-    else
-    {
-        assert(infer->type == type);
-    }
+    assert(infer->type == INVALID_TYPE || infer->type == type);
 
     if (type == TYPE_SOFT_ZERO)
         assert(expr->kind == EXPRESSION_ZERO);
@@ -407,6 +401,232 @@ void set_constant(Block* block, Expression expr, Type type_assertion, Constant* 
     add_item(&block->constants, value);
 }
 
+
+#if 0
+
+
+static void descend_expression_and_build_execution_order(Unit* unit, Block* block, Expression id)
+{
+    auto*   expr    = &block->parsed_expressions[id];
+    auto*   infer   = &block->inferred_expressions[id];
+    assert(!(infer->flags & INFERRED_EXPRESSION_IS_NOT_EVALUATED_AT_RUNTIME));
+
+    auto place_self = [&]()
+    {
+        if (expr->kind == EXPRESSION_DECLARATION) return;  // already placed
+        assert(infer->offset == INVALID_STORAGE_OFFSET);
+        assert(infer->type != INVALID_TYPE);
+        assert(!(infer->flags & INFERRED_EXPRESSION_DOES_NOT_ALLOCATE_STORAGE));
+        place_expression(unit, block, id, infer->type);
+    };
+
+#define Self() (place_self(), *reserve_item(&unit->execution_order) = { block, id })
+#define Op(child) descend_expression_and_build_execution_order(unit, block, child)
+
+    switch (expr->kind)
+    {
+
+    case EXPRESSION_ZERO:               Unreachable;
+    case EXPRESSION_TRUE:               Unreachable;
+    case EXPRESSION_FALSE:              Unreachable;
+    case EXPRESSION_NUMERIC_LITERAL:    Unreachable;
+    case EXPRESSION_STRING_LITERAL:     Self(); break;
+    case EXPRESSION_BLOCK:              Unreachable;
+    case EXPRESSION_NAME:               break;
+    case EXPRESSION_MEMBER:             Op(expr->member.lhs);    Self(); break;
+    case EXPRESSION_NEGATE:             Op(expr->unary_operand); Self(); break;
+    case EXPRESSION_ADDRESS:            Op(expr->unary_operand); Self(); break;
+    case EXPRESSION_DEREFERENCE:        Op(expr->unary_operand); Self(); break;
+    case EXPRESSION_SIZEOF:             Unreachable;
+    case EXPRESSION_CODEOF:             Self(); break;
+    case EXPRESSION_DEBUG:
+        if (!is_soft_type(block->inferred_expressions[expr->unary_operand].type))
+            Op(expr->unary_operand);
+        Self();
+        break;
+    case EXPRESSION_DEBUG_ALLOC:        break;
+    case EXPRESSION_DEBUG_FREE:         Op(expr->unary_operand); Self(); break;
+    case EXPRESSION_ASSIGNMENT:         Op(expr->binary.rhs); Op(expr->binary.lhs); Self(); break;
+    case EXPRESSION_ADD:                Op(expr->binary.lhs); Op(expr->binary.rhs); Self(); break;
+    case EXPRESSION_SUBTRACT:           Op(expr->binary.lhs); Op(expr->binary.rhs); Self(); break;
+    case EXPRESSION_MULTIPLY:           Op(expr->binary.lhs); Op(expr->binary.rhs); Self(); break;
+    case EXPRESSION_DIVIDE_WHOLE:       Op(expr->binary.lhs); Op(expr->binary.rhs); Self(); break;
+    case EXPRESSION_DIVIDE_FRACTIONAL:  Op(expr->binary.lhs); Op(expr->binary.rhs); Self(); break;
+    case EXPRESSION_POINTER_ADD:        Op(expr->binary.lhs); Op(expr->binary.rhs); Self(); break;
+    case EXPRESSION_POINTER_SUBTRACT:   Op(expr->binary.lhs); Op(expr->binary.rhs); Self(); break;
+    case EXPRESSION_EQUAL:              Op(expr->binary.lhs); Op(expr->binary.rhs); Self(); break;
+    case EXPRESSION_NOT_EQUAL:          Op(expr->binary.lhs); Op(expr->binary.rhs); Self(); break;
+    case EXPRESSION_GREATER_THAN:       Op(expr->binary.lhs); Op(expr->binary.rhs); Self(); break;
+    case EXPRESSION_GREATER_OR_EQUAL:   Op(expr->binary.lhs); Op(expr->binary.rhs); Self(); break;
+    case EXPRESSION_LESS_THAN:          Op(expr->binary.lhs); Op(expr->binary.rhs); Self(); break;
+    case EXPRESSION_LESS_OR_EQUAL:      Op(expr->binary.lhs); Op(expr->binary.rhs); Self(); break;
+
+    case EXPRESSION_CAST:
+    {
+        if (!is_soft_type(block->inferred_expressions[expr->binary.rhs].type))
+            Op(expr->binary.rhs);
+        Self();
+    } break;
+
+    case EXPRESSION_GOTO_UNIT:          Op(expr->binary.lhs); Op(expr->binary.rhs); Self(); break;
+
+    case EXPRESSION_BRANCH:
+    {
+        if (expr->flags & EXPRESSION_BRANCH_IS_BAKED)
+        {
+            if (expr->branch.on_success != NO_EXPRESSION && block->inferred_expressions[expr->branch.on_success].flags & INFERRED_EXPRESSION_CONDITION_ENABLED)
+                Op(expr->branch.on_success);
+            else if (expr->branch.on_failure != NO_EXPRESSION && block->inferred_expressions[expr->branch.on_failure].flags & INFERRED_EXPRESSION_CONDITION_ENABLED)
+                Op(expr->branch.on_failure);
+        }
+        else if (expr->branch.condition == NO_EXPRESSION)
+        {
+            assert(expr->branch.on_success != NO_EXPRESSION);
+
+            umm loop_top = unit->execution_order.count;
+            Op(expr->branch.on_success);
+
+            *reserve_item(&unit->execution_order) = { NULL, (Expression) unit->runtime_expressions.count };
+            Runtime_Expression* goto_expr = reserve_item(&unit->runtime_expressions);
+            goto_expr->kind = RUNTIME_EXPRESSION_GOTO;
+            goto_expr->instruction = loop_top;
+        }
+        else while (true)
+        {
+            assert(expr->branch.on_success != NO_EXPRESSION);
+
+            Op(expr->branch.condition);
+
+            *reserve_item(&unit->execution_order) = { NULL, (Expression) unit->runtime_expressions.count };
+            Runtime_Expression* branch_expr = reserve_item(&unit->runtime_expressions);
+            branch_expr->kind = RUNTIME_EXPRESSION_BRANCH_IF_FALSE;
+            branch_expr->storage_offset = block->inferred_expressions[expr->branch.condition].offset;
+            branch_expr->storage_size   = block->inferred_expressions[expr->branch.condition].size;
+
+            Op(expr->branch.on_success);
+            branch_expr->instruction = unit->execution_order.count;
+
+            if (expr->branch.on_failure)
+            {
+                *reserve_item(&unit->execution_order) = { NULL, (Expression) unit->runtime_expressions.count };
+                Runtime_Expression* goto_expr = reserve_item(&unit->runtime_expressions);
+                goto_expr->kind = RUNTIME_EXPRESSION_GOTO;
+
+                branch_expr->instruction = unit->execution_order.count;
+                Op(expr->branch.on_failure);
+                goto_expr->instruction = unit->execution_order.count;
+            }
+        }
+    } break;
+
+    case EXPRESSION_CALL:
+    {
+        Block* callee = infer->called_block;
+        assert(callee);
+
+        Expression_List const* args = expr->call.arguments;
+        assert(args);
+
+        umm parameter_index = 0;
+        For (callee->imperative_order)
+        {
+            auto* param_expr  = &callee->parsed_expressions  [*it];
+            auto* param_infer = &callee->inferred_expressions[*it];
+            if (!(param_expr->flags & EXPRESSION_DECLARATION_IS_PARAMETER)) continue;
+            assert(parameter_index < args->count);
+            if (!(param_expr->flags & EXPRESSION_DECLARATION_IS_ALIAS))
+                Op(args->expressions[parameter_index]);
+            parameter_index++;
+        }
+        Self();
+    } break;
+
+    case EXPRESSION_DECLARATION:
+    {
+        if (expr->declaration.value != NO_EXPRESSION)
+            Op(expr->declaration.value);
+        Self();
+    } break;
+
+    IllegalDefaultCase;
+    }
+#undef Self
+#undef Op
+}
+
+static void build_execution_order_for_block(Unit* unit, Block* block)
+{
+    assert(block->first_instruction_in_executable_order == UMM_MAX);
+    block->first_instruction_in_executable_order = unit->execution_order.count;
+
+    // place return address
+    if (!(unit->flags & UNIT_IS_STRUCT))
+    {
+        while (unit->next_storage_offset % alignof(Runtime_Code_Address))
+            unit->next_storage_offset++;
+        block->return_address_offset_in_storage = unit->next_storage_offset;
+        unit->next_storage_offset += sizeof(Runtime_Code_Address);
+    }
+
+    For (block->imperative_order)
+        if (!(block->inferred_expressions[*it].flags & INFERRED_EXPRESSION_IS_NOT_EVALUATED_AT_RUNTIME))
+            descend_expression_and_build_execution_order(unit, block, *it);
+
+    // yield from block
+    if (!(unit->flags & UNIT_IS_STRUCT))
+    {
+        assert(block->return_address_offset_in_storage != INVALID_STORAGE_OFFSET);
+        *reserve_item(&unit->execution_order) = { NULL, (Expression) unit->runtime_expressions.count };
+        Runtime_Expression* return_expr = reserve_item(&unit->runtime_expressions);
+        return_expr->kind = RUNTIME_EXPRESSION_YIELD;
+        return_expr->storage_offset = block->return_address_offset_in_storage;
+        return_expr->storage_size = sizeof(Runtime_Code_Address);
+    }
+
+    For (block->inferred_expressions)
+        if (it->called_block)
+            build_execution_order_for_block(unit, it->called_block);
+}
+
+static void place_unit(Unit* unit)
+{
+    build_execution_order_for_block(unit, unit->entry_block);
+    unit->built_execution_order = true;
+
+    unit->storage_size = unit->next_storage_offset;
+    if (!unit->storage_alignment)
+        unit->storage_alignment = 1;
+    unit->flags |= UNIT_IS_PLACED;
+}
+
+static void complete_unit(Unit* unit)
+{
+    assert(unit->flags & UNIT_IS_PLACED);
+    unit->flags |= UNIT_IS_COMPLETED;
+}
+#endif
+
+
+static void place_unit(Unit* unit)
+{
+    assert(!(unit->flags & UNIT_IS_PLACED));
+
+    generate_bytecode_for_unit_placement(unit);
+
+    unit->storage_size = unit->next_storage_offset;
+    if (!unit->storage_alignment)
+        unit->storage_alignment = 1;
+    unit->flags |= UNIT_IS_PLACED;
+}
+
+static void complete_unit(Unit* unit)
+{
+    assert(unit->flags & UNIT_IS_PLACED);
+    assert(!(unit->flags & UNIT_IS_COMPLETED));
+
+    generate_bytecode_for_unit_completion(unit);
+    unit->flags |= UNIT_IS_COMPLETED;
+}
 
 
 
@@ -681,6 +901,8 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
     {
         InferType(TYPE_SOFT_TYPE);
         Unit* new_unit = materialize_unit(unit->ctx, expr->parsed_block, block);
+        if (expr->parsed_block->flags & BLOCK_HAS_STRUCTURE_PLACEMENT)
+            new_unit->flags |= UNIT_IS_STRUCT;
         Type type = create_user_type(unit->ctx, block, id, new_unit);
         set_constant_type(block, id, type);
         InferenceComplete();
@@ -700,7 +922,7 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
                                                block, expr->visibility_limit, /* allow_parent_traversal */ true);
                 return YIELD_ERROR;
             }
-            assert(!(block->flags & BLOCK_NAME_FIXUP_COMPLETED));
+            assert(!(unit->flags & UNIT_IS_PLACED));
             set(&block->resolved_names, &id, &resolved);
         }
 
@@ -723,8 +945,12 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
         if (lhs_type == INVALID_TYPE)
             WaitOperand(expr->member.lhs);
         Type user_type = lhs_type;
+        bool indirect = false;
         if (is_pointer_type(user_type))
+        {
             user_type = set_indirection(user_type, get_indirection(user_type) - 1);
+            indirect = true;
+        }
         if (!is_user_defined_type(user_type))
             Error("Expected a unit type on the left side of the '.' operator, but got %.", vague_type_description(unit, lhs_type));
 
@@ -744,8 +970,7 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
                                                member_block, ALL_VISIBILITY, /* allow_parent_traversal */ false);
                 return YIELD_ERROR;
             }
-
-            assert(!(block->flags & BLOCK_NAME_FIXUP_COMPLETED));
+            assert(!(unit->flags & UNIT_IS_PLACED));
             set(&block->resolved_names, &id, &resolved);
         }
 
@@ -753,6 +978,8 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
         if (decl_infer->type == INVALID_TYPE)
             Wait(WAITING_ON_DECLARATION, resolved.declaration, resolved.scope);
         infer->flags |= INFERRED_EXPRESSION_DOES_NOT_ALLOCATE_STORAGE;
+        if (indirect)
+            infer->flags |= INFERRED_EXPRESSION_MEMBER_IS_INDIRECT;
         InferType(decl_infer->type);
 
         if (is_soft_type(decl_infer->type))
@@ -913,6 +1140,11 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
             if (!type) WaitOperand(expr->unary_operand);
             if (!is_user_defined_type(*type))
                 Error("Expected a unit as operand to 'codeof', but got %.", exact_type_description(unit, *type));
+
+            User_Type* data = get_user_type_data(unit->ctx, *type);
+            assert(data->unit);
+            if (data->unit->flags & UNIT_IS_STRUCT)
+                Error("'%' is a structure, and those don't have associated code.", exact_type_description(unit, *type));
         }
 
         InferenceComplete();
@@ -1611,7 +1843,7 @@ static Yield_Result infer_block(Pipeline_Task* task)
 #endif
     }
 
-    if (!(block->flags & BLOCK_PLACEMENT_COMPLETED))
+    if (!(block->flags & BLOCK_READY_FOR_PLACEMENT))
     {
         // check if we are ready to do placement
         for (umm i = 0; i < block->inferred_expressions.count; i++)
@@ -1638,45 +1870,21 @@ static Yield_Result infer_block(Pipeline_Task* task)
                     goto skip_placement;
         }
 
-        // do placement
-        for (umm i = 0; i < block->inferred_expressions.count; i++)
-        {
-            auto* expr  = &block->parsed_expressions  [i];
-            auto* infer = &block->inferred_expressions[i];
-            assert(infer->type != INVALID_TYPE);
-            if (is_soft_type(infer->type))
-                continue;
-
-            infer->size = get_type_size(unit, infer->type);
-            if (infer->flags & INFERRED_EXPRESSION_DOES_NOT_ALLOCATE_STORAGE)
-                continue;
-
-            u64 alignment = get_type_alignment(unit, infer->type);
-            if (unit->storage_alignment < alignment)
-                unit->storage_alignment = alignment;
-
-            while (unit->next_storage_offset % alignment)
-                unit->next_storage_offset++;
-            infer->offset = unit->next_storage_offset;
-            unit->next_storage_offset += infer->size;
-        }
-        block->flags |= BLOCK_PLACEMENT_COMPLETED;
+        block->flags |= BLOCK_READY_FOR_PLACEMENT;
+        made_progress = true;
 
         // maybe complete unit placement
-        if (--unit->unplaced_blocks_in_flight == 0)
+        assert(unit->blocks_not_ready_for_placement > 0);
+        if (--unit->blocks_not_ready_for_placement == 0)
         {
-            unit->storage_size = unit->next_storage_offset;
-            if (!unit->storage_alignment)
-                unit->storage_alignment = 1;
-            unit->completed_placement = true;
+            place_unit(unit);
         }
-
-        made_progress = true;
 
         if (false) skip_placement:
             waiting = true;
     }
 
+    /*
     if ((block->flags & BLOCK_PLACEMENT_COMPLETED) && !(block->flags & BLOCK_NAME_FIXUP_COMPLETED))
     {
         // check if we are ready to do name fixup
@@ -1717,9 +1925,17 @@ static Yield_Result infer_block(Pipeline_Task* task)
         if (false) skip_name_fixup:
             waiting = true;
     }
+    */
 
     if (waiting)
         return made_progress ? YIELD_MADE_PROGRESS : YIELD_NO_PROGRESS;
+
+    assert(unit->blocks_not_completed > 0);
+    if (--unit->blocks_not_completed == 0)
+    {
+        complete_unit(unit);
+    }
+
     return YIELD_COMPLETED;
 }
 
