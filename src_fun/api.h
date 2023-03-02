@@ -563,7 +563,8 @@ enum Bytecode_Operation: u64
     OP_LITERAL_INDIRECT,        // r =  destination  a = &content  s = size
     OP_COPY,                    // r =  destination  a =  source   s = size
     OP_COPY_FROM_INDIRECT,      // r =  destination  a = &source   s = size
-    OP_COPY_TO_INDIRECT,        // r = &destination  a =  source   s = szie
+    OP_COPY_TO_INDIRECT,        // r = &destination  a =  source   s = size
+    OP_COPY_BETWEEN_INDIRECT,   // r = &destination  a = &source   s = size
     OP_ADDRESS,                 // r =  destination  a =  offset
 
     OP_NEGATE,                  // r = result  a = operand
@@ -579,11 +580,11 @@ enum Bytecode_Operation: u64
 
     OP_CAST,                    // r = result  a = value  b = value type  s = result tpye
 
-    OP_GOTO,                    // r = instruction index
-    OP_GOTO_IF_FALSE,           // r = instruction index  a = condition
-    OP_GOTO_INDIRECT,           // r = stored code address
-    OP_STORE_CODE_ADDRESS,      // r = instruction index  a = destination for code address
-    OP_SWITCH_UNIT,             // r = code pointer       a = storage pointer
+    OP_GOTO,                    // r =  instruction
+    OP_GOTO_IF_FALSE,           // r =  instruction  a = condition
+    OP_GOTO_INDIRECT,           // r = &instruction
+    OP_CALL,                    // r =  instruction  a = return address
+    OP_SWITCH_UNIT,             // r = &code         a = &storage
     OP_FINISH_UNIT,             //
 
     OP_DEBUG_PRINT,             // r = operand                        s = type

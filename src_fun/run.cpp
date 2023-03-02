@@ -431,9 +431,121 @@ void run_unit(Unit* unit)
 }
 #endif
 
+void run_bytecode(Unit* unit, umm instruction, byte* storage)
+{
+run:
+    if (!unit) return;
+
+    printf("at %p:%d, on %p\n", unit, (int) instruction, storage);
+    Bytecode* bc = &unit->bytecode[instruction];
+    u64 r = bc->r;
+    u64 a = bc->a;
+    u64 b = bc->b;
+    u64 s = bc->s;
+#define M(type, offset) (*(type*)(storage + (offset)))
+
+    switch (bc->op)
+    {
+    IllegalDefaultCase;
+
+    case OP_ZERO:                   memset(storage + r, 0, s);              break;
+    case OP_LITERAL:                memcpy(storage + r, &a, s);             break;
+    case OP_LITERAL_INDIRECT:       memcpy(storage + r, (void*)(umm) a, s); break;
+    case OP_COPY:                   memcpy(storage + r, storage + a, s);    break;
+    case OP_COPY_FROM_INDIRECT:     memcpy(storage + r, M(void*, a), s);    break;
+    case OP_COPY_TO_INDIRECT:       memcpy(M(void*, r), storage + a, s);    break;
+    case OP_COPY_BETWEEN_INDIRECT:  memcpy(M(void*, r), M(void*, a), s);    break;
+    case OP_ADDRESS:                M(byte*, r) = storage + a;              break;
+    case OP_NEGATE:                 NotImplemented;
+    case OP_ADD:                    NotImplemented;
+    case OP_SUBTRACT:               NotImplemented;
+    case OP_MULTIPLY:               NotImplemented;
+    case OP_DIVIDE_WHOLE:           NotImplemented;
+    case OP_DIVIDE_FRACTIONAL:      NotImplemented;
+    case OP_MOVE_POINTER_FORWARD:   NotImplemented;
+    case OP_MOVE_POINTER_BACKWARD:  NotImplemented;
+    case OP_POINTER_DISTANCE:       NotImplemented;
+    case OP_CAST:                   NotImplemented;
+    case OP_GOTO:                   instruction = r;                              goto run;
+    case OP_GOTO_IF_FALSE:          instruction = M(u8, a) ? instruction + 1 : r; goto run;
+    case OP_GOTO_INDIRECT:          instruction = M(umm, r);                      goto run;
+    case OP_CALL:                   M(umm, a) = instruction + 1; instruction = r; goto run;
+    case OP_SWITCH_UNIT:
+    {
+        void** destination = M(void**, a);
+        destination[0] = (void*)(unit);
+        destination[1] = (void*)(umm)(instruction + 1);
+        destination[2] = (void*)(storage);
+
+        unit    = M(Unit*, r);
+        storage = M(byte*, a);
+        instruction = unit->entry_block->first_instruction;
+        goto run;
+    } break;
+    case OP_FINISH_UNIT:
+    {
+        unit        = *(Unit**)(storage + 0 * sizeof(void*));
+        instruction = *(umm  *)(storage + 1 * sizeof(void*));
+        storage     = *(byte**)(storage + 2 * sizeof(void*));
+        goto run;
+    } break;
+    case OP_DEBUG_PRINT:
+    {
+        String text = {};
+        switch (s)
+        {
+        case TYPE_VOID:   text = "void"_s;                             break;
+        case TYPE_U8:     text = Format(temp, "%",      M(u8,     r)); break;
+        case TYPE_U16:    text = Format(temp, "%",      M(u16,    r)); break;
+        case TYPE_U32:    text = Format(temp, "%",      M(u32,    r)); break;
+        case TYPE_U64:    text = Format(temp, "%",      M(u64,    r)); break;
+        case TYPE_UMM:    text = Format(temp, "%",      M(umm,    r)); break;
+        case TYPE_S8:     text = Format(temp, "%",      M(s8,     r)); break;
+        case TYPE_S16:    text = Format(temp, "%",      M(s16,    r)); break;
+        case TYPE_S32:    text = Format(temp, "%",      M(s32,    r)); break;
+        case TYPE_S64:    text = Format(temp, "%",      M(s64,    r)); break;
+        case TYPE_SMM:    text = Format(temp, "%",      M(smm,    r)); break;
+        case TYPE_F16:    NotImplemented;
+        case TYPE_F32:    text = Format(temp, "%",      M(f32,    r)); break;
+        case TYPE_F64:    text = Format(temp, "%",      M(f64,    r)); break;
+        case TYPE_BOOL:   text = Format(temp, "%",      M(bool,   r)); break;
+        case TYPE_TYPE:   text = Format(temp, "type %", M(Type,   r)); break;
+        case TYPE_STRING: text =                        M(String, r);  break;
+        default:
+            if (is_pointer_type((Type) s))
+            {
+                text = Format(temp, "%", M(void*, r));
+            }
+            else
+            {
+                assert(is_user_defined_type((Type) s));
+                text = "user defined type"_s;
+            }
+            break;
+        }
+        printf("%.*s\n", StringArgs(text));
+    } break;
+    case OP_DEBUG_ALLOC:            M(void*, r) = malloc(M(umm, a)); break;
+    case OP_DEBUG_FREE:             free(M(void*, r));               break;
+    }
+
+    rough_sleep(0.1);
+    instruction++;
+    goto run;
+#undef M
+}
 
 void run_unit(Unit* unit)
 {
+    assert(unit->compiled_bytecode);
+    assert(!(unit->flags & UNIT_IS_STRUCT));
+
+    byte* storage = alloc<byte>(NULL, unit->next_storage_offset);
+    Defer(free(storage));
+    memset(storage, 0xCD, unit->next_storage_offset);
+    memset(storage, 0, 3 * sizeof(void*));
+
+    run_bytecode(unit, unit->entry_block->first_instruction, storage);
 }
 
 

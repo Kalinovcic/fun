@@ -16,7 +16,35 @@ consume(&lhs: string, &asdf, cast(umm, 1));
 debug lhs;
 debug asdf;*/
 
-junit :: unit
+foo :: unit
+{
+    debug "foo";
+}
+
+poo := "asdf";
+ptr1 := &poo;
+ptr2 := &ptr1;
+
+**ptr2 = "no longer asdf";
+debug poo;
+
+
+f: foo;
+goto(codeof f, &f);
+debug "back";
+
+
+blok :: ()
+{
+    debug "eyo";
+}
+
+blok();
+
+debug "beyond the blok";
+
+
+/*junit :: unit
 {
     debug "ello";
 }
@@ -39,7 +67,7 @@ $if false
 else
 {
     debug "yay";
-}
+}*/
 
 
 /*
