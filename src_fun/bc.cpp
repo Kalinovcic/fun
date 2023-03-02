@@ -104,6 +104,39 @@ static Location direct(Bytecode_Builder* builder, Location location)
     return result;
 }
 
+static Type simplify_type(Unit* unit, Type type)
+{
+    if (type == TYPE_TYPE)
+        type = TYPE_U32;
+    else if (type == TYPE_UMM || is_pointer_type(type))
+    {
+        switch (unit->pointer_size)
+        {
+        case 1: type = TYPE_U8;  break;
+        case 2: type = TYPE_U16; break;
+        case 4: type = TYPE_U32; break;
+        case 8: type = TYPE_U64; break;
+        IllegalDefaultCase;
+        }
+    }
+    else if (type == TYPE_SMM)
+    {
+        switch (unit->pointer_size)
+        {
+        case 1: type = TYPE_S8;  break;
+        case 2: type = TYPE_S16; break;
+        case 4: type = TYPE_S32; break;
+        case 8: type = TYPE_S64; break;
+        IllegalDefaultCase;
+        }
+    }
+
+    assert(!is_soft_type(type));
+    assert(type != TYPE_VOID);
+    assert(is_primitive_type(type));
+    return type;
+}
+
 static Location generate_expression(Bytecode_Builder* builder, Expression id)
 {
     Unit*  unit  = builder->unit;
@@ -132,9 +165,10 @@ static Location generate_expression(Bytecode_Builder* builder, Expression id)
         Token_Info_String* token = (Token_Info_String*) get_token_info(unit->ctx, &expr->literal);
 
         assert(get_type_size(unit, TYPE_STRING) == sizeof(String));
-        Location location = allocate_location(builder, TYPE_STRING);
-        Op(OP_LITERAL_INDIRECT, r = location.offset, a = (umm) &token->value, s = sizeof(String));
-        return location;
+        Location result = allocate_location(builder, TYPE_STRING);
+        Op(OP_LITERAL, r = result.offset + MemberOffset(String, length), a = (umm) token->value.length, s = MemberSize(String, length));
+        Op(OP_LITERAL, r = result.offset + MemberOffset(String, data  ), a = (umm) token->value.data,   s = MemberSize(String, data  ));
+        return result;
     } break;
 
     case EXPRESSION_NAME:
@@ -146,7 +180,37 @@ static Location generate_expression(Bytecode_Builder* builder, Expression id)
         return Location(offset, infer->type, false);
     } break;
 
-    case EXPRESSION_MEMBER:             NotImplemented;
+    case EXPRESSION_MEMBER:
+    {
+        Resolved_Name resolved = get(&block->resolved_names, &id);
+        assert(resolved.scope);
+        u64 member_offset;
+        assert(get(&resolved.scope->declaration_placement, &resolved.declaration, &member_offset));
+
+        if (infer->flags & INFERRED_EXPRESSION_MEMBER_IS_INDIRECT)
+        {
+            Location operand = direct(builder, generate_expression(builder, expr->unary_operand));
+
+            Location result(allocate_storage(unit, unit->pointer_size, unit->pointer_alignment), infer->type, true);
+            Op(OP_MOVE_POINTER_CONSTANT, r = result.offset, a = operand.offset, s = member_offset);
+            return result;
+        }
+        else
+        {
+            Location operand = generate_expression(builder, expr->unary_operand);
+            if (operand.indirect)
+            {
+                Location result(allocate_storage(unit, unit->pointer_size, unit->pointer_alignment), infer->type, true);
+                Op(OP_MOVE_POINTER_CONSTANT, r = result.offset, a = operand.offset, s = member_offset);
+                return result;
+            }
+            else
+            {
+                return Location(operand.offset + member_offset, infer->type, false);
+            }
+        }
+    } break;
+
     case EXPRESSION_NEGATE:             NotImplemented;
 
     case EXPRESSION_ADDRESS:
@@ -184,14 +248,40 @@ static Location generate_expression(Bytecode_Builder* builder, Expression id)
         auto* op_infer = &block->inferred_expressions[expr->unary_operand];
         if (is_soft_type(op_infer->type))
         {
-            NotImplemented;
+            String text = {};
+            switch (op_infer->type)
+            {
+            IllegalDefaultCase;
+            case TYPE_SOFT_ZERO:   text = "zero"_s;                                                                     break;
+            case TYPE_SOFT_NUMBER: text = fract_display(get_constant_number(block, expr->unary_operand));               break;
+            case TYPE_SOFT_BOOL:   text = *get_constant_bool(block, expr->unary_operand) ? "true"_s : "false"_s;        break;
+            case TYPE_SOFT_TYPE:   text = exact_type_description(unit, *get_constant_type(block, expr->unary_operand)); break;
+            case TYPE_SOFT_BLOCK:
+            {
+                Token_Info info;
+                {
+                    Soft_Block constant_block = *get_constant_block(block, expr->unary_operand);
+                    Token_Info* from_info = get_token_info(unit->ctx, &constant_block.parsed_child->from);
+                    Token_Info* to_info   = get_token_info(unit->ctx, &constant_block.parsed_child->to);
+                    info = *from_info;
+                    info.length = to_info->offset + to_info->length - from_info->offset;
+                }
+                text = Report(unit->ctx).snippet(info, false, 0, 0).return_without_reporting();
+            } break;
+            }
+            text = allocate_string(&unit->memory, text);
+
+            assert(get_type_size(unit, TYPE_STRING) == sizeof(String));
+            Location value = allocate_location(builder, TYPE_STRING);
+            Op(OP_LITERAL, r = value.offset + MemberOffset(String, length), a = (umm) text.length, s = MemberSize(String, length));
+            Op(OP_LITERAL, r = value.offset + MemberOffset(String, data  ), a = (umm) text.data,   s = MemberSize(String, data  ));
+            Op(OP_DEBUG_PRINT, r = value.offset, s = TYPE_STRING);
         }
         else
         {
             Location value = direct(builder, generate_expression(builder, expr->unary_operand));
             Op(OP_DEBUG_PRINT, r = value.offset, s = value.type);
         }
-
         return void_location(infer->type);
     } break;
 
@@ -219,12 +309,47 @@ static Location generate_expression(Bytecode_Builder* builder, Expression id)
     case EXPRESSION_GREATER_OR_EQUAL:   NotImplemented;
     case EXPRESSION_LESS_THAN:          NotImplemented;
     case EXPRESSION_LESS_OR_EQUAL:      NotImplemented;
-    case EXPRESSION_CAST:               NotImplemented;
+
+    case EXPRESSION_CAST:
+    {
+        Type cast_type  = infer->type;
+        Type value_type = block->inferred_expressions[expr->binary.rhs].type;
+
+        Location value = allocate_location(builder, cast_type);
+        if (is_soft_type(value_type))
+        {
+            u64 constant;
+            if (is_integer_type(cast_type))
+            {
+                Fraction const* fract = get_constant_number(block, expr->binary.rhs);
+                assert(fract);
+                assert(fract_is_integer(fract));
+                assert(int_get_abs_u64(&constant, &fract->num));
+                if (fract->num.negative)
+                    constant = -constant;
+            }
+            else if (cast_type == TYPE_TYPE)
+            {
+                constant = *get_constant_type(block, expr->binary.rhs);
+            }
+            else NotImplemented;
+            Op(OP_LITERAL, r = value.offset, a = constant, s = get_type_size(unit, value.type));
+        }
+        else
+        {
+            cast_type  = simplify_type(unit, cast_type);
+            value_type = simplify_type(unit, value_type);
+
+            Location operand = direct(builder, generate_expression(builder, expr->binary.rhs));
+            Op(OP_CAST, r = value.offset, a = operand.offset, b = value_type, s = cast_type);
+        }
+        return value;
+    } break;
 
     case EXPRESSION_GOTO_UNIT:
     {
-        Location lhs = direct(builder, generate_expression(builder, expr->unary_operand));
-        Location rhs = direct(builder, generate_expression(builder, expr->unary_operand));
+        Location lhs = direct(builder, generate_expression(builder, expr->binary.lhs));
+        Location rhs = direct(builder, generate_expression(builder, expr->binary.rhs));
         Op(OP_SWITCH_UNIT, r = lhs.offset, a = rhs.offset);
         return void_location(infer->type);
     } break;
@@ -265,7 +390,10 @@ static Location generate_expression(Bytecode_Builder* builder, Expression id)
         Location location(offset, infer->type, false);
         if (expr->declaration.value == NO_EXPRESSION)
         {
-            Op(OP_ZERO, r = offset, s = get_type_size(unit, infer->type));
+            if (!(expr->flags & EXPRESSION_DECLARATION_IS_UNINITIALIZED))
+            {
+                Op(OP_ZERO, r = offset, s = get_type_size(unit, infer->type));
+            }
         }
         else
         {

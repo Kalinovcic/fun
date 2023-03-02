@@ -235,6 +235,8 @@ enum Type: u32
 
     TYPE_FIRST_USER_TYPE = TYPE_ONE_PAST_LAST_PRIMITIVE_TYPE,
     TYPE_STRING = TYPE_FIRST_USER_TYPE,
+
+    TYPE_VOID_POINTER = (1 << TYPE_POINTER_SHIFT) | TYPE_VOID,
 };
 
 inline Type get_base_type  (Type type)                  { return (Type)(type & TYPE_BASE_MASK); }
@@ -554,31 +556,39 @@ struct Unit
 
 
 
+enum: u64
+{
+    OP_COMPARE_EQUAL   = (u64)(0x0001) << 32,
+    OP_COMPARE_GREATER = (u64)(0x0002) << 32,
+    OP_COMPARE_LESS    = (u64)(0x0004) << 32,
+};
+
 enum Bytecode_Operation: u64
 {
     INVALID_OP,
 
     OP_ZERO,                    // r =  destination                s = size
     OP_LITERAL,                 // r =  destination  a =  content  s = size
-    OP_LITERAL_INDIRECT,        // r =  destination  a = &content  s = size
     OP_COPY,                    // r =  destination  a =  source   s = size
     OP_COPY_FROM_INDIRECT,      // r =  destination  a = &source   s = size
     OP_COPY_TO_INDIRECT,        // r = &destination  a =  source   s = size
     OP_COPY_BETWEEN_INDIRECT,   // r = &destination  a = &source   s = size
     OP_ADDRESS,                 // r =  destination  a =  offset
 
-    OP_NEGATE,                  // r = result  a = operand
-    OP_ADD,                     // r = result  a = lhs  b = rhs  s = type
-    OP_SUBTRACT,                // r = result  a = lhs  b = rhs  s = type
-    OP_MULTIPLY,                // r = result  a = lhs  b = rhs  s = type
-    OP_DIVIDE_WHOLE,            // r = result  a = lhs  b = rhs  s = type
-    OP_DIVIDE_FRACTIONAL,       // r = result  a = lhs  b = rhs  s = type
+    OP_NEGATE,                  // r = result  a = operand       s = type  (type options: s,f)
+    OP_ADD,                     // r = result  a = lhs  b = rhs  s = type  (type options: u,f)
+    OP_SUBTRACT,                // r = result  a = lhs  b = rhs  s = type  (type options: u,f)
+    OP_MULTIPLY,                // r = result  a = lhs  b = rhs  s = type  (type options: u,f)
+    OP_DIVIDE_WHOLE,            // r = result  a = lhs  b = rhs  s = type  (type options: u,s)
+    OP_DIVIDE_FRACTIONAL,       // r = result  a = lhs  b = rhs  s = type  (type options: f)
+    OP_COMPARE,                 // r = result  a = lhs  b = rhs  s = (compare flags | type)  (type options: u,s,b,f)
 
+    OP_MOVE_POINTER_CONSTANT,   // r = result  a = pointer               s = amount
     OP_MOVE_POINTER_FORWARD,    // r = result  a = pointer  b = integer  s = multiplier
     OP_MOVE_POINTER_BACKWARD,   // r = result  a = pointer  b = integer  s = multiplier
     OP_POINTER_DISTANCE,        // r = result  a = pointer  b = pointer  s = divisor
 
-    OP_CAST,                    // r = result  a = value  b = value type  s = result tpye
+    OP_CAST,                    // r = result  a = value  b = value type  s = result type  (type options: u,s,f,b)
 
     OP_GOTO,                    // r =  instruction
     OP_GOTO_IF_FALSE,           // r =  instruction  a = condition
@@ -587,7 +597,7 @@ enum Bytecode_Operation: u64
     OP_SWITCH_UNIT,             // r = &code         a = &storage
     OP_FINISH_UNIT,             //
 
-    OP_DEBUG_PRINT,             // r = operand                        s = type
+    OP_DEBUG_PRINT,             // r = operand                        s = type  (type options: any)
     OP_DEBUG_ALLOC,             // r = destination  a = size operand
     OP_DEBUG_FREE,              // r = operand
 };

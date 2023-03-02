@@ -18,7 +18,10 @@ debug asdf;*/
 
 foo :: unit
 {
-    debug "foo";
+    x: string = _;
+    y: string = _;
+    debug x;
+    debug y;
 }
 
 poo := "asdf";
@@ -28,8 +31,13 @@ ptr2 := &ptr1;
 **ptr2 = "no longer asdf";
 debug poo;
 
+debug cast(u64, 12345678910);
+debug cast(u8, cast(u64, 12345678910));
+
 
 f: foo;
+(*&f).x = "foo";
+(*&f).y = "foofoo";
 goto(codeof f, &f);
 debug "back";
 
