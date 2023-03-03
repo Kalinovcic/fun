@@ -592,7 +592,11 @@ bool lex_from_memory(Compiler* ctx, String name, String code, Array<Token>* out_
         else if (c == '{') cursor++, atom = ATOM_LEFT_BRACE;
         else if (c == '}') cursor++, atom = ATOM_RIGHT_BRACE;
         else if (c == '+') cursor++, atom = ATOM_PLUS;
-        else if (c == '-') cursor++, atom = ATOM_MINUS;
+        else if (c == '-')
+        {
+            cursor++, atom = ATOM_MINUS;
+            if (cursor < end && *cursor == '>') cursor++, atom = ATOM_MINUS_GREATER;
+        }
         else if (c == '*') cursor++, atom = ATOM_STAR;
         else if (c == '/')
         {

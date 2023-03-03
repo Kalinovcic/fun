@@ -3,6 +3,15 @@
 // debug a + b;
 
 
+foo :: () -> (poo: u32)
+{
+    poo = cast(u32, 123);
+}
+
+debug foo().poo;
+
+
+/*
 
 Atom :: u32;
 
@@ -408,4 +417,6 @@ proc_b :: ()
 }
 
 proc_b();
+*/
+
 */

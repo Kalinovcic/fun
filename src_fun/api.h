@@ -127,6 +127,7 @@ enum Atom: u32
     ATOM_AMPERSAND_PLUS,        // &+
     ATOM_AMPERSAND_MINUS,       // &-
     ATOM_BANG,                  // !
+    ATOM_MINUS_GREATER,         // ->
     ATOM_EQUAL_GREATER,         // =>
     ATOM_EQUAL_EQUAL,           // ==
     ATOM_BANG_EQUAL,            // !=
@@ -237,7 +238,7 @@ enum Type: u32
     TYPE_ONE_PAST_LAST_PRIMITIVE_TYPE,
 
     TYPE_FIRST_USER_TYPE = TYPE_ONE_PAST_LAST_PRIMITIVE_TYPE,
-    TYPE_STRING = TYPE_FIRST_USER_TYPE,
+    TYPE_STRING,
 
     TYPE_VOID_POINTER = (1 << TYPE_POINTER_SHIFT) | TYPE_VOID,
 };
@@ -259,6 +260,7 @@ inline bool is_type_type            (Type type) { return type == TYPE_TYPE  || t
 inline bool is_block_type           (Type type) { return type == TYPE_SOFT_BLOCK;                                         }
 inline bool is_soft_type            (Type type) { return type == TYPE_SOFT_ZERO || type == TYPE_SOFT_NUMBER || type == TYPE_SOFT_BOOL || type == TYPE_SOFT_TYPE || type == TYPE_SOFT_BLOCK; }
 inline bool is_pointer_type         (Type type) { return get_indirection(type) > 0; }
+inline Type get_element_type        (Type type) { assert(is_pointer_type(type)); return set_indirection(type, get_indirection(type) - 1); }
 
 
 
@@ -343,16 +345,18 @@ enum: flags16
 {
     EXPRESSION_IS_IN_PARENTHESES             = 0x0001,
     EXPRESSION_DECLARATION_IS_PARAMETER      = 0x0002,
-    EXPRESSION_DECLARATION_IS_ALIAS          = 0x0004,
-    EXPRESSION_DECLARATION_IS_ORDERED        = 0x0008,
-    EXPRESSION_ALLOW_PARENT_SCOPE_VISIBILITY = 0x0010,
-    EXPRESSION_BRANCH_IS_LOOP                = 0x0020,
-    EXPRESSION_BLOCK_IS_IMPORTED             = 0x0040,
-    EXPRESSION_DECLARATION_IS_INFERRED_ALIAS = 0x0080,
-    EXPRESSION_HAS_TO_BE_EXTERNALLY_INFERRED = 0x0100,
-    EXPRESSION_DECLARATION_IS_UNINITIALIZED  = 0x0200,
-    EXPRESSION_BRANCH_IS_BAKED               = 0x0400,
-    EXPRESSION_HAS_CONDITIONAL_INFERENCE     = 0x0800,
+    EXPRESSION_DECLARATION_IS_RETURN         = 0x0004,
+    EXPRESSION_DECLARATION_IS_ALIAS          = 0x0008,
+    EXPRESSION_DECLARATION_IS_ORDERED        = 0x0010,
+    EXPRESSION_DECLARATION_IS_UNINITIALIZED  = 0x0020,
+    EXPRESSION_DECLARATION_IS_INFERRED_ALIAS = 0x0040,
+    EXPRESSION_DECLARATION_IS_USING          = 0x0080,
+    EXPRESSION_ALLOW_PARENT_SCOPE_VISIBILITY = 0x0100,
+    EXPRESSION_BLOCK_IS_IMPORTED             = 0x0200,
+    EXPRESSION_BRANCH_IS_LOOP                = 0x0400,
+    EXPRESSION_BRANCH_IS_BAKED               = 0x0800,
+    EXPRESSION_HAS_CONDITIONAL_INFERENCE     = 0x1000,
+    EXPRESSION_HAS_TO_BE_EXTERNALLY_INFERRED = 0x2000,
 };
 
 struct Parsed_Expression
@@ -425,7 +429,6 @@ enum: flags32
     INFERRED_EXPRESSION_COMPLETED_INFERENCE         = 0x0004,
     INFERRED_EXPRESSION_CONDITION_DISABLED          = 0x0008,
     INFERRED_EXPRESSION_CONDITION_ENABLED           = 0x0010,
-    INFERRED_EXPRESSION_MEMBER_IS_INDIRECT          = 0x0020,
 };
 
 struct Inferred_Expression
@@ -460,6 +463,13 @@ struct Resolved_Name
 {
     Block*     scope;
     Expression declaration;
+
+    struct Use
+    {
+        Block*     scope;
+        Expression declaration;
+    };
+    Dynamic_Array<Use> use_chain;
 };
 
 
@@ -468,9 +478,11 @@ enum Wait_Reason: u32
     WAITING_ON_OPERAND,              // most boring wait reason, skipped in chain reporting because it's obvious
     WAITING_ON_DECLARATION,          // a name expression can wait for the declaration to infer
     WAITING_ON_PARAMETER_INFERENCE,  // a call expression can wait for the callee to infer its parameter types
+    WAITING_ON_RETURN_TYPE_INFERENCE,
     WAITING_ON_EXTERNAL_INFERENCE,   // an alias parameter declaration can wait for the caller to infer it,
                                      // or an inferred type alias can wait for its surrounding expression to infer it
     WAITING_ON_CONDITION_INFERENCE,  // a call expression of a baked branch can wait for the condition to be inferred
+    WAITING_ON_USING_TYPE,
 };
 
 struct Wait_Info
@@ -525,14 +537,15 @@ static constexpr umm MAX_BLOCKS_PER_UNIT = 10000;
 
 enum: flags32
 {
-    UNIT_IS_STRUCT    = 0x0001,
-    UNIT_IS_PLACED    = 0x0002,
-    UNIT_IS_COMPLETED = 0x0004,
+    UNIT_IS_STRUCT  = 0x0001,
+    UNIT_IS_PLACED  = 0x0002,
+    UNIT_IS_PATCHED = 0x0004,
 };
 
 struct Unit
 {
     flags32 flags;
+    Type    type_id;
 
     Token   initiator_from;
     Token   initiator_to;
@@ -562,7 +575,8 @@ struct Unit
     umm    blocks_not_ready_for_placement;
 
     bool   compiled_bytecode;
-    Array<struct Bytecode const> bytecode;
+    Array<struct Bytecode       const> bytecode;
+    Array<struct Bytecode_Patch const> bytecode_patches;
 };
 
 
@@ -629,6 +643,14 @@ struct Bytecode
 };
 
 
+struct Bytecode_Patch
+{
+    Block*     block;
+    Expression expression;
+    umm        label;
+};
+
+
 
 ////////////////////////////////////////////////////////////////////////////////
 // API
@@ -650,10 +672,7 @@ struct Pipeline_Task
 
 struct User_Type
 {
-    Block*     created_by_block;
-    Expression created_by_expression;
     Unit*      unit;
-
     bool       has_alias;
     Token      alias;
 };
@@ -679,6 +698,8 @@ struct Compiler
     // Inference
     Dynamic_Array<Pipeline_Task> pipeline;
     Dynamic_Array<User_Type> user_types;
+
+    Dynamic_Array<Unit*> units_to_patch;
 };
 
 void free_compiler(Compiler* compiler);
@@ -735,10 +756,18 @@ String vague_type_description(Unit* unit, Type type, bool point_out_soft_types =
 String vague_type_description_in_compile_time_context(Unit* unit, Type type);
 String exact_type_description(Unit* unit, Type type);
 
-bool find_declaration(Token const* name,
-                      Block* scope, Visibility visibility_limit,
-                      Block** out_decl_scope, Expression* out_decl_expr,
-                      bool allow_parent_traversal = true);
+enum Find_Result
+{
+    FIND_SUCCESS,
+    FIND_FAILURE,
+    FIND_WAIT,
+};
+
+Find_Result find_declaration(Compiler* ctx, Token const* name,
+                             Block* scope, Visibility visibility_limit,
+                             Block** out_decl_scope, Expression* out_decl_expr,
+                             Dynamic_Array<Resolved_Name::Use>* out_use_chain,
+                             bool allow_parent_traversal = true);
 
 u64 get_type_size     (Unit* unit, Type type);
 u64 get_type_alignment(Unit* unit, Type type);

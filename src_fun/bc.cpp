@@ -50,10 +50,11 @@ static constexpr umm BLOCK_RETURN_ADDRESS_SIZE = 1 * sizeof(void*);
 
 struct Bytecode_Builder
 {
-    Unit*                  unit;
-    Block*                 block;
-    Expression             expression;
-    Concatenator<Bytecode> bytecode;
+    Unit*                        unit;
+    Block*                       block;
+    Expression                   expression;
+    Concatenator<Bytecode>       bytecode;
+    Concatenator<Bytecode_Patch> patches;
 };
 
 #define Label() (builder->bytecode.count)
@@ -176,16 +177,53 @@ static Type simplify_type_uf(Unit* unit, Type type)
 
 static Location generate_expression(Bytecode_Builder* builder, Expression id)
 {
-    Unit*  unit  = builder->unit;
-    Block* block = builder->block;
-    auto*  expr  = &block->parsed_expressions  [id];
-    auto*  infer = &block->inferred_expressions[id];
+    Unit*     unit  = builder->unit;
+    Block*    block = builder->block;
+    Compiler* ctx   = unit->ctx;
+    auto*     expr  = &block->parsed_expressions  [id];
+    auto*     infer = &block->inferred_expressions[id];
 
     Expression previous_expression = builder->expression;
     builder->expression = id;
     Defer(builder->expression = previous_expression);
 
     assert(!(infer->flags & INFERRED_EXPRESSION_IS_NOT_EVALUATED_AT_RUNTIME));
+
+    auto apply_use = [&](Location lhs, Resolved_Name::Use use) -> Location
+    {
+        Type unit_type = lhs.type;
+        if (is_pointer_type(lhs.type))
+        {
+            lhs = direct(builder, lhs);
+            unit_type = get_element_type(lhs.type);
+        }
+        assert(is_user_defined_type(unit_type));
+        assert(use.scope->materialized_by_unit == get_user_type_data(ctx, unit_type)->unit);
+
+        auto* decl_infer = &use.scope->inferred_expressions[use.declaration];
+        if (is_pointer_type(lhs.type) || lhs.indirect)
+        {
+            Location result(allocate_storage(unit, unit->pointer_size, unit->pointer_alignment), decl_infer->type, true);
+
+            // :PatchDeclarationPlaceholder
+            *reserve_item(&builder->patches) = { use.scope, use.declaration, Label() };
+            Op(OP_MOVE_POINTER_CONSTANT, r = result.offset, a = lhs.offset);
+            return result;
+        }
+        else
+        {
+            u64 offset;
+            if (get(&use.scope->declaration_placement, &use.declaration, &offset))
+                return Location(lhs.offset + offset, decl_infer->type, false);
+
+            Location result(allocate_storage(unit, unit->pointer_size, unit->pointer_alignment), decl_infer->type, true);
+
+            // :PatchDeclarationPlaceholder
+            *reserve_item(&builder->patches) = { use.scope, use.declaration, Label() };
+            Op(OP_ADDRESS, r = result.offset, a = lhs.offset);
+            return result;
+        }
+    };
 
     switch (expr->kind)
     {
@@ -203,7 +241,7 @@ static Location generate_expression(Bytecode_Builder* builder, Expression id)
     case EXPRESSION_STRING_LITERAL:
     {
         assert(expr->literal.atom == ATOM_STRING_LITERAL);
-        Token_Info_String* token = (Token_Info_String*) get_token_info(unit->ctx, &expr->literal);
+        Token_Info_String* token = (Token_Info_String*) get_token_info(ctx, &expr->literal);
 
         assert(get_type_size(unit, TYPE_STRING) == sizeof(String));
         Location result = allocate_location(builder, TYPE_STRING);
@@ -216,40 +254,22 @@ static Location generate_expression(Bytecode_Builder* builder, Expression id)
     {
         Resolved_Name resolved = get(&block->resolved_names, &id);
         assert(resolved.scope);
-        u64 offset;
-        assert(get(&resolved.scope->declaration_placement, &resolved.declaration, &offset));
-        return Location(offset, infer->type, false);
+
+        Location location = Location(0, block->materialized_by_unit->type_id, false);
+        For (resolved.use_chain)
+            location = apply_use(location, *it);
+        return apply_use(location, { resolved.scope, resolved.declaration });
     } break;
 
     case EXPRESSION_MEMBER:
     {
         Resolved_Name resolved = get(&block->resolved_names, &id);
         assert(resolved.scope);
-        u64 member_offset;
-        assert(get(&resolved.scope->declaration_placement, &resolved.declaration, &member_offset));
 
-        if (infer->flags & INFERRED_EXPRESSION_MEMBER_IS_INDIRECT)
-        {
-            Location operand = direct(builder, generate_expression(builder, expr->unary_operand));
-
-            Location result(allocate_storage(unit, unit->pointer_size, unit->pointer_alignment), infer->type, true);
-            Op(OP_MOVE_POINTER_CONSTANT, r = result.offset, a = operand.offset, s = member_offset);
-            return result;
-        }
-        else
-        {
-            Location operand = generate_expression(builder, expr->unary_operand);
-            if (operand.indirect)
-            {
-                Location result(allocate_storage(unit, unit->pointer_size, unit->pointer_alignment), infer->type, true);
-                Op(OP_MOVE_POINTER_CONSTANT, r = result.offset, a = operand.offset, s = member_offset);
-                return result;
-            }
-            else
-            {
-                return Location(operand.offset + member_offset, infer->type, false);
-            }
-        }
+        Location location = generate_expression(builder, expr->unary_operand);
+        For (resolved.use_chain)
+            location = apply_use(location, *it);
+        return apply_use(location, { resolved.scope, resolved.declaration });
     } break;
 
     case EXPRESSION_NEGATE:
@@ -278,15 +298,10 @@ static Location generate_expression(Bytecode_Builder* builder, Expression id)
 
     case EXPRESSION_CODEOF:
     {
-        auto* op_infer = &block->inferred_expressions[expr->unary_operand];
-        Type unit_type = is_user_defined_type(op_infer->type)
-                       ? op_infer->type
-                       : *get_constant_type(block, expr->unary_operand);
-        Unit* literal = get_user_type_data(unit->ctx, unit_type)->unit;
-
         assert(get_type_size(unit, infer->type) == sizeof(Unit*));
         Location location = allocate_location(builder, infer->type);
-        Op(OP_LITERAL, r = location.offset, a = (umm) literal, s = sizeof(Unit*));
+        *reserve_item(&builder->patches) = { block, id, Label() };
+        Op(OP_LITERAL, r = location.offset, s = sizeof(Unit*));  // :PatchCodeofPlaceholder
         return location;
     } break;
 
@@ -295,33 +310,12 @@ static Location generate_expression(Bytecode_Builder* builder, Expression id)
         auto* op_infer = &block->inferred_expressions[expr->unary_operand];
         if (is_soft_type(op_infer->type))
         {
-            String text = {};
-            switch (op_infer->type)
-            {
-            IllegalDefaultCase;
-            case TYPE_SOFT_ZERO:   text = "zero"_s;                                                                     break;
-            case TYPE_SOFT_NUMBER: text = fract_display(get_constant_number(block, expr->unary_operand));               break;
-            case TYPE_SOFT_BOOL:   text = *get_constant_bool(block, expr->unary_operand) ? "true"_s : "false"_s;        break;
-            case TYPE_SOFT_TYPE:   text = exact_type_description(unit, *get_constant_type(block, expr->unary_operand)); break;
-            case TYPE_SOFT_BLOCK:
-            {
-                Token_Info info;
-                {
-                    Soft_Block constant_block = *get_constant_block(block, expr->unary_operand);
-                    Token_Info* from_info = get_token_info(unit->ctx, &constant_block.parsed_child->from);
-                    Token_Info* to_info   = get_token_info(unit->ctx, &constant_block.parsed_child->to);
-                    info = *from_info;
-                    info.length = to_info->offset + to_info->length - from_info->offset;
-                }
-                text = Report(unit->ctx).snippet(info, false, 0, 0).return_without_reporting();
-            } break;
-            }
-            text = allocate_string(&unit->memory, text);
-
             assert(get_type_size(unit, TYPE_STRING) == sizeof(String));
             Location value = allocate_location(builder, TYPE_STRING);
-            Op(OP_LITERAL, r = value.offset + MemberOffset(String, length), a = (umm) text.length, s = MemberSize(String, length));
-            Op(OP_LITERAL, r = value.offset + MemberOffset(String, data  ), a = (umm) text.data,   s = MemberSize(String, data  ));
+
+            *reserve_item(&builder->patches) = { block, id, Label() };
+            Op(OP_LITERAL, r = value.offset + MemberOffset(String, length), s = MemberSize(String, length));  // :PatchDebugPlaceholder
+            Op(OP_LITERAL, r = value.offset + MemberOffset(String, data  ), s = MemberSize(String, data  ));  // :PatchDebugPlaceholder
             Op(OP_DEBUG_PRINT, r = value.offset, s = TYPE_STRING);
         }
         else
@@ -394,28 +388,9 @@ static Location generate_expression(Bytecode_Builder* builder, Expression id)
         Location value = allocate_location(builder, cast_type);
         if (is_soft_type(value_type))
         {
-            u64 constant;
-            if (is_integer_type(cast_type))
-            {
-                Fraction const* fract = get_constant_number(block, expr->binary.rhs);
-                assert(fract);
-                assert(fract_is_integer(fract));
-                assert(int_get_abs_u64(&constant, &fract->num));
-                if (fract->num.negative)
-                    constant = -constant;
-            }
-            else if (is_bool_type(cast_type))
-            {
-                bool const* boolean = get_constant_bool(block, expr->binary.rhs);
-                assert(boolean);
-                constant = (*boolean ? 1 : 0);
-            }
-            else if (cast_type == TYPE_TYPE)
-            {
-                constant = *get_constant_type(block, expr->binary.rhs);
-            }
-            else NotImplemented;
-            Op(OP_LITERAL, r = value.offset, a = constant, s = get_type_size(unit, value.type));
+            // :PatchCastPlaceholder
+            *reserve_item(&builder->patches) = { block, id, Label() };
+            Op(OP_LITERAL, r = value.offset, s = get_type_size(unit, value.type));
         }
         else
         {
@@ -487,10 +462,14 @@ static Location generate_expression(Bytecode_Builder* builder, Expression id)
         Block* callee = infer->called_block;
         Expression_List const* args = expr->call.arguments;
 
+        Expression return_expression = NO_EXPRESSION;
         umm parameter_index = 0;
         For (callee->imperative_order)
         {
             auto* param_expr = &callee->parsed_expressions[*it];
+            if (param_expr->kind != EXPRESSION_DECLARATION) continue;
+            if (param_expr->flags & EXPRESSION_DECLARATION_IS_RETURN)
+                return_expression = *it;
             if (!(param_expr->flags & EXPRESSION_DECLARATION_IS_PARAMETER)) continue;
             Defer(parameter_index++);
             if (param_expr->flags & EXPRESSION_DECLARATION_IS_ALIAS) continue;
@@ -512,14 +491,21 @@ static Location generate_expression(Bytecode_Builder* builder, Expression id)
             }
         }
 
-        Op(OP_CALL, r = (umm) callee);  // :CallPlaceholder
-        return void_location(infer->type);
+        *reserve_item(&builder->patches) = { block, id, Label() };
+        Op(OP_CALL);  // :PatchCallPlaceholder
+
+        if (return_expression == NO_EXPRESSION)
+            return void_location(infer->type);
+
+        u64 offset;
+        assert(get(&callee->declaration_placement, &return_expression, &offset));
+        return Location(offset, callee->inferred_expressions[return_expression].type, false);
     } break;
 
     case EXPRESSION_INTRINSIC:
     {
         assert(expr->intrinsic_name.atom == ATOM_STRING_LITERAL);
-        Token_Info_String* token = (Token_Info_String*) get_token_info(unit->ctx, &expr->intrinsic_name);
+        Token_Info_String* token = (Token_Info_String*) get_token_info(ctx, &expr->intrinsic_name);
         Op(OP_INTRINSIC, a = (umm) block, b = (umm) token->value.data, s = token->value.length);
         return void_location(infer->type);
     } break;
@@ -572,19 +558,116 @@ static void generate_block(Bytecode_Builder* builder, Block* block)
             generate_block(builder, it->called_block);
 }
 
-static void fix_placeholders(Bytecode_Builder* builder)
+static void patch_bytecode(Unit* unit)
 {
-    Unit* unit = builder->unit;
-    ForEachInConcatenator(&builder->bytecode, it,
+    Compiler* ctx = unit->ctx;
+    Array<Bytecode> bytecode = { unit->bytecode.count, (Bytecode*) unit->bytecode.address };
+    For (unit->bytecode_patches)
     {
-        if (it->op == OP_CALL)
+        Block*     block = it->block;
+        Expression id    = it->expression;
+        umm        label = it->label;
+        auto*      expr  = &block->parsed_expressions  [id];
+        auto*      infer = &block->inferred_expressions[id];
+        Bytecode*  bc    = &bytecode[label];
+
+        switch (expr->kind)
         {
-            Block* callee = (Block*)(umm)(it->r);  // :CallPlaceholder
-            assert(callee != unit->entry_block);
-            it->r = callee->first_instruction;
-            it->a = callee->return_address_offset;
+        IllegalDefaultCase;
+
+        case EXPRESSION_CODEOF:
+        {
+            auto* op_infer = &block->inferred_expressions[expr->unary_operand];
+            Type unit_type = is_user_defined_type(op_infer->type)
+                           ? op_infer->type
+                           : *get_constant_type(block, expr->unary_operand);
+
+            // :PatchCodeofPlaceholder
+            assert(bc[0].op == OP_LITERAL);
+            bc[0].a = (umm) get_user_type_data(ctx, unit_type)->unit;
+        } break;
+
+        case EXPRESSION_DEBUG:
+        {
+            auto* op_infer = &block->inferred_expressions[expr->unary_operand];
+            assert(is_soft_type(op_infer->type));
+
+            String text = {};
+            switch (op_infer->type)
+            {
+            IllegalDefaultCase;
+            case TYPE_SOFT_ZERO:   text = "zero"_s;                                                                     break;
+            case TYPE_SOFT_NUMBER: text = fract_display(get_constant_number(block, expr->unary_operand));               break;
+            case TYPE_SOFT_BOOL:   text = *get_constant_bool(block, expr->unary_operand) ? "true"_s : "false"_s;        break;
+            case TYPE_SOFT_TYPE:   text = exact_type_description(unit, *get_constant_type(block, expr->unary_operand)); break;
+            case TYPE_SOFT_BLOCK:
+            {
+                Token_Info info;
+                {
+                    Soft_Block constant_block = *get_constant_block(block, expr->unary_operand);
+                    Token_Info* from_info = get_token_info(ctx, &constant_block.parsed_child->from);
+                    Token_Info* to_info   = get_token_info(ctx, &constant_block.parsed_child->to);
+                    info = *from_info;
+                    info.length = to_info->offset + to_info->length - from_info->offset;
+                }
+                text = Report(ctx).snippet(info, false, 0, 0).return_without_reporting();
+            } break;
+            }
+            text = allocate_string(&unit->memory, text);
+
+            // :PatchDebugPlaceholder
+            assert(bc[0].op == OP_LITERAL && bc[1].op == OP_LITERAL);
+            bc[0].a = (umm) text.length;
+            bc[1].a = (umm) text.data;
+        } break;
+
+        case EXPRESSION_CAST:
+        {
+            assert(is_soft_type(block->inferred_expressions[expr->binary.rhs].type));
+
+            u64 constant;
+            if (is_integer_type(infer->type))
+            {
+                Fraction const* fract = get_constant_number(block, expr->binary.rhs);
+                assert(fract);
+                assert(fract_is_integer(fract));
+                assert(int_get_abs_u64(&constant, &fract->num));
+                if (fract->num.negative)
+                    constant = -constant;
+            }
+            else if (is_bool_type(infer->type))
+                constant = (*get_constant_bool(block, expr->binary.rhs) ? 1 : 0);
+            else if (infer->type == TYPE_TYPE)
+                constant = *get_constant_type(block, expr->binary.rhs);
+            else Unreachable;
+
+            // :PatchCastPlaceholder
+            assert(bc[0].op == OP_LITERAL);
+            bc[0].a = constant;
+        } break;
+
+        case EXPRESSION_CALL:
+        {
+            // :PatchCallPlaceholder
+            assert(bc[0].op == OP_CALL);
+            bc[0].r = infer->called_block->first_instruction;
+            bc[0].a = infer->called_block->return_address_offset;
+        } break;
+
+        case EXPRESSION_DECLARATION:
+        {
+            // :PatchDeclarationPlaceholder
+            u64 offset;
+            assert(get(&block->declaration_placement, &id, &offset));
+            if (bc[0].op == OP_ADDRESS)
+                bc[0].a += offset;
+            else if (bc[0].op == OP_MOVE_POINTER_CONSTANT)
+                bc[0].s = offset;
+            else Unreachable;
+        } break;
+
         }
-    });
+    }
 }
 
 void generate_bytecode_for_unit_placement(Unit* unit)
@@ -605,8 +688,8 @@ void generate_bytecode_for_unit_placement(Unit* unit)
         builder.block      = NULL;
         builder.expression = NO_EXPRESSION;
         generate_block(&builder, unit->entry_block);
-        fix_placeholders(&builder);
-        unit->bytecode = const_array(resolve_to_array_and_free(&builder.bytecode, &unit->memory));
+        unit->bytecode         = const_array(resolve_to_array_and_free(&builder.bytecode, &unit->memory));
+        unit->bytecode_patches = const_array(resolve_to_array_and_free(&builder.patches,  &unit->memory));
     }
 }
 
@@ -614,6 +697,7 @@ void generate_bytecode_for_unit_completion(Unit* unit)
 {
     if (!(unit->flags & UNIT_IS_STRUCT))
     {
+        patch_bytecode(unit);
         unit->compiled_bytecode = true;
     }
 }

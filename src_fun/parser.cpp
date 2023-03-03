@@ -248,7 +248,7 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
             if (!open_parents_counter && (stream->cursor + lookahead < stream->end))
             {
                 Atom atom = stream->cursor[lookahead].atom;
-                if (atom == ATOM_EQUAL_GREATER || atom == ATOM_LEFT_BRACE)
+                if (atom == ATOM_EQUAL_GREATER || atom == ATOM_LEFT_BRACE || atom == ATOM_MINUS_GREATER)
                     return true;
             }
             return false;
@@ -258,6 +258,8 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
         {
             Block* parameter_block;
             {
+                enum {} builder;  // don't use builder in this scope
+
                 parameter_block = PushValue(&stream->ctx->parser_memory, Block);
                 parameter_block->flags = BLOCK_IS_PARAMETER_BLOCK;
                 parameter_block->from = *start;
@@ -266,6 +268,7 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
                 parameter_builder.block = parameter_block;
                 Defer(finish_building(stream->ctx, &parameter_builder));
 
+                // Parse parameter declarations and add them to the scope
                 bool first_parameter = true;
                 while (!maybe_take_atom(stream, ATOM_RIGHT_PARENTHESIS))
                 {
@@ -311,11 +314,79 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
                     decl_expr->declaration.value = NO_EXPRESSION;
                     add_item(&parameter_builder.imperative_order, &decl_expr_id);
                 }
+
+                // Parse the return type
+                Token*     return_from = stream->cursor;
+                Block*     return_block = NULL;
+                if (maybe_take_atom(stream, ATOM_MINUS_GREATER) && !maybe_take_atom(stream, ATOM_VOID))
+                {
+                    if (!take_atom(stream, ATOM_LEFT_PARENTHESIS, "Expected 'void' or '(' after '->' to begin the return type."_s))
+                        return false;
+
+                    return_block = PushValue(&stream->ctx->parser_memory, Block);
+                    return_block->flags = BLOCK_IS_UNIT | BLOCK_HAS_STRUCTURE_PLACEMENT;
+                    return_block->from = *return_from;
+
+                    enum {} parameter_builder;  // don't use parameter_builder in this scope
+
+                    Block_Builder return_builder = {};
+                    return_builder.block = return_block;
+                    Defer(finish_building(stream->ctx, &return_builder));
+
+                    bool first_member = true;
+                    while (!maybe_take_atom(stream, ATOM_RIGHT_PARENTHESIS))
+                    {
+                        if (first_member) first_member = false;
+                        else if (!take_atom(stream, ATOM_COMMA, "Expected ',' between declarations."_s))
+                            return false;
+
+                        Token* name = stream->cursor;
+                        if (!take_atom(stream, ATOM_FIRST_IDENTIFIER, "Expected a name."_s))
+                            return false;
+                        if (!take_atom(stream, ATOM_COLON, "Expected ':' between the name and type."_s))
+                            return false;
+
+                        Expression type;
+                        if (!parse_expression_leaf(stream, &return_builder, &type, 0))
+                            return false;
+
+                        Expression decl_expr_id;
+                        Parsed_Expression* decl_expr = add_expression(&return_builder, EXPRESSION_DECLARATION, name, stream->cursor - 1, &decl_expr_id);
+                        decl_expr->declaration.name  = *name;
+                        decl_expr->declaration.type  = type;
+                        decl_expr->declaration.value = NO_EXPRESSION;
+                        add_item(&return_builder.imperative_order, &decl_expr_id);
+                    }
+
+                    return_block->to = *(stream->cursor - 1);
+                }
+                Token* return_to = (return_from == stream->cursor) ? stream->cursor : stream->cursor - 1;
+
+                Expression return_type;
+                if (return_block)
+                    add_expression(&parameter_builder, EXPRESSION_UNIT, return_from, return_to, &return_type)
+                        ->parsed_block = return_block;
+                else
+                    add_expression(&parameter_builder, EXPRESSION_TYPE_LITERAL, return_from, return_to, &return_type)
+                        ->parsed_type = TYPE_VOID;
+
+                // And the return declaration to the scope
+                {
+                    Expression decl_expr_id;
+                    Parsed_Expression* decl_expr = add_expression(&parameter_builder, EXPRESSION_DECLARATION, return_from, return_to, &decl_expr_id);
+                    decl_expr->flags |= EXPRESSION_DECLARATION_IS_RETURN | EXPRESSION_DECLARATION_IS_USING;
+                    decl_expr->declaration.name  = {};  // return declarations don't have a name
+                    decl_expr->declaration.type  = return_type;
+                    decl_expr->declaration.value = NO_EXPRESSION;
+                    add_item(&parameter_builder.imperative_order, &decl_expr_id);
+                }
+
                 parameter_block->to = *(stream->cursor - 1);
 
-                if (lookahead_atom(stream, ATOM_LEFT_BRACE, 0) &&
+                // Add either a call expression or an intrinsic expression
+                if (lookahead_atom(stream, ATOM_LEFT_BRACE,  0) &&
                     lookahead_atom(stream, ATOM_RIGHT_BRACE, 1) &&
-                    lookahead_atom(stream, ATOM_INTRINSIC, 2))
+                    lookahead_atom(stream, ATOM_INTRINSIC,   2))
                 {
                     stream->cursor += 3;
                     Token* name = stream->cursor;

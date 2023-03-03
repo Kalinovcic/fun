@@ -23,6 +23,11 @@ void free_compiler(Compiler* ctx)
 
 extern "C" int main(int argc, char** argv)
 {
+    /*add_log_handler([](String severity, String subsystem, String msg)
+    {
+        printf("%.*s\n", StringArgs(msg));
+    });*/
+
     Dynamic_Array<String> non_flag_args = {};
     for (umm i = 1; i < argc; i++)
         if (argv[i][0] != '-')

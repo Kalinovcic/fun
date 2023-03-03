@@ -50,10 +50,8 @@ static Block* materialize_block(Unit* unit, Block* materialize_from,
 
     assert(!(unit->flags & UNIT_IS_PLACED));
     assert(unit->blocks_not_ready_for_placement != 0 || unit->materialized_block_count == 0);
+    assert(unit->blocks_not_completed != 0           || unit->materialized_block_count == 0);
     unit->blocks_not_ready_for_placement++;
-
-    assert(!(unit->flags & UNIT_IS_COMPLETED));
-    assert(unit->blocks_not_completed != 0 || unit->materialized_block_count == 0);
     unit->blocks_not_completed++;
 
     unit->materialized_block_count++;
@@ -75,12 +73,10 @@ User_Type* get_user_type_data(Compiler* ctx, Type type)
     return &ctx->user_types[type - TYPE_FIRST_USER_TYPE];
 }
 
-static Type create_user_type(Compiler* ctx, Block* created_by_block, Expression created_by_expression, Unit* unit)
+static Type create_user_type(Compiler* ctx, Unit* unit)
 {
     Type type = (Type)(TYPE_FIRST_USER_TYPE + ctx->user_types.count);
     User_Type* data = reserve_item(&ctx->user_types);
-    data->created_by_block      = created_by_block;
-    data->created_by_expression = created_by_expression;
     data->unit                  = unit;
     return type;
 }
@@ -182,14 +178,16 @@ String exact_type_description(Unit* unit, Type type)
 
 
 
-bool find_declaration(Token const* name,
-                      Block* scope, Visibility visibility_limit,
-                      Block** out_decl_scope, Expression* out_decl_expr,
-                      bool allow_parent_traversal)
+Find_Result find_declaration(Compiler* ctx, Token const* name,
+                             Block* scope, Visibility visibility_limit,
+                             Block** out_decl_scope, Expression* out_decl_expr,
+                             Dynamic_Array<Resolved_Name::Use>* out_use_chain,
+                             bool allow_parent_traversal)
 {
     while (scope)
     {
-        for (Expression id = (Expression) 0; id < scope->parsed_expressions.count; id = (Expression)(id + 1))
+        // 1: try to find normal declarations
+        for (Expression id = {}; id < scope->parsed_expressions.count; id = (Expression)(id + 1))
         {
             auto* expr = &scope->parsed_expressions[id];
             if (expr->kind != EXPRESSION_DECLARATION) continue;
@@ -197,20 +195,54 @@ bool find_declaration(Token const* name,
             if (expr->declaration.name.atom != name->atom) continue;
             if ((expr->flags & EXPRESSION_DECLARATION_IS_ORDERED) &&
                 (expr->visibility_limit >= visibility_limit || visibility_limit == NO_VISIBILITY))
-                break;
+                continue;
 
             *out_decl_scope = scope;
             *out_decl_expr = id;
-            return true;
+            return FIND_SUCCESS;
         }
 
+        // 2: try to find declarations from a used scope
+        if (out_use_chain)
+        {
+            for (Expression id = {}; id < scope->parsed_expressions.count; id = (Expression)(id + 1))
+            {
+                auto* expr = &scope->parsed_expressions[id];
+                if (expr->kind != EXPRESSION_DECLARATION) continue;
+                if (!(expr->flags & EXPRESSION_DECLARATION_IS_USING)) continue;
+
+                auto* infer = &scope->inferred_expressions[id];
+                if (infer->type == INVALID_TYPE)
+                {
+                    *out_decl_scope = scope;
+                    *out_decl_expr  = id;
+                    return FIND_WAIT;
+                }
+
+                if (!is_user_defined_type(infer->type)) continue;
+                User_Type* data = get_user_type_data(ctx, infer->type);
+                assert(data->unit);
+
+                Find_Result result = find_declaration(ctx, name, data->unit->entry_block, ALL_VISIBILITY,
+                                                      out_decl_scope, out_decl_expr, out_use_chain,
+                                                      /* allow_parent_traversal */ false);
+                if (result == FIND_FAILURE) continue;
+                if (result == FIND_WAIT) return FIND_WAIT;
+                assert(result == FIND_SUCCESS);
+
+                Resolved_Name::Use use = { scope, id };
+                insert_item(out_use_chain, &use, 0);
+                return FIND_SUCCESS;
+            }
+        }
+
+        // 3: try to recurse to parent scope
         if (!allow_parent_traversal)
             break;
-
         visibility_limit = scope->parent_scope_visibility_limit;
         scope            = scope->parent_scope;
     }
-    return false;
+    return FIND_FAILURE;
 }
 
 
@@ -243,7 +275,7 @@ static void helpful_error_for_missing_name(Compiler* ctx, String base_error, Tok
     String identifier = get_identifier(ctx, name);
     while (scope)
     {
-        for (Expression id = (Expression) 0; id < scope->parsed_expressions.count; id = (Expression)(id + 1))
+        for (Expression id = {}; id < scope->parsed_expressions.count; id = (Expression)(id + 1))
         {
             auto* expr = &scope->parsed_expressions[id];
             if (expr->kind != EXPRESSION_DECLARATION) continue;
@@ -408,19 +440,12 @@ static void place_unit(Unit* unit)
 
     generate_bytecode_for_unit_placement(unit);
 
-    unit->storage_size = unit->next_storage_offset;
     if (!unit->storage_alignment)
         unit->storage_alignment = 1;
+    unit->storage_size = unit->next_storage_offset;
+    while (unit->storage_size % unit->storage_alignment)
+        unit->storage_size++;
     unit->flags |= UNIT_IS_PLACED;
-}
-
-static void complete_unit(Unit* unit)
-{
-    assert(unit->flags & UNIT_IS_PLACED);
-    assert(!(unit->flags & UNIT_IS_COMPLETED));
-
-    generate_bytecode_for_unit_completion(unit);
-    unit->flags |= UNIT_IS_COMPLETED;
 }
 
 
@@ -698,8 +723,7 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
         Unit* new_unit = materialize_unit(unit->ctx, expr->parsed_block, block);
         if (expr->parsed_block->flags & BLOCK_HAS_STRUCTURE_PLACEMENT)
             new_unit->flags |= UNIT_IS_STRUCT;
-        Type type = create_user_type(unit->ctx, block, id, new_unit);
-        set_constant_type(block, id, type);
+        set_constant_type(block, id, new_unit->type_id);
         InferenceComplete();
     } break;
 
@@ -710,13 +734,17 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
         Resolved_Name resolved = get(&block->resolved_names, &id);
         if (!resolved.scope)
         {
-            if (!find_declaration(name, block, expr->visibility_limit, &resolved.scope, &resolved.declaration))
+            Find_Result result = find_declaration(unit->ctx, name, block, expr->visibility_limit, &resolved.scope, &resolved.declaration, &resolved.use_chain);
+            if (result == FIND_WAIT)
+                Wait(WAITING_ON_USING_TYPE, resolved.declaration, resolved.scope);
+            if (result == FIND_FAILURE)
             {
                 String error = Format(temp, "Can't find '%'.", get_identifier(unit->ctx, name));
                 helpful_error_for_missing_name(unit->ctx, error, &expr->declaration.name,
                                                block, expr->visibility_limit, /* allow_parent_traversal */ true);
                 return YIELD_ERROR;
             }
+            assert(result == FIND_SUCCESS);
             assert(!(unit->flags & UNIT_IS_PLACED));
             set(&block->resolved_names, &id, &resolved);
         }
@@ -740,12 +768,8 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
         if (lhs_type == INVALID_TYPE)
             WaitOperand(expr->member.lhs);
         Type user_type = lhs_type;
-        bool indirect = false;
         if (is_pointer_type(user_type))
-        {
-            user_type = set_indirection(user_type, get_indirection(user_type) - 1);
-            indirect = true;
-        }
+            user_type = get_element_type(user_type);
         if (!is_user_defined_type(user_type))
             Error("Expected a unit type on the left side of the '.' operator, but got %.", vague_type_description(unit, lhs_type));
 
@@ -757,7 +781,10 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
         Resolved_Name resolved = get(&block->resolved_names, &id);
         if (!resolved.scope)
         {
-            if (!find_declaration(&expr->member.name, member_block, ALL_VISIBILITY, &resolved.scope, &resolved.declaration, /* allow_parent_traversal */ false))
+            Find_Result result = find_declaration(unit->ctx, &expr->member.name, member_block, ALL_VISIBILITY, &resolved.scope, &resolved.declaration, &resolved.use_chain, /* allow_parent_traversal */ false);
+            if (result == FIND_WAIT)
+                Wait(WAITING_ON_USING_TYPE, resolved.declaration, resolved.scope);
+            if (result == FIND_FAILURE)
             {
                 String identifier = get_identifier(unit->ctx, &expr->member.name);
                 String error = Format(temp, "Can't find member '%' in %.", identifier, exact_type_description(unit, user_type));
@@ -765,6 +792,7 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
                                                member_block, ALL_VISIBILITY, /* allow_parent_traversal */ false);
                 return YIELD_ERROR;
             }
+            assert(result == FIND_SUCCESS);
             assert(!(unit->flags & UNIT_IS_PLACED));
             set(&block->resolved_names, &id, &resolved);
         }
@@ -773,8 +801,6 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
         if (decl_infer->type == INVALID_TYPE)
             Wait(WAITING_ON_DECLARATION, resolved.declaration, resolved.scope);
         infer->flags |= INFERRED_EXPRESSION_DOES_NOT_ALLOCATE_STORAGE;
-        if (indirect)
-            infer->flags |= INFERRED_EXPRESSION_MEMBER_IS_INDIRECT;
         InferType(decl_infer->type);
 
         if (is_soft_type(decl_infer->type))
@@ -1378,12 +1404,11 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
             override_made_progress = true;  // We made progress by materializing the callee.
         }
 
-        InferType(TYPE_VOID);  // @Incomplete - yield type
-
+        Expression waiting_on_return      = NO_EXPRESSION;
         Expression waiting_on_a_parameter = NO_EXPRESSION;
         Expression waiting_on_an_argument = NO_EXPRESSION;
 
-        // Second stage: checking the parameter types
+        // Second stage: checking the parameter types and inferring the return type
         Block* callee = infer->called_block;
         umm parameter_index = 0;
         For (callee->imperative_order)
@@ -1391,6 +1416,17 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
             Expression param_id = *it;
             auto* param_expr  = &callee->parsed_expressions  [param_id];
             auto* param_infer = &callee->inferred_expressions[param_id];
+            if (param_expr->kind != EXPRESSION_DECLARATION) continue;
+
+            if (param_expr->flags & EXPRESSION_DECLARATION_IS_RETURN)
+            {
+                if (param_infer->type == INVALID_TYPE)
+                    waiting_on_return = param_id;
+                else
+                    InferType(param_infer->type);
+                continue;
+            }
+
             if (!(param_expr->flags & EXPRESSION_DECLARATION_IS_PARAMETER)) continue;
             Defer(parameter_index++);
             assert(param_expr->declaration.type != NO_EXPRESSION);
@@ -1545,10 +1581,15 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
             }
         }
 
+        if (waiting_on_return != NO_EXPRESSION)
+            Wait(WAITING_ON_RETURN_TYPE_INFERENCE, waiting_on_return, callee);
         if (waiting_on_a_parameter != NO_EXPRESSION)
             Wait(WAITING_ON_PARAMETER_INFERENCE, waiting_on_a_parameter, callee);
         if (waiting_on_an_argument != NO_EXPRESSION)
             WaitOperand(waiting_on_an_argument);
+
+        if (infer->type == INVALID_TYPE)
+            InferType(TYPE_VOID);
 
         InferenceComplete();
     } break;
@@ -1692,7 +1733,7 @@ static Yield_Result infer_block(Pipeline_Task* task)
     {
         Expression id = *id_ptr;
 #else
-    for (Expression id = (Expression) 0; id < block->parsed_expressions.count; id = (Expression)(id + 1))
+    for (Expression id = {}; id < block->parsed_expressions.count; id = (Expression)(id + 1))
     {
 #endif
         auto* infer = &block->inferred_expressions[id];
@@ -1805,9 +1846,7 @@ static Yield_Result infer_block(Pipeline_Task* task)
 
     assert(unit->blocks_not_completed > 0);
     if (--unit->blocks_not_completed == 0)
-    {
-        complete_unit(unit);
-    }
+        add_item(&unit->ctx->units_to_patch, &unit);
 
     return YIELD_COMPLETED;
 }
@@ -1829,7 +1868,10 @@ Unit* materialize_unit(Compiler* ctx, Block* initiator, Block* materialized_pare
     unit->pointer_size      = sizeof (void*);
     unit->pointer_alignment = alignof(void*);
 
+    unit->type_id = create_user_type(ctx, unit);
+
     unit->entry_block = materialize_block(unit, initiator, materialized_parent, NO_VISIBILITY);
+
     return unit;
 }
 
@@ -1936,6 +1978,17 @@ bool pump_pipeline(Compiler* ctx)
             return false;
         }
     }
+
+    For (ctx->units_to_patch)
+    {
+        Unit* unit = *it;
+        assert(unit->flags & UNIT_IS_PLACED);
+        assert(!(unit->flags & UNIT_IS_PATCHED));
+
+        generate_bytecode_for_unit_completion(unit);
+        unit->flags |= UNIT_IS_PATCHED;
+    }
+    free_heap_array(&ctx->units_to_patch);
 
     return true;
 }
