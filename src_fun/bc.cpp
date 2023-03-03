@@ -52,13 +52,14 @@ struct Bytecode_Builder
 {
     Unit*                  unit;
     Block*                 block;
+    Expression             expression;
     Concatenator<Bytecode> bytecode;
 };
 
-#define Op(opcode, ...)                                               \
-    {                                                                 \
-        u64 r = 0, a = 0, b = 0, s = 0; { __VA_ARGS__; }              \
-        *reserve_item(&builder->bytecode) = { (opcode), r, a, b, s }; \
+#define Op(opcode, ...)                                                                                           \
+    {                                                                                                             \
+        flags32 flags = 0; u64 r = 0, a = 0, b = 0, s = 0; { __VA_ARGS__; }                                       \
+        *reserve_item(&builder->bytecode) = { builder->block, builder->expression, (opcode), flags, r, a, b, s }; \
     }
 
 struct Location
@@ -143,6 +144,10 @@ static Location generate_expression(Bytecode_Builder* builder, Expression id)
     Block* block = builder->block;
     auto*  expr  = &block->parsed_expressions  [id];
     auto*  infer = &block->inferred_expressions[id];
+
+    Expression previous_expression = builder->expression;
+    builder->expression = id;
+    Defer(builder->expression = previous_expression);
 
     assert(!(infer->flags & INFERRED_EXPRESSION_IS_NOT_EVALUATED_AT_RUNTIME));
 
@@ -303,12 +308,15 @@ static Location generate_expression(Bytecode_Builder* builder, Expression id)
     case EXPRESSION_DIVIDE_FRACTIONAL:  NotImplemented;
     case EXPRESSION_POINTER_ADD:        NotImplemented;
     case EXPRESSION_POINTER_SUBTRACT:   NotImplemented;
-    case EXPRESSION_EQUAL:              NotImplemented;
-    case EXPRESSION_NOT_EQUAL:          NotImplemented;
-    case EXPRESSION_GREATER_THAN:       NotImplemented;
-    case EXPRESSION_GREATER_OR_EQUAL:   NotImplemented;
-    case EXPRESSION_LESS_THAN:          NotImplemented;
-    case EXPRESSION_LESS_OR_EQUAL:      NotImplemented;
+
+    case EXPRESSION_EQUAL:
+    case EXPRESSION_NOT_EQUAL:
+    case EXPRESSION_GREATER_THAN:
+    case EXPRESSION_GREATER_OR_EQUAL:
+    case EXPRESSION_LESS_THAN:
+    case EXPRESSION_LESS_OR_EQUAL:
+    {
+    } break;
 
     case EXPRESSION_CAST:
     {
@@ -432,9 +440,10 @@ static void generate_block(Bytecode_Builder* builder, Block* block)
             generate_block(builder, it->called_block);
 }
 
-static void fix_placeholders(Unit* unit)
+static void fix_placeholders(Bytecode_Builder* builder)
 {
-    For (unit->bytecode)
+    Unit* unit = builder->unit;
+    ForEachInConcatenator(&builder->bytecode, it,
     {
         if (it->op == OP_CALL)
         {
@@ -443,7 +452,7 @@ static void fix_placeholders(Unit* unit)
             it->r = callee->first_instruction;
             it->a = callee->return_address_offset;
         }
-    }
+    });
 }
 
 void generate_bytecode_for_unit_placement(Unit* unit)
@@ -460,11 +469,12 @@ void generate_bytecode_for_unit_placement(Unit* unit)
     if (!(unit->flags & UNIT_IS_STRUCT))
     {
         Bytecode_Builder builder = {};
-        builder.unit = unit;
+        builder.unit       = unit;
+        builder.block      = NULL;
+        builder.expression = NO_EXPRESSION;
         generate_block(&builder, unit->entry_block);
-        unit->bytecode = resolve_to_array_and_free(&builder.bytecode, &unit->memory);
-
-        fix_placeholders(unit);
+        fix_placeholders(&builder);
+        unit->bytecode = const_array(resolve_to_array_and_free(&builder.bytecode, &unit->memory));
     }
 }
 

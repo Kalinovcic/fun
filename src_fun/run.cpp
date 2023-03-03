@@ -9,440 +9,21 @@ EnterApplicationNamespace
 
 
 
-#if 0
-#define TRACE 0
-
-union Memory
-{
-    byte  base[0];
-    byte* as_address;
-    u8    as_u8;
-    u16   as_u16;
-    u32   as_u32;
-    u64   as_u64;
-    u64   as_umm;
-    s8    as_s8;
-    s16   as_s16;
-    s32   as_s32;
-    s64   as_s64;
-    smm   as_smm;
-    f32   as_f32;
-    f64   as_f64;
-    struct
-    {
-        u8 value;
-        inline operator bool()        { return value; }
-        inline void operator=(bool v) { value = v ? 1 : 0; }
-    } as_bool;
-};
-
-void vm(Runtime_Code_Address at)
-{
-next_instruction:
-    if (!at.unit) return;
-
-    Unit* unit = at.unit;
-    Expression_Reference ref = unit->execution_order[at.instruction];
-    if (!ref.block)
-    {
-        auto* expr = &unit->runtime_expressions[ref.id];
-        switch (expr->kind)
-        {
-        case RUNTIME_EXPRESSION_YIELD:
-        {
-            assert(expr->storage_size == sizeof(Runtime_Code_Address));
-            at = *(Runtime_Code_Address*)(at.storage + expr->storage_offset);
-            goto next_instruction;
-        } break;
-        case RUNTIME_EXPRESSION_GOTO:
-        {
-            at.instruction = expr->instruction;
-            goto next_instruction;
-        } break;
-        case RUNTIME_EXPRESSION_BRANCH_IF_FALSE:
-        {
-            u64 condition = 0;
-            assert(expr->storage_size <= sizeof(condition));
-            memcpy(&condition, at.storage + expr->storage_offset, expr->storage_size);
-            if (condition) break;
-            at.instruction = expr->instruction;
-            goto next_instruction;
-        } break;
-        IllegalDefaultCase;
-        }
-    }
-    else
-    {
-        Block*  block   = ref.block;
-        auto*   expr    = &block->parsed_expressions  [ref.id];
-        auto*   infer   = &block->inferred_expressions[ref.id];
-        Memory* address = (Memory*)(at.storage + infer->offset);
-
-        auto get_operand = [&](Expression op)
-        {
-            return (Memory*)(at.storage + block->inferred_expressions[op].offset);
-        };
-
-        auto specialize = [](Type type, Memory* memory, auto&& lambda)
-        {
-            switch (type)
-            {
-            case TYPE_U8:     lambda(&memory->as_u8);     break;
-            case TYPE_U16:    lambda(&memory->as_u16);    break;
-            case TYPE_U32:    lambda(&memory->as_u32);    break;
-            case TYPE_U64:    lambda(&memory->as_u64);    break;
-            case TYPE_UMM:    lambda(&memory->as_umm);    break;
-            case TYPE_S8:     lambda(&memory->as_s8);     break;
-            case TYPE_S16:    lambda(&memory->as_s16);    break;
-            case TYPE_S32:    lambda(&memory->as_s32);    break;
-            case TYPE_S64:    lambda(&memory->as_s64);    break;
-            case TYPE_SMM:    lambda(&memory->as_smm);    break;
-            case TYPE_F32:    lambda(&memory->as_f32);    break;
-            case TYPE_F64:    lambda(&memory->as_f64);    break;
-            case TYPE_BOOL:   lambda(&memory->as_bool);   break;
-            IllegalDefaultCase;
-            }
-        };
-
-        auto specialize_numeric_binary = [&](auto&& lambda)
-        {
-            assert(block->inferred_expressions[expr->binary.lhs].type == infer->type);
-            assert(block->inferred_expressions[expr->binary.rhs].type == infer->type);
-            Memory* lhs = get_operand(expr->binary.lhs);
-            Memory* rhs = get_operand(expr->binary.rhs);
-            specialize(infer->type, address, [&](auto* v) { lambda(v, (decltype(v)) lhs, (decltype(v)) rhs); });
-        };
-
-        auto specialize_logic_binary = [&](auto&& lambda)
-        {
-            assert(infer->type == TYPE_BOOL);
-            assert(block->inferred_expressions[expr->binary.lhs].type == block->inferred_expressions[expr->binary.rhs].type);
-            Memory* lhs = get_operand(expr->binary.lhs);
-            Memory* rhs = get_operand(expr->binary.rhs);
-            specialize(infer->type, lhs, [&](auto* lhs) { lambda(&address->as_bool, lhs, (decltype(lhs)) rhs); });
-        };
-
-        switch (expr->kind)
-        {
-
-        case EXPRESSION_STRING_LITERAL:
-        {
-            assert(expr->literal.atom == ATOM_STRING_LITERAL);
-            Token_Info_String* token = (Token_Info_String*) get_token_info(unit->ctx, &expr->literal);
-            assert(infer->size == sizeof(String));
-            *(String*) address = token->value;
-        } break;
-
-        case EXPRESSION_NEGATE:
-        {
-            assert(block->inferred_expressions[expr->unary_operand].type == infer->type);
-            Memory* op = get_operand(expr->unary_operand);
-            specialize(infer->type, address, [&](auto* v) { *v = -*(decltype(v)) op; });
-        } break;
-
-        case EXPRESSION_ADDRESS:
-        {
-            address->as_address = (byte*) get_operand(expr->unary_operand);
-        } break;
-
-        case EXPRESSION_DEREFERENCE:
-        {
-            address = (Memory*) get_operand(expr->unary_operand)->as_address;
-        } break;
-
-        case EXPRESSION_CODEOF:
-        {
-            auto* op_infer = &block->inferred_expressions[expr->unary_operand];
-            Type unit_type;
-            if (is_user_defined_type(op_infer->type))
-                unit_type = op_infer->type;
-            else
-                unit_type = *get_constant_type(block, expr->unary_operand);
-            Unit* result = get_user_type_data(unit->ctx, unit_type)->unit;
-            assert(result);
-            address->as_address = (byte*) result;
-        } break;
-
-        case EXPRESSION_DEBUG:
-        {
-            auto* op_infer = &block->inferred_expressions[expr->unary_operand];
-            if (is_soft_type(op_infer->type))
-            {
-                switch (op_infer->type)
-                {
-                case TYPE_SOFT_ZERO: printf("zero\n"); break;
-                case TYPE_SOFT_NUMBER:
-                {
-                    String str = fract_display(get_constant_number(block, expr->unary_operand));
-                    printf("%.*s\n", StringArgs(str));
-                } break;
-                case TYPE_SOFT_BOOL: printf("%s\n", *get_constant_bool(block, expr->unary_operand) ? "true" : "false"); break;
-                case TYPE_SOFT_TYPE:
-                {
-                    String type = exact_type_description(unit, *get_constant_type(block, expr->unary_operand));
-                    printf("%.*s\n", StringArgs(type));
-                } break;
-                case TYPE_SOFT_BLOCK:
-                {
-                    Token_Info info;
-                    {
-                        Soft_Block constant_block = *get_constant_block(block, expr->unary_operand);
-                        Token_Info* from_info = get_token_info(unit->ctx, &constant_block.parsed_child->from);
-                        Token_Info* to_info   = get_token_info(unit->ctx, &constant_block.parsed_child->to);
-                        info = *from_info;
-                        info.length = to_info->offset + to_info->length - from_info->offset;
-                    }
-                    String location = Report(unit->ctx).snippet(info, false, 0, 0).return_without_reporting();
-                    printf("<soft block>\n%.*s\n", StringArgs(location));
-                } break;
-                IllegalDefaultCase;
-                }
-            }
-            else
-            {
-                Memory* value = get_operand(expr->unary_operand);
-                if (is_numeric_type(op_infer->type) || is_bool_type(op_infer->type))
-                {
-                    specialize(op_infer->type, value, [](auto* v)
-                    {
-                        String text = Format(temp, "%", *v);
-                        printf("%.*s\n", StringArgs(text));
-                    });
-                }
-                else if (is_pointer_type(op_infer->type))
-                    printf("%p\n", value->as_address);
-                else if (op_infer->type == TYPE_TYPE)
-                    printf("type id %u\n", value->as_u32);
-                else if (op_infer->type == TYPE_STRING)
-                    printf("%.*s\n", StringArgs(*(String*) value));
-                else if (op_infer->type == TYPE_VOID)
-                    printf("void\n");
-                else Unreachable;
-            }
-        } break;
-
-        case EXPRESSION_DEBUG_ALLOC:
-        {
-            Type type = infer->type;
-            assert(is_pointer_type(type));
-            Type to_alloc = set_indirection(type, get_indirection(type) - 1);
-            umm size = get_type_size(unit, to_alloc);
-            // @Reconsider - what about alignment?
-            address->as_address = alloc<byte>(NULL, size);
-        } break;
-
-        case EXPRESSION_DEBUG_FREE:
-        {
-            free(get_operand(expr->unary_operand)->as_address);
-        } break;
-
-        case EXPRESSION_ASSIGNMENT:
-        {
-            u64 size = infer->size;
-            assert(size == block->inferred_expressions[expr->binary.lhs].size);
-            assert(size == block->inferred_expressions[expr->binary.rhs].size);
-
-            Memory* rhs = get_operand(expr->binary.rhs);
-            Memory* lhs = get_operand(expr->binary.lhs);
-            memcpy(lhs, rhs, size);
-            memcpy(address, lhs, size);
-        } break;
-
-        case EXPRESSION_ADD:                specialize_numeric_binary([](auto* v, auto* l, auto* r) { *v = *l + *r; }); break;
-        case EXPRESSION_SUBTRACT:           specialize_numeric_binary([](auto* v, auto* l, auto* r) { *v = *l - *r; }); break;
-        case EXPRESSION_MULTIPLY:           specialize_numeric_binary([](auto* v, auto* l, auto* r) { *v = *l * *r; }); break;
-
-        // @Reconsider
-        case EXPRESSION_DIVIDE_WHOLE:       specialize_numeric_binary([](auto* v, auto* l, auto* r) { *v = *l / *r; }); break;
-        case EXPRESSION_DIVIDE_FRACTIONAL:  specialize_numeric_binary([](auto* v, auto* l, auto* r) { *v = *l / *r; }); break;
-
-        case EXPRESSION_POINTER_ADD:
-        {
-            auto* lhs_infer = &block->inferred_expressions[expr->binary.lhs];
-            auto* rhs_infer = &block->inferred_expressions[expr->binary.rhs];
-            assert(infer    ->size == sizeof(umm));
-            assert(lhs_infer->size == sizeof(umm));
-            assert(rhs_infer->size == sizeof(umm));
-
-            Memory* lhs = get_operand(expr->binary.lhs);
-            Memory* rhs = get_operand(expr->binary.rhs);
-
-            if (is_pointer_type(lhs_infer->type))
-            {
-                Type pointer_type = lhs_infer->type;
-                Type element_type = set_indirection(pointer_type, get_indirection(pointer_type) - 1);
-                umm  element_size = get_type_size(unit, element_type);
-                address->as_umm = lhs->as_umm + rhs->as_umm * element_size;
-            }
-            else
-            {
-                Type pointer_type = rhs_infer->type;
-                Type element_type = set_indirection(pointer_type, get_indirection(pointer_type) - 1);
-                umm  element_size = get_type_size(unit, element_type);
-                address->as_umm = rhs->as_umm + lhs->as_umm * element_size;
-            }
-        } break;
-
-        case EXPRESSION_POINTER_SUBTRACT: NotImplemented;
-
-        case EXPRESSION_EQUAL:              specialize_logic_binary([](auto* v, auto* l, auto* r) { *v = *l == *r; }); break;
-        case EXPRESSION_NOT_EQUAL:          specialize_logic_binary([](auto* v, auto* l, auto* r) { *v = *l != *r; }); break;
-        case EXPRESSION_GREATER_THAN:       specialize_logic_binary([](auto* v, auto* l, auto* r) { *v = *l >  *r; }); break;
-        case EXPRESSION_GREATER_OR_EQUAL:   specialize_logic_binary([](auto* v, auto* l, auto* r) { *v = *l >= *r; }); break;
-        case EXPRESSION_LESS_THAN:          specialize_logic_binary([](auto* v, auto* l, auto* r) { *v = *l <  *r; }); break;
-        case EXPRESSION_LESS_OR_EQUAL:      specialize_logic_binary([](auto* v, auto* l, auto* r) { *v = *l <= *r; }); break;
-
-        case EXPRESSION_CAST:
-        {
-            if (is_soft_type(block->inferred_expressions[expr->binary.rhs].type))
-            {
-                if (is_integer_type(infer->type))
-                {
-                    Fraction const* fract = get_constant_number(block, expr->binary.rhs);
-                    assert(fract);
-                    assert(fract_is_integer(fract));
-
-                    u64 abs = 0;
-                    bool ok = int_get_abs_u64(&abs, &fract->num);
-                    assert(ok);
-                    if (fract->num.negative)
-                        abs = -abs;
-                    memcpy(address->base, &abs, infer->size);
-                }
-                else if (infer->type == TYPE_TYPE)
-                {
-                    assert(infer->size == 4);
-                    address->as_u32 = *get_constant_type(block, expr->binary.rhs);
-                }
-                else NotImplemented;
-            }
-            else
-            {
-                Memory* op = get_operand(expr->binary.rhs);
-                specialize(infer->type, address, [&](auto* result)
-                {
-                    specialize(block->inferred_expressions[expr->binary.rhs].type, op, [&](auto* value)
-                    {
-                        *result = *value;
-                    });
-                });
-            }
-        } break;
-
-        case EXPRESSION_GOTO_UNIT:
-        {
-            assert(block->inferred_expressions[expr->binary.lhs].size == sizeof(void*));
-            assert(block->inferred_expressions[expr->binary.rhs].size == sizeof(void*));
-            Memory* rhs = get_operand(expr->binary.rhs);
-            Memory* lhs = get_operand(expr->binary.lhs);
-
-            Runtime_Code_Address return_address = at;
-            return_address.instruction++;
-
-            at.unit    = (Unit*) lhs->as_address;
-            at.storage =         rhs->as_address;
-
-            assert(at.unit->entry_block->first_instruction_in_executable_order != UMM_MAX);
-            at.instruction = at.unit->entry_block->first_instruction_in_executable_order;
-
-            assert(at.unit->entry_block->return_address_offset_in_storage != INVALID_STORAGE_OFFSET);
-            *(Runtime_Code_Address*)(at.storage + at.unit->entry_block->return_address_offset_in_storage) = return_address;
-            goto next_instruction;
-        } break;
-
-        case EXPRESSION_CALL:
-        {
-            Block* callee = infer->called_block;
-            assert(callee);
-
-            Expression_List const* args = expr->call.arguments;
-            assert(args);
-
-            umm parameter_index = 0;
-            For (callee->imperative_order)
-            {
-                auto* param_expr  = &callee->parsed_expressions  [*it];
-                auto* param_infer = &callee->inferred_expressions[*it];
-                if (!(param_expr->flags & EXPRESSION_DECLARATION_IS_PARAMETER)) continue;
-                Defer(parameter_index++);
-
-                if (param_expr->flags & EXPRESSION_DECLARATION_IS_ALIAS) continue;
-
-                assert(parameter_index < args->count);
-                Expression arg_expression = args->expressions[parameter_index];
-                umm size = block->inferred_expressions[arg_expression].size;
-                assert(size == param_infer->size);
-                assert(param_infer->offset != INVALID_STORAGE_OFFSET);
-
-                Memory* arg = get_operand(arg_expression);
-                Memory* param = (Memory*)(at.storage + param_infer->offset);
-                memcpy(param, arg, size);
-            }
-
-
-            assert(callee->return_address_offset_in_storage != INVALID_STORAGE_OFFSET);
-            auto* return_address = (Runtime_Code_Address*)(at.storage + callee->return_address_offset_in_storage);
-            *return_address = at;
-            return_address->instruction++;
-
-            assert(callee->first_instruction_in_executable_order != UMM_MAX);
-            at.instruction = callee->first_instruction_in_executable_order;
-            goto next_instruction;
-        } break;
-
-        case EXPRESSION_DECLARATION:
-        {
-            u64 size = infer->size;
-            if (expr->declaration.value == NO_EXPRESSION)
-            {
-                memset(address, 0, size);
-            }
-            else
-            {
-                assert(size == block->inferred_expressions[expr->declaration.value].size);
-                Memory* value = get_operand(expr->declaration.value);
-                memcpy(address, value, size);
-            }
-        } break;
-
-        IllegalDefaultCase;
-        }
-    }
-
-    at.instruction++;
-    goto next_instruction;
-}
-
-void run_unit(Unit* unit)
-{
-    byte* storage = alloc<byte>(NULL, unit->next_storage_offset);
-    Defer(free(storage));
-
-    memset(storage, 0xCD, unit->next_storage_offset);
-
-    assert(unit->entry_block->return_address_offset_in_storage != INVALID_STORAGE_OFFSET);
-    memset(storage + unit->entry_block->return_address_offset_in_storage, 0, sizeof(Runtime_Code_Address));
-
-    Runtime_Code_Address entry = {};
-    entry.unit        = unit;
-    entry.storage     = storage;
-    entry.instruction = unit->entry_block->first_instruction_in_executable_order;
-    vm(entry);
-}
-#endif
-
-void run_bytecode(Unit* unit, umm instruction, byte* storage)
+void run_bytecode(User* user, Unit* unit, umm instruction, byte* storage)
 {
 run:
     if (!unit) return;
 
-    Bytecode* bc = &unit->bytecode[instruction];
+    Bytecode const* bc = &unit->bytecode[instruction];
+    flags32 flags = bc->flags;
     u64 r = bc->r;
     u64 a = bc->a;
     u64 b = bc->b;
     u64 s = bc->s;
 
-#if 1
+    set_most_recent_execution_location(user, unit, bc);
+
+#if 0
     String opname = {};
     switch (bc->op)
     {
@@ -459,6 +40,7 @@ run:
     case OP_MULTIPLY:              opname = "OP_MULTIPLY"_s;              break;
     case OP_DIVIDE_WHOLE:          opname = "OP_DIVIDE_WHOLE"_s;          break;
     case OP_DIVIDE_FRACTIONAL:     opname = "OP_DIVIDE_FRACTIONAL"_s;     break;
+    case OP_COMPARE:               opname = "OP_COMPARE"_s;               break;
     case OP_MOVE_POINTER_CONSTANT: opname = "OP_MOVE_POINTER_CONSTANT"_s; break;
     case OP_MOVE_POINTER_FORWARD:  opname = "OP_MOVE_POINTER_FORWARD"_s;  break;
     case OP_MOVE_POINTER_BACKWARD: opname = "OP_MOVE_POINTER_BACKWARD"_s; break;
@@ -475,8 +57,14 @@ run:
     case OP_DEBUG_FREE:            opname = "OP_DEBUG_FREE"_s;            break;
     default:                       opname = Format(temp, "%", bc->op);    break;
     }
-    printf("%-25.*s %16llx %16llx %16llx %16llx\n", StringArgs(opname),
+    exit_lockdown(user);
+    printf("%-25.*s %16llx %16llx %16llx %16llx", StringArgs(opname),
         (unsigned long long) r, (unsigned long long) a, (unsigned long long) b, (unsigned long long) s);
+    if (bc->flags & OP_COMPARE_EQUAL)   printf(" OP_COMPARE_EQUAL");
+    if (bc->flags & OP_COMPARE_GREATER) printf(" OP_COMPARE_GREATER");
+    if (bc->flags & OP_COMPARE_LESS)    printf(" OP_COMPARE_LESS");
+    printf("\n");
+    enter_lockdown(user);
 #endif
 
 #define M(type, offset) (*(type*)(storage + (offset)))
@@ -575,11 +163,11 @@ run:
     } break;
     case OP_COMPARE:
     {
-        auto compare = []<typename T>(u64 s, T lhs, T rhs) -> bool
+        auto compare = []<typename T>(flags32 flags, T lhs, T rhs) -> bool
         {
-            if (lhs == rhs) return s & OP_COMPARE_EQUAL;
-            if (lhs <  rhs) return s & OP_COMPARE_LESS;
-                            return s & OP_COMPARE_GREATER;
+            if (lhs == rhs) return flags & OP_COMPARE_EQUAL;
+            if (lhs <  rhs) return flags & OP_COMPARE_LESS;
+                            return flags & OP_COMPARE_GREATER;
         };
 
         CompileTimeAssert(sizeof(bool) == 1);
@@ -587,17 +175,17 @@ run:
         {
         IllegalDefaultCase;
         case TYPE_F16:  NotImplemented;
-        case TYPE_U8:   M(bool, r) = compare(s, M(u8,   a), M(u8,   b)); break;
-        case TYPE_U16:  M(bool, r) = compare(s, M(u16,  a), M(u16,  b)); break;
-        case TYPE_U32:  M(bool, r) = compare(s, M(u32,  a), M(u32,  b)); break;
-        case TYPE_U64:  M(bool, r) = compare(s, M(u64,  a), M(u64,  b)); break;
-        case TYPE_S8:   M(bool, r) = compare(s, M(s8,   a), M(s8,   b)); break;
-        case TYPE_S16:  M(bool, r) = compare(s, M(s16,  a), M(s16,  b)); break;
-        case TYPE_S32:  M(bool, r) = compare(s, M(s32,  a), M(s32,  b)); break;
-        case TYPE_S64:  M(bool, r) = compare(s, M(s64,  a), M(s64,  b)); break;
-        case TYPE_F32:  M(bool, r) = compare(s, M(f32,  a), M(f32,  b)); break;
-        case TYPE_F64:  M(bool, r) = compare(s, M(f64,  a), M(f64,  b)); break;
-        case TYPE_BOOL: M(bool, r) = compare(s, M(bool, a), M(bool, b)); break;
+        case TYPE_U8:   M(bool, r) = compare(flags, M(u8,   a), M(u8,   b)); break;
+        case TYPE_U16:  M(bool, r) = compare(flags, M(u16,  a), M(u16,  b)); break;
+        case TYPE_U32:  M(bool, r) = compare(flags, M(u32,  a), M(u32,  b)); break;
+        case TYPE_U64:  M(bool, r) = compare(flags, M(u64,  a), M(u64,  b)); break;
+        case TYPE_S8:   M(bool, r) = compare(flags, M(s8,   a), M(s8,   b)); break;
+        case TYPE_S16:  M(bool, r) = compare(flags, M(s16,  a), M(s16,  b)); break;
+        case TYPE_S32:  M(bool, r) = compare(flags, M(s32,  a), M(s32,  b)); break;
+        case TYPE_S64:  M(bool, r) = compare(flags, M(s64,  a), M(s64,  b)); break;
+        case TYPE_F32:  M(bool, r) = compare(flags, M(f32,  a), M(f32,  b)); break;
+        case TYPE_F64:  M(bool, r) = compare(flags, M(f64,  a), M(f64,  b)); break;
+        case TYPE_BOOL: M(bool, r) = compare(flags, M(bool, a), M(bool, b)); break;
         }
     } break;
     case OP_MOVE_POINTER_CONSTANT:  M(byte*, r) = M(byte*, a) + s;                 break;
@@ -668,6 +256,7 @@ run:
     } break;
     case OP_DEBUG_PRINT:
     {
+        exit_lockdown(user);
         String text = {};
         switch (s)
         {
@@ -701,6 +290,7 @@ run:
             break;
         }
         printf("%.*s\n", StringArgs(text));
+        enter_lockdown(user);
     } break;
     case OP_DEBUG_ALLOC:            M(void*, r) = malloc(M(umm, a)); break;
     case OP_DEBUG_FREE:             free(M(void*, r));               break;
@@ -716,12 +306,16 @@ void run_unit(Unit* unit)
     assert(unit->compiled_bytecode);
     assert(!(unit->flags & UNIT_IS_STRUCT));
 
-    byte* storage = alloc<byte>(NULL, unit->next_storage_offset);
-    Defer(free(storage));
-    memset(storage, 0xCD, unit->next_storage_offset);
+    User* user = create_user();
+    Defer(delete_user(user));
+    enter_lockdown(user);
+    Defer(exit_lockdown(user));
+
+    byte* storage = user_alloc(user, unit->storage_size, unit->storage_alignment);
+    Defer(user_free(user, storage));
     memset(storage, 0, 3 * sizeof(void*));
 
-    run_bytecode(unit, unit->entry_block->first_instruction, storage);
+    run_bytecode(user, unit, unit->entry_block->first_instruction, storage);
 }
 
 

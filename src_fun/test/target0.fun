@@ -25,6 +25,8 @@ foo :: unit
 }
 
 poo := "asdf";
+debug poo;
+
 ptr1 := &poo;
 ptr2 := &ptr1;
 

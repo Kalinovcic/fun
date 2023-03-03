@@ -551,19 +551,19 @@ struct Unit
     u64    storage_size;
 
     bool   compiled_bytecode;
-    Array<struct Bytecode> bytecode;
+    Array<struct Bytecode const> bytecode;
 };
 
 
 
-enum: u64
+enum: flags32
 {
-    OP_COMPARE_EQUAL   = (u64)(0x0001) << 32,
-    OP_COMPARE_GREATER = (u64)(0x0002) << 32,
-    OP_COMPARE_LESS    = (u64)(0x0004) << 32,
+    OP_COMPARE_EQUAL   = 0x00000001,
+    OP_COMPARE_GREATER = 0x00000002,
+    OP_COMPARE_LESS    = 0x00000004,
 };
 
-enum Bytecode_Operation: u64
+enum Bytecode_Operation: u32
 {
     INVALID_OP,
 
@@ -581,7 +581,7 @@ enum Bytecode_Operation: u64
     OP_MULTIPLY,                // r = result  a = lhs  b = rhs  s = type  (type options: u,f)
     OP_DIVIDE_WHOLE,            // r = result  a = lhs  b = rhs  s = type  (type options: u,s)
     OP_DIVIDE_FRACTIONAL,       // r = result  a = lhs  b = rhs  s = type  (type options: f)
-    OP_COMPARE,                 // r = result  a = lhs  b = rhs  s = (compare flags | type)  (type options: u,s,b,f)
+    OP_COMPARE,                 // r = result  a = lhs  b = rhs  s = type  (type options: u,s,b,f)
 
     OP_MOVE_POINTER_CONSTANT,   // r = result  a = pointer               s = amount
     OP_MOVE_POINTER_FORWARD,    // r = result  a = pointer  b = integer  s = multiplier
@@ -604,11 +604,14 @@ enum Bytecode_Operation: u64
 
 struct Bytecode
 {
+    Block*             generated_from_block;
+    Expression         generated_from_expression;
     Bytecode_Operation op;
-    u64 r;
-    u64 a;
-    u64 b;
-    u64 s;
+    flags32            flags;
+    u64                r;
+    u64                a;
+    u64                b;
+    u64                s;
 };
 
 
@@ -749,6 +752,23 @@ bool pump_pipeline(Compiler* ctx);
 
 void generate_bytecode_for_unit_placement(Unit* unit);
 void generate_bytecode_for_unit_completion(Unit* unit);
+
+
+////////////////////////////////////////////////////////////////////////////////
+// Security
+
+struct User* create_user();
+void         delete_user(struct User* user);
+
+byte* user_alloc(struct User* user, umm size, umm alignment);
+void  user_free (struct User* user, void* base);
+
+// In lockdown, the calling thread + user threads are the only running threads in the process,
+// and all memory not allocated by the provided user is read-only.
+void enter_lockdown(struct User* user);
+void exit_lockdown(struct User* user);
+
+void set_most_recent_execution_location(struct User* user, Unit* unit, Bytecode const* bc);
 
 
 ////////////////////////////////////////////////////////////////////////////////
