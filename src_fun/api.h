@@ -100,6 +100,7 @@ enum Atom: u32
     ATOM_SIZEOF,                // sizeof
     ATOM_ALIGNOF,               // alignof
     ATOM_CODEOF,                // codeof
+    ATOM_INTRINSIC,             // intrinsic
 
     // symbols
     ATOM_DOT,                   // .
@@ -330,6 +331,7 @@ enum Expression_Kind: u16
     // branching expressions
     EXPRESSION_BRANCH,
     EXPRESSION_CALL,
+    EXPRESSION_INTRINSIC,
 
     // other
     EXPRESSION_DECLARATION,
@@ -363,6 +365,7 @@ struct Parsed_Expression
     union
     {
         Token         literal;
+        Token         intrinsic_name;
         Expression    unary_operand;
         Type          parsed_type;
         struct Block* parsed_block;
@@ -596,6 +599,8 @@ enum Bytecode_Operation: u32
     OP_CALL,                    // r =  instruction  a = return address
     OP_SWITCH_UNIT,             // r = &code         a = &storage
     OP_FINISH_UNIT,             //
+
+    OP_INTRINSIC,               // a = &block  b = name.data  s = name.length
 
     OP_DEBUG_PRINT,             // r = operand                        s = type  (type options: any)
     OP_DEBUG_ALLOC,             // r = destination  a = size operand

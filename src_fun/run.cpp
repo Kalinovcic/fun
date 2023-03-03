@@ -9,6 +9,102 @@ EnterApplicationNamespace
 
 
 
+static void run_intrinsic(User* user, Unit* unit, byte* storage, Block* block, String intrinsic)
+{
+    assert(unit->pointer_size      == sizeof (void*));
+    assert(unit->pointer_alignment == alignof(void*));
+
+    auto get_runtime_parameter = [&](String name, auto** out_address, Type* out_type, Type assertion = INVALID_TYPE)
+    {
+        for (Expression id = {}; id < block->inferred_expressions.count; id = (Expression)(id + 1))
+        {
+            auto* expr  = &block->parsed_expressions  [id];
+            auto* infer = &block->inferred_expressions[id];
+            if (expr->kind != EXPRESSION_DECLARATION) continue;
+            if (get_identifier(unit->ctx, &expr->declaration.name) != name) continue;
+            if (is_soft_type(infer->type)) break;
+            if (out_type) *out_type = infer->type;
+            if (assertion != INVALID_TYPE && assertion != infer->type)
+            {
+                String type_desc = exact_type_description(unit, assertion);
+                fprintf(stderr, "Runtime parameter '%.*s' to intrinsic '%.*s' must be of type '%.*s'\nAborting...\n",
+                    StringArgs(name), StringArgs(intrinsic), StringArgs(type_desc));
+                exit(1);
+            }
+
+            u64 offset;
+            assert(get(&block->declaration_placement, &id, &offset));
+            *(byte**) out_address = storage + offset;
+            return;
+        }
+
+        fprintf(stderr, "Missing runtime parameter '%.*s' to intrinsic '%.*s'\nAborting...\n", StringArgs(name), StringArgs(intrinsic));
+        exit(1);
+    };
+
+    if (intrinsic == "print"_s)
+    {
+        Scope_Region_Cursor temp_scope(temp);
+
+        byte* value;
+        Type type;
+        get_runtime_parameter("value"_s, &value, &type);
+
+        String text = {};
+        switch (type)
+        {
+        case TYPE_F16:    NotImplemented;
+        case TYPE_VOID:   text = "void"_s;                                 break;
+        case TYPE_U8:     text = Format(temp, "%",      *(u8*    ) value); break;
+        case TYPE_U16:    text = Format(temp, "%",      *(u16*   ) value); break;
+        case TYPE_U32:    text = Format(temp, "%",      *(u32*   ) value); break;
+        case TYPE_U64:    text = Format(temp, "%",      *(u64*   ) value); break;
+        case TYPE_UMM:    text = Format(temp, "%",      *(umm*   ) value); break;
+        case TYPE_S8:     text = Format(temp, "%",      *(s8*    ) value); break;
+        case TYPE_S16:    text = Format(temp, "%",      *(s16*   ) value); break;
+        case TYPE_S32:    text = Format(temp, "%",      *(s32*   ) value); break;
+        case TYPE_S64:    text = Format(temp, "%",      *(s64*   ) value); break;
+        case TYPE_SMM:    text = Format(temp, "%",      *(smm*   ) value); break;
+        case TYPE_F32:    text = Format(temp, "%",      *(f32*   ) value); break;
+        case TYPE_F64:    text = Format(temp, "%",      *(f64*   ) value); break;
+        case TYPE_BOOL:   text = Format(temp, "%",      *(bool*  ) value); break;
+        case TYPE_TYPE:   text = Format(temp, "type %", *(Type*  ) value); break;
+        case TYPE_STRING: text =                        *(String*) value;  break;
+        default:
+            if (is_pointer_type(type))
+            {
+                text = Format(temp, "%", *(void**) value);
+            }
+            else
+            {
+                assert(is_user_defined_type(type));
+                text = "user defined type"_s;
+            }
+            break;
+        }
+        printf("%.*s\n", StringArgs(text));
+    }
+    else if (intrinsic == "heap_allocate"_s)
+    {
+        umm* size;
+        byte*** out_base;
+        get_runtime_parameter("size"_s,     &size,     NULL, TYPE_UMM);
+        get_runtime_parameter("out_base"_s, &out_base, NULL);
+        **out_base = user_alloc(user, *size, 16);
+    }
+    else if (intrinsic == "heap_free"_s)
+    {
+        byte** base;
+        get_runtime_parameter("base"_s, &base, NULL);
+        user_free(user, *base);
+    }
+    else
+    {
+        fprintf(stderr, "User is attempting to run an unknown intrinsic '%.*s'\nAborting...\n", StringArgs(intrinsic));
+        exit(1);
+    }
+}
+
 void run_bytecode(User* user, Unit* unit, umm instruction, byte* storage)
 {
 run:
@@ -235,6 +331,15 @@ run:
     case OP_GOTO_IF_FALSE:          instruction = M(u8, a) ? instruction + 1 : r; goto run;
     case OP_GOTO_INDIRECT:          instruction = M(umm, r);                      goto run;
     case OP_CALL:                   M(umm, a) = instruction + 1; instruction = r; goto run;
+    case OP_INTRINSIC:
+    {
+        exit_lockdown(user);
+        Block* block     = (Block*) a;
+        String intrinsic = { (umm) s, (u8*) b };
+        assert(block->flags & BLOCK_IS_PARAMETER_BLOCK);
+        run_intrinsic(user, unit, storage, block, intrinsic);
+        enter_lockdown(user);
+    } break;
     case OP_SWITCH_UNIT:
     {
         void** destination = M(void**, a);
@@ -292,8 +397,8 @@ run:
         printf("%.*s\n", StringArgs(text));
         enter_lockdown(user);
     } break;
-    case OP_DEBUG_ALLOC:            M(void*, r) = malloc(M(umm, a)); break;
-    case OP_DEBUG_FREE:             free(M(void*, r));               break;
+    case OP_DEBUG_ALLOC:            M(void*, r) = user_alloc(user, M(umm, a), 16); break;
+    case OP_DEBUG_FREE:             user_free(user, M(void*, r));                  break;
     }
 
     instruction++;

@@ -3,6 +3,19 @@
 // debug a + b;
 
 
+print :: (value: $T) {} intrinsic "print";
+heap_allocate :: (out_base: &&$T, size: umm) {} intrinsic "heap_allocate";
+heap_free     :: (base: &$T) {} intrinsic "heap_free";
+
+heap_allocate(&heap_pointer: &u32, cast(umm, sizeof u32));
+print(heap_pointer);
+print(*heap_pointer);
+*heap_pointer = cast(u32, 123);
+print(*heap_pointer);
+heap_free(heap_pointer);
+
+
+
 /*consume :: (res: &string, str: &string, n: umm)
 {
     res.length = n;
@@ -20,38 +33,38 @@ foo :: unit
 {
     x: string = _;
     y: string = _;
-    debug x;
-    debug y;
+    print(x);
+    print(y);
 }
 
 poo := "asdf";
-debug poo;
+print(poo);
 
 ptr1 := &poo;
 ptr2 := &ptr1;
 
 **ptr2 = "no longer asdf";
-debug poo;
+print(poo);
 
-debug cast(u64, 12345678910);
-debug cast(u8, cast(u64, 12345678910));
+print(cast(u64, 12345678910));
+print(cast(u8, cast(u64, 12345678910)));
 
 
 f: foo;
 (*&f).x = "foo";
 (*&f).y = "foofoo";
 goto(codeof f, &f);
-debug "back";
+print("back");
 
 
 blok :: ()
 {
-    debug "eyo";
+    print("eyo");
 }
 
 blok();
 
-debug "beyond the blok";
+print("beyond the blok");
 
 
 /*junit :: unit

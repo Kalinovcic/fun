@@ -69,6 +69,7 @@ static void lex_init(Compiler* ctx)
     AddKeyword(ATOM_SIZEOF,       "sizeof"_s);
     AddKeyword(ATOM_ALIGNOF,      "alignof"_s);
     AddKeyword(ATOM_CODEOF,       "codeof"_s);
+    AddKeyword(ATOM_INTRINSIC,    "intrinsic"_s);
 #undef AddKeyword
 }
 

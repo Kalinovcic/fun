@@ -390,6 +390,14 @@ static Location generate_expression(Bytecode_Builder* builder, Expression id)
         return void_location(infer->type);
     } break;
 
+    case EXPRESSION_INTRINSIC:
+    {
+        assert(expr->intrinsic_name.atom == ATOM_STRING_LITERAL);
+        Token_Info_String* token = (Token_Info_String*) get_token_info(unit->ctx, &expr->intrinsic_name);
+        Op(OP_INTRINSIC, a = (umm) block, b = (umm) token->value.data, s = token->value.length);
+        return void_location(infer->type);
+    } break;
+
     case EXPRESSION_DECLARATION:
     {
         u64 offset;

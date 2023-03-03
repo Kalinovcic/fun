@@ -313,10 +313,27 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
                 }
                 parameter_block->to = *(stream->cursor - 1);
 
-                Expression call;
-                if (!parse_child_block(stream, &parameter_builder, &call))
-                    return false;
-                add_item(&parameter_builder.imperative_order, &call);
+                if (lookahead_atom(stream, ATOM_LEFT_BRACE, 0) &&
+                    lookahead_atom(stream, ATOM_RIGHT_BRACE, 1) &&
+                    lookahead_atom(stream, ATOM_INTRINSIC, 2))
+                {
+                    stream->cursor += 3;
+                    Token* name = stream->cursor;
+                    if (!take_atom(stream, ATOM_STRING_LITERAL, "Expected the intrinsic name after 'intrinsic'."_s))
+                        return false;
+
+                    Expression intrinsic_expr_id;
+                    Parsed_Expression* intrinsic_expr = add_expression(&parameter_builder, EXPRESSION_INTRINSIC, name - 1, name, &intrinsic_expr_id);
+                    intrinsic_expr->intrinsic_name = *name;
+                    add_item(&parameter_builder.imperative_order, &intrinsic_expr_id);
+                }
+                else
+                {
+                    Expression call;
+                    if (!parse_child_block(stream, &parameter_builder, &call))
+                        return false;
+                    add_item(&parameter_builder.imperative_order, &call);
+                }
             }
 
             Parsed_Expression* expr = add_expression(builder, EXPRESSION_BLOCK, start, stream->cursor - 1, out_expression);

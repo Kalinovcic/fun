@@ -13,6 +13,7 @@ struct User
 {
     byte* user_memory;
     umm   user_memory_size;
+    umm   next_allocation_offset;
 
     struct
     {
@@ -23,8 +24,6 @@ struct User
     umm frozen_memory_count;
     int          maps_fd;
     sighandler_t previous_sigsegv_handler;
-
-    umm next_allocation_offset;
 
     u32    most_recently_executed_line;
     String most_recently_executed_file;
@@ -55,7 +54,7 @@ void delete_user(User* user)
 
 byte* user_alloc(User* user, umm size, umm alignment)
 {
-    assert(current_user == user);  // can't work with other users as a user
+    assert(!current_user || current_user == user);  // can't work with other users as a user
 
     while (user->next_allocation_offset % alignment)
         user->next_allocation_offset++;
@@ -75,7 +74,7 @@ byte* user_alloc(User* user, umm size, umm alignment)
 
 void user_free(User* user, void* base)
 {
-    assert(current_user == user);  // can't work with other users as a user
+    assert(!current_user || current_user == user);  // can't work with other users as a user
     // leaked
 }
 
@@ -109,6 +108,7 @@ static void freeze_memory(User* user, byte* from, byte* to, int prot)
     }
 }
 
+
 static void sigsegv_handler(int signal)
 {
     if (signal == SIGSEGV)
@@ -116,11 +116,35 @@ static void sigsegv_handler(int signal)
         User* user = current_user;
         assert(user);
         exit_lockdown(user);
-        fprintf(stderr, "User code caused SIGSEGV.\n");
-        fprintf(stderr, "Last known location: %.*s:%u\n",
-            StringArgs(user->most_recently_executed_file), user->most_recently_executed_line);
-        fprintf(stderr, "Aborting...\n");
-        exit(1);
+
+        auto error = [](String data)
+        {
+            int fd = 2;  // stderr
+            while (data)
+            {
+                int amount = ::write(fd, data.data, data.length);
+                if (amount <= 0 || amount > data.length) break;
+                consume(&data, amount);
+            }
+        };
+
+        error("\n\n\n"
+              "ERROR PREVENTION:\n"
+              "User code generated SIGSEGV.\n"_s);
+        if (user->most_recently_executed_file)
+        {
+            umm digits_length = digits_base10_u64(user->most_recently_executed_line);
+            u8  digits[32] = {};
+            write_base10_u64(digits, digits_length, user->most_recently_executed_line);
+
+            error("Last known location: "_s);
+            error(user->most_recently_executed_file);
+            error(":"_s);
+            error({ digits_length, digits });
+            error("\n"_s);
+        }
+        error("Aborting...\n"_s);
+        raise(SIGKILL);
     }
 }
 
