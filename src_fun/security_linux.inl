@@ -6,6 +6,7 @@
 EnterApplicationNamespace
 
 
+#if 0
 static User* current_user;
 
 
@@ -158,7 +159,6 @@ void enter_lockdown(User* user)
 
     user->previous_sigsegv_handler = ::signal(SIGSEGV, sigsegv_handler);
 
-#if 0
     // Freeze non-user memory
     int buffer_size = 0;
     u8  buffer[4096];
@@ -210,7 +210,6 @@ void enter_lockdown(User* user)
         goto parse_line;
     }
     done:;
-#endif
 }
 
 void exit_lockdown(User* user)
@@ -247,6 +246,22 @@ void set_most_recent_execution_location(struct User* user, Unit* unit, Bytecode 
     get_line(unit->ctx, info, &user->most_recently_executed_line, NULL, &user->most_recently_executed_file);
 }
 
+#else
+
+struct User;
+
+User* create_user() { return NULL; }
+void delete_user(User* user) {};
+
+byte* user_alloc(User* user, umm size, umm alignment) { return (byte*) malloc(size); }
+void  user_free (User* user, void* base)              { return free(base);           }
+
+void enter_lockdown(User* user) {}
+void exit_lockdown(User* user) {}
+
+void set_most_recent_execution_location(User* user, Unit* unit, Bytecode const* bc) {}
+
+#endif
 
 
 ExitApplicationNamespace
