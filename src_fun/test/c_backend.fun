@@ -45,9 +45,9 @@ run
             debug "need to run something";
             confirm_run_unit(env, event.unit_ref);
         }
-        else => if event.kind == cast(u32, EVENT_UNIT_IS_ABOUT_TO_RUN)
+        else => if event.kind == cast(u32, EVENT_UNIT_WAS_RUN)
         {
-            debug "a unit is about to run, cool";
+            debug "a unit was run, cool";
         }
         else
         {

@@ -823,6 +823,9 @@ inline Soft_Block const* get_constant_block (Block* block, Expression expr) { Co
 
 User_Type* get_user_type_data(Environment* env, Type type);
 
+void confirm_unit_placed (Unit* unit, u64 size, u64 alignment);
+void confirm_unit_patched(Unit* unit);
+
 
 ////////////////////////////////////////////////////////////////////////////////
 // Bytecode

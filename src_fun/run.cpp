@@ -161,12 +161,12 @@ static bool run_intrinsic(User* user, Unit* unit, byte* storage, Block* block, S
             EVENT_FINISHED                = 1,
             EVENT_UNIT_WAS_PLACED         = 2,
             EVENT_UNIT_WAS_PATCHED        = 3,
-            EVENT_UNIT_IS_ABOUT_TO_RUN    = 4,
+            EVENT_UNIT_WAS_RUN            = 4,
 
             EVENT_ACTIONABLE_BASE         = 1000,
             EVENT_UNIT_REQUIRES_PLACEMENT = EVENT_ACTIONABLE_BASE + EVENT_UNIT_WAS_PLACED,
             EVENT_UNIT_REQUIRES_PATCHING  = EVENT_ACTIONABLE_BASE + EVENT_UNIT_WAS_PATCHED,
-            EVENT_UNIT_REQUIRES_RUNNING   = EVENT_ACTIONABLE_BASE + EVENT_UNIT_IS_ABOUT_TO_RUN,
+            EVENT_UNIT_REQUIRES_RUNNING   = EVENT_ACTIONABLE_BASE + EVENT_UNIT_WAS_RUN,
         };
 
         struct Compiler_Event
@@ -203,7 +203,7 @@ static bool run_intrinsic(User* user, Unit* unit, byte* storage, Block* block, S
         }
         else if (child_env->puppeteer_event.kind == PIPELINE_TASK_RUN)
         {
-            event->kind = event->actionable ? EVENT_UNIT_REQUIRES_RUNNING : EVENT_UNIT_IS_ABOUT_TO_RUN;
+            event->kind = event->actionable ? EVENT_UNIT_REQUIRES_RUNNING : EVENT_UNIT_WAS_RUN;
             event->unit = child_env->puppeteer_event.unit;
         }
         else Unreachable;
@@ -224,13 +224,16 @@ static bool run_intrinsic(User* user, Unit* unit, byte* storage, Block* block, S
         assert(child_env->puppeteer_event_is_actionable);
         assert(child_env->puppeteer_event.kind == PIPELINE_TASK_PLACE);
         assert(child_env->puppeteer_event.unit == unit);
-        unit->flags |= UNIT_IS_PLACED;
+        confirm_unit_placed(unit, *size, *alignment);
+
         confirm_response_to_actionable_event(child_env);
+        child_env->puppeteer_event_is_actionable = false;
+        child_env->puppeteer_event = { PIPELINE_TASK_PLACE, unit };
     }
     else if (intrinsic == "compiler_confirm_patch_unit"_s)
     {
-        Environment** child_env_ptr; get_runtime_parameter("env"_s,       &child_env_ptr);
-        Unit**        unit_ptr;      get_runtime_parameter("placed"_s,    &unit_ptr);
+        Environment** child_env_ptr; get_runtime_parameter("env"_s,     &child_env_ptr);
+        Unit**        unit_ptr;      get_runtime_parameter("patched"_s, &unit_ptr);
 
         Environment* child_env = *child_env_ptr;
         Unit* unit = *unit_ptr;
@@ -238,8 +241,27 @@ static bool run_intrinsic(User* user, Unit* unit, byte* storage, Block* block, S
         assert(child_env->puppeteer_event_is_actionable);
         assert(child_env->puppeteer_event.kind == PIPELINE_TASK_PATCH);
         assert(child_env->puppeteer_event.unit == unit);
-        unit->flags |= UNIT_IS_PATCHED;
+        confirm_unit_patched(unit);
+
         confirm_response_to_actionable_event(child_env);
+        child_env->puppeteer_event_is_actionable = false;
+        child_env->puppeteer_event = { PIPELINE_TASK_PATCH, unit };
+    }
+    else if (intrinsic == "compiler_confirm_run_unit"_s)
+    {
+        Environment** child_env_ptr; get_runtime_parameter("env"_s, &child_env_ptr);
+        Unit**        unit_ptr;      get_runtime_parameter("ran"_s, &unit_ptr);
+
+        Environment* child_env = *child_env_ptr;
+        Unit* unit = *unit_ptr;
+
+        assert(child_env->puppeteer_event_is_actionable);
+        assert(child_env->puppeteer_event.kind == PIPELINE_TASK_RUN);
+        assert(child_env->puppeteer_event.unit == unit);
+
+        confirm_response_to_actionable_event(child_env);
+        child_env->puppeteer_event_is_actionable = false;
+        child_env->puppeteer_event = { PIPELINE_TASK_RUN, unit };
     }
     else
     {

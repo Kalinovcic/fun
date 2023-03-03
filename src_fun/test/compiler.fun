@@ -57,12 +57,12 @@ Unit :: struct
 EVENT_FINISHED                :: 1;
 EVENT_UNIT_WAS_PLACED         :: 2;
 EVENT_UNIT_WAS_PATCHED        :: 3;
-EVENT_UNIT_IS_ABOUT_TO_RUN    :: 4;
+EVENT_UNIT_WAS_RUN            :: 4;
 // Actionable events (you will keep getting them forever until you act)
 EVENT_ACTIONABLE_BASE         :: 1000;
 EVENT_UNIT_REQUIRES_PLACEMENT :: EVENT_ACTIONABLE_BASE + EVENT_UNIT_WAS_PLACED;
 EVENT_UNIT_REQUIRES_PATCHING  :: EVENT_ACTIONABLE_BASE + EVENT_UNIT_WAS_PATCHED;
-EVENT_UNIT_REQUIRES_RUNNING   :: EVENT_ACTIONABLE_BASE + EVENT_UNIT_IS_ABOUT_TO_RUN;
+EVENT_UNIT_REQUIRES_RUNNING   :: EVENT_ACTIONABLE_BASE + EVENT_UNIT_WAS_RUN;
 
 Event :: struct {
     kind:       u32;
@@ -81,9 +81,9 @@ make_environment   :: (out_env: &&Environment, settings: Environment_Settings)  
 compiler_yield     :: (env: &Environment)                                           {} intrinsic "compiler_yield";
 add_file           :: (env: &Environment, path: string)                             {} intrinsic "compiler_add_file";
 get_event          :: (env: &Environment, event: &Event)                            {} intrinsic "compiler_get_event";
-confirm_place_unit :: (env: &Environment, placed: &Unit, size: u64, alignment: u64) {} intrinsic "compiler_confirm_place_unit";
-confirm_patch_unit :: (env: &Environment, placed: &Unit)                            {} intrinsic "compiler_confirm_patch_unit";
-confirm_run___unit :: (env: &Environment, placed: &Unit)                            {} intrinsic "compiler_confirm_run_unit";
+confirm_place_unit :: (env: &Environment, placed:  &Unit, size: u64, alignment: u64) {} intrinsic "compiler_confirm_place_unit";
+confirm_patch_unit :: (env: &Environment, patched: &Unit)                            {} intrinsic "compiler_confirm_patch_unit";
+confirm_run___unit :: (env: &Environment, ran:     &Unit)                            {} intrinsic "compiler_confirm_run_unit";
 
 wait_event :: (env: &Environment, event: &Event)
 {

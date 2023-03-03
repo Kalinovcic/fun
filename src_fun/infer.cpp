@@ -1919,6 +1919,42 @@ Unit* materialize_unit(Environment* env, Block* initiator, Block* materialized_p
 }
 
 
+void confirm_unit_placed(Unit* unit, u64 size, u64 alignment)
+{
+    if (!alignment) alignment = 1;
+    while (size % alignment) size++;
+
+    unit->storage_alignment = alignment;
+    unit->storage_size = size;
+    unit->flags |= UNIT_IS_PLACED;
+}
+
+void confirm_unit_patched(Unit* unit)
+{
+    unit->flags |= UNIT_IS_PATCHED;
+
+    if (unit->flags & UNIT_IS_RUN)
+    {
+        Environment* env = unit->env;
+        byte* storage = user_alloc(env->user, unit->storage_size, unit->storage_alignment);
+        memset(storage, 0, 3 * sizeof(void*));
+
+        Pipeline_Task* run_task = reserve_item(&env->pipeline);
+        run_task->kind = PIPELINE_TASK_RUN;
+        if (env->puppeteer && env->puppeteer_has_custom_backend)
+        {
+            run_task->unit = unit;
+        }
+        else
+        {
+            assert(unit->compiled_bytecode);
+            run_task->run_environment = env;
+            run_task->run_from = { unit, unit->entry_block->first_instruction, storage };
+        }
+    }
+}
+
+
 
 Environment* make_environment(Compiler* ctx, Environment* puppeteer)
 {
@@ -1984,31 +2020,23 @@ continue_pipeline:
         Pipeline_Task task = env->pipeline[it_index];
         if (task.kind == PIPELINE_TASK_PLACE)
         {
+            env->pipeline[it_index] = env->pipeline[env->pipeline.count - 1];
+            env->pipeline.count--;
+            it_index--;
             had_placing_to_do = true;
             made_progress = true;
 
             Unit* unit = task.unit;
-            if (!(unit->flags & UNIT_IS_PLACED))
+            assert(!(unit->flags & UNIT_IS_PLACED));
+
+            if (env->puppeteer && env->puppeteer_has_custom_backend)
             {
-                if (env->puppeteer && env->puppeteer_has_custom_backend)
-                {
-                    wake_puppeteer(env, task, /* actionable */ true);
-                    goto continue_pipeline;
-                }
-
-                generate_bytecode_for_unit_placement(unit);
-
-                if (!unit->storage_alignment)
-                    unit->storage_alignment = 1;
-                unit->storage_size = unit->next_storage_offset;
-                while (unit->storage_size % unit->storage_alignment)
-                    unit->storage_size++;
-                unit->flags |= UNIT_IS_PLACED;
+                wake_puppeteer(env, task, /* actionable */ true);
+                goto continue_pipeline;
             }
 
-            env->pipeline[it_index] = env->pipeline[env->pipeline.count - 1];
-            env->pipeline.count--;
-            it_index--;
+            generate_bytecode_for_unit_placement(unit);
+            confirm_unit_placed(unit, unit->next_storage_offset, unit->storage_alignment);
 
             if (env->puppeteer)
             {
@@ -2120,38 +2148,25 @@ continue_pipeline:
     {
         Pipeline_Task task = env->pipeline[it_index];
         if (task.kind != PIPELINE_TASK_PATCH) continue;
-        had_patching_to_do = true;
-        made_progress = true;
-
-        Unit* unit = task.unit;
-        if (!(unit->flags & UNIT_IS_PATCHED))
-        {
-            assert(unit->flags & UNIT_IS_PLACED);
-
-            if (env->puppeteer && env->puppeteer_has_custom_backend)
-            {
-                wake_puppeteer(env, task, /* actionable */ true);
-                goto continue_pipeline;
-            }
-
-            generate_bytecode_for_unit_completion(unit);
-            unit->flags |= UNIT_IS_PATCHED;
-
-            if (unit->flags & UNIT_IS_RUN)
-            {
-                byte* storage = user_alloc(unit->env->user, unit->storage_size, unit->storage_alignment);
-                memset(storage, 0, 3 * sizeof(void*));
-
-                Pipeline_Task* run_task = reserve_item(&env->pipeline);
-                run_task->kind = PIPELINE_TASK_RUN;
-                run_task->run_environment = unit->env;
-                run_task->run_from = { unit, unit->entry_block->first_instruction, storage };
-            }
-        }
 
         env->pipeline[it_index] = env->pipeline[env->pipeline.count - 1];
         env->pipeline.count--;
         it_index--;
+        had_patching_to_do = true;
+        made_progress = true;
+
+        Unit* unit = task.unit;
+        assert(!(unit->flags & UNIT_IS_PATCHED));
+        assert(unit->flags & UNIT_IS_PLACED);
+
+        if (env->puppeteer && env->puppeteer_has_custom_backend)
+        {
+            wake_puppeteer(env, task, /* actionable */ true);
+            goto continue_pipeline;
+        }
+
+        generate_bytecode_for_unit_completion(unit);
+        confirm_unit_patched(unit);
 
         if (env->puppeteer)
         {
@@ -2168,13 +2183,25 @@ continue_pipeline:
         Pipeline_Task task = env->pipeline[0];
         env->pipeline[0] = env->pipeline[env->pipeline.count - 1];
         env->pipeline.count--;
+        made_progress = true;
 
         assert(task.kind == PIPELINE_TASK_RUN);
+
+        if (env->puppeteer && env->puppeteer_has_custom_backend)
+        {
+            wake_puppeteer(env, task, /* actionable */ true);
+            goto continue_pipeline;
+        }
 
         enter_lockdown(task.run_environment->user);
         run_bytecode(task.run_environment->user, task.run_from);
         exit_lockdown(task.run_environment->user);
-        made_progress = true;
+
+        if (env->puppeteer)
+        {
+            wake_puppeteer(env, task, /* actionable */ false);
+            goto continue_pipeline;
+        }
     }
 
     goto continue_pipeline;
