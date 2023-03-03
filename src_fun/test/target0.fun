@@ -4,51 +4,95 @@
 
 
 
-Compiler_Unit :: struct
+Atom :: u32;
+
+Token :: struct
 {
-    storage_alignment: u64;
-    storage_size:      u64;
+    atom:       Atom;
+    info_index: u32;
 }
 
+Expression_Kind :: u16;
+Expression      :: u32;
+Visibility      :: u32;
 
-Compiler_Context :: struct {}  // opaque
+Parsed_Expression :: struct
+{
+    kind:               Expression_Kind;
+    flags:              u16;
+    visibility_limit:   Visibility;
 
-COMPILER_EVENT_CONTEXT_FINISHED:        u32 = cast(u32, 1);
-COMPILER_EVENT_UNIT_PARSED:             u32 = cast(u32, 2);
-COMPILER_EVENT_UNIT_REQUIRES_PLACEMENT: u32 = cast(u32, 3);
-COMPILER_EVENT_UNIT_PLACED:             u32 = cast(u32, 4);
+    from:               Token;
+    to:                 Token;
+}
 
-Compiler_Event :: struct
+Block :: struct
+{
+    flags:              u32;
+    from:               Token;
+    to:                 Token;
+}
+
+Unit :: struct
+{
+    flags:              u32;
+
+    initiator_from:     Token;
+    initiator_to:       Token;
+    initiator_block:   &Block;
+
+    entry_block:       &Block;
+
+    pointer_size:       umm;
+    pointer_alignment:  umm;
+
+    storage_alignment:  u64;
+    storage_size:       u64;
+
+    // more members exist in the C++ codebase, but are opaque here
+}
+
+debug sizeof Unit;
+
+
+Context :: struct {}  // opaque
+
+EVENT_CONTEXT_FINISHED:        u32 = cast(u32, 1);
+EVENT_UNIT_PARSED:             u32 = cast(u32, 2);
+EVENT_UNIT_REQUIRES_PLACEMENT: u32 = cast(u32, 3);
+EVENT_UNIT_PLACED:             u32 = cast(u32, 4);
+
+Event :: struct
 {
     kind: u32;
-    placed_unit: &Compiler_Unit;
+    placed_unit: &Unit;
 }
 
-compiler_make_context :: (otu_ctx: &&Compiler_Context)                    {} intrinsic "compiler_make_context";
-compiler_add_file     :: (ctx: &Compiler_Context, path: string)           {} intrinsic "compiler_add_file";
-compiler_wait_event   :: (ctx: &Compiler_Context, event: &Compiler_Event) {} intrinsic "compiler_wait_event";
+make_context :: (out_ctx: &&Context)           {} intrinsic "compiler_make_context";
+add_file     :: (ctx: &Context, path: string)  {} intrinsic "compiler_add_file";
+wait_event   :: (ctx: &Context, event: &Event) {} intrinsic "compiler_wait_event";
 
 
-compiler_make_context(&ctx: &Compiler_Context);
-compiler_add_file(ctx, "target1.fun");
+make_context(&ctx: &Context);
+add_file(ctx, "target1.fun");
 
 more_events := cast(bool, true);
 while more_events
 {
-    compiler_wait_event(ctx, &event: Compiler_Event);
-    if event.kind == COMPILER_EVENT_CONTEXT_FINISHED
+    wait_event(ctx, &event: Event);
+    if event.kind == EVENT_CONTEXT_FINISHED
     {
         more_events = cast(bool, false);
     }
-    else => if event.kind == COMPILER_EVENT_UNIT_PARSED
+    else => if event.kind == EVENT_UNIT_PARSED
     {
         debug "parsed a unit";
     }
-    else => if event.kind == COMPILER_EVENT_UNIT_REQUIRES_PLACEMENT
+    else => if event.kind == EVENT_UNIT_REQUIRES_PLACEMENT
     {
         debug "could do custom unit placement right now, but won't";
     }
-    else => if event.kind == COMPILER_EVENT_UNIT_PLACED
+    else => if event.kind == EVENT_UNIT_PLACED
     {
         debug "unit placed, size of unit is:";
         debug event.placed_unit.storage_size;

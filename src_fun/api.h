@@ -532,21 +532,26 @@ enum: flags32
 
 struct Unit
 {
-    u64    storage_alignment;
-    u64    storage_size;
+    flags32 flags;
+
+    Token   initiator_from;
+    Token   initiator_to;
+    Block*  initiator_block;
+
+    Block*  entry_block;
+
+    umm     pointer_size;
+    umm     pointer_alignment;
+
+    u64     storage_alignment;
+    u64     storage_size;
+
+    /////////////////////////////////////////////////////////////
+    // up to this point, the members are shared with Fun users //
+    /////////////////////////////////////////////////////////////
 
     Region memory;
     Compiler* ctx;
-    flags32 flags;
-
-    Token  initiator_from;
-    Token  initiator_to;
-    Block* initiator_block;
-
-    Block* entry_block;
-
-    umm pointer_size;
-    umm pointer_alignment;
 
     umm    materialized_block_count;
     Block* most_recent_materialized_block;
