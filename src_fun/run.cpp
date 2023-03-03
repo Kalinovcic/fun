@@ -9,8 +9,12 @@ EnterApplicationNamespace
 
 
 
-static void run_intrinsic(User* user, Unit* unit, byte* storage, Block* block, String intrinsic)
+static bool run_intrinsic(User* user, Unit* unit, byte* storage, Block* block, String intrinsic,
+                          Bytecode_Continuation continuation)
 {
+    Environment* env = unit->env;
+    Compiler*    ctx = env->ctx;
+
     assert(unit->pointer_size      == sizeof (void*));
     assert(unit->pointer_alignment == alignof(void*));
 
@@ -21,7 +25,7 @@ static void run_intrinsic(User* user, Unit* unit, byte* storage, Block* block, S
             auto* expr  = &block->parsed_expressions  [id];
             auto* infer = &block->inferred_expressions[id];
             if (!(expr->flags & EXPRESSION_DECLARATION_IS_PARAMETER)) continue;
-            if (get_identifier(unit->ctx, &expr->declaration.name) != name) continue;
+            if (get_identifier(ctx, &expr->declaration.name) != name) continue;
             if (is_soft_type(infer->type)) break;
             if (out_type) *out_type = infer->type;
             if (assertion != INVALID_TYPE && assertion != infer->type)
@@ -51,7 +55,7 @@ static void run_intrinsic(User* user, Unit* unit, byte* storage, Block* block, S
             auto* infer = &block->inferred_expressions[id];
             if (!(expr->flags & EXPRESSION_DECLARATION_IS_RETURN)) continue;
             if (!is_user_defined_type(infer->type)) break;
-            Block* structure = get_user_type_data(unit->ctx, infer->type)->unit->entry_block;
+            Block* structure = get_user_type_data(env, infer->type)->unit->entry_block;
 
             u64 structure_offset;
             assert(get(&block->declaration_placement, &id, &structure_offset));
@@ -62,7 +66,7 @@ static void run_intrinsic(User* user, Unit* unit, byte* storage, Block* block, S
                 auto* expr  = &structure->parsed_expressions  [id];
                 auto* infer = &structure->inferred_expressions[id];
                 if (expr->kind != EXPRESSION_DECLARATION) continue;
-                if (get_identifier(unit->ctx, &expr->declaration.name) != name) continue;
+                if (get_identifier(ctx, &expr->declaration.name) != name) continue;
                 if (is_soft_type(infer->type)) break;
                 if (out_type) *out_type = infer->type;
                 if (assertion != INVALID_TYPE && assertion != infer->type)
@@ -84,6 +88,12 @@ static void run_intrinsic(User* user, Unit* unit, byte* storage, Block* block, S
         exit(1);
     };
 
+    auto confirm_response_to_actionable_event = [](Environment* chlid_env)
+    {
+        chlid_env->puppeteer_event_is_actionable = false;
+        chlid_env->puppeteer_event = { INVALID_PIPELINE_TASK };
+    };
+
     if (intrinsic == "syscall"_s)
     {
         Scope_Region_Cursor temp_scope(temp);
@@ -99,61 +109,159 @@ static void run_intrinsic(User* user, Unit* unit, byte* storage, Block* block, S
         get_runtime_return   ("rax"_s, &out, TYPE_UMM);
         *out = syscall(*rax, *rdi, *rsi, *rdx, *r10, *r8, *r9);
     }
-    else if (intrinsic == "compiler_make_context"_s)
+    else if (intrinsic == "compiler_make_environment"_s)
     {
+        struct Environment_Settings
+        {
+            bool custom_backend;
+        };
+
+        Environment_Settings* settings; get_runtime_parameter("settings"_s, &settings);
+        Environment***        out_env;  get_runtime_parameter("out_env"_s,  &out_env);
+
+        Environment* child_env = make_environment(ctx, env);
+        child_env->puppeteer_has_custom_backend = settings->custom_backend;
+        **out_env = child_env;
+    }
+    else if (intrinsic == "compiler_yield"_s)
+    {
+        Environment** child_env_ptr;
+        get_runtime_parameter("env"_s, &child_env_ptr);
+        Environment* child_env = *child_env_ptr;
+
+        assert(env == child_env->puppeteer);
+        if (child_env->puppeteer_event.kind != INVALID_PIPELINE_TASK)
+        {
+            if (child_env->puppeteer_event_is_actionable)
+                fprintf(stderr, "warning: user did not resolve an actionable environment event\n");
+            return false;
+        }
+
+        child_env->puppeteer_is_waiting = true;
+        child_env->puppeteer_continuation = continuation;
+        return true;
     }
     else if (intrinsic == "compiler_add_file"_s)
     {
+        Environment** child_env_ptr;
+        get_runtime_parameter("env"_s, &child_env_ptr);
+        Environment* child_env = *child_env_ptr;
+
+        String* path;
+        get_runtime_parameter("path"_s, &path);
+
+        Block* tlb = parse_top_level_from_file(child_env->ctx, *path);
+        if (tlb)
+            materialize_unit(child_env, tlb);
     }
-    else if (intrinsic == "compiler_wait_event"_s)
+    else if (intrinsic == "compiler_get_event"_s)
     {
         enum: u32
         {
-            COMPILER_EVENT_CONTEXT_FINISHED        = 1,
-            COMPILER_EVENT_UNIT_PARSED             = 2,
-            COMPILER_EVENT_UNIT_REQUIRES_PLACEMENT = 3,
-            COMPILER_EVENT_UNIT_PLACED             = 4,
+            EVENT_FINISHED                = 1,
+            EVENT_UNIT_WAS_PLACED         = 2,
+            EVENT_UNIT_WAS_PATCHED        = 3,
+            EVENT_UNIT_IS_ABOUT_TO_RUN    = 4,
+
+            EVENT_ACTIONABLE_BASE         = 1000,
+            EVENT_UNIT_REQUIRES_PLACEMENT = EVENT_ACTIONABLE_BASE + EVENT_UNIT_WAS_PLACED,
+            EVENT_UNIT_REQUIRES_PATCHING  = EVENT_ACTIONABLE_BASE + EVENT_UNIT_WAS_PATCHED,
+            EVENT_UNIT_REQUIRES_RUNNING   = EVENT_ACTIONABLE_BASE + EVENT_UNIT_IS_ABOUT_TO_RUN,
         };
 
         struct Compiler_Event
         {
             u32   kind;
-            Unit* placed_unit;
+            bool  actionable;
+            Unit* unit;
         };
+
+        Environment** child_env_ptr;
+        get_runtime_parameter("env"_s, &child_env_ptr);
+        Environment* child_env = *child_env_ptr;
 
         Compiler_Event** event_ptr;
         get_runtime_parameter("event"_s, &event_ptr);
         Compiler_Event* event = *event_ptr;
 
+        event->actionable = child_env->puppeteer_event_is_actionable;
+        if (child_env->puppeteer_event.kind == INVALID_PIPELINE_TASK)
+        {
+            assert(!event->actionable);
+            event->kind = EVENT_FINISHED;
+            event->unit = NULL;
+        }
+        else if (child_env->puppeteer_event.kind == PIPELINE_TASK_PLACE)
+        {
+            event->kind = event->actionable ? EVENT_UNIT_REQUIRES_PLACEMENT : EVENT_UNIT_WAS_PLACED;
+            event->unit = child_env->puppeteer_event.unit;
+        }
+        else if (child_env->puppeteer_event.kind == PIPELINE_TASK_PATCH)
+        {
+            event->kind = event->actionable ? EVENT_UNIT_REQUIRES_PATCHING : EVENT_UNIT_WAS_PATCHED;
+            event->unit = child_env->puppeteer_event.unit;
+        }
+        else if (child_env->puppeteer_event.kind == PIPELINE_TASK_RUN)
+        {
+            event->kind = event->actionable ? EVENT_UNIT_REQUIRES_RUNNING : EVENT_UNIT_IS_ABOUT_TO_RUN;
+            event->unit = child_env->puppeteer_event.unit;
+        }
+        else Unreachable;
 
-        static umm call_count;
-        u32 fake_messages[] = {
-            COMPILER_EVENT_UNIT_PARSED,
-            COMPILER_EVENT_UNIT_PARSED,
-            COMPILER_EVENT_UNIT_REQUIRES_PLACEMENT,
-            COMPILER_EVENT_UNIT_PLACED,
-            COMPILER_EVENT_UNIT_REQUIRES_PLACEMENT,
-            COMPILER_EVENT_UNIT_PLACED,
-            COMPILER_EVENT_CONTEXT_FINISHED,
-        };
+        if (!child_env->puppeteer_event_is_actionable)
+            child_env->puppeteer_event = {};
+    }
+    else if (intrinsic == "compiler_confirm_place_unit"_s)
+    {
+        Environment** child_env_ptr; get_runtime_parameter("env"_s,       &child_env_ptr);
+        Unit**        unit_ptr;      get_runtime_parameter("placed"_s,    &unit_ptr);
+        u64*          size;          get_runtime_parameter("size"_s,      &size);
+        u64*          alignment;     get_runtime_parameter("alignment"_s, &alignment);
 
-        static Unit fake_unit;
-        fake_unit.storage_size = (call_count == 3 ? 8 * 31 : 8 * 14);
+        Environment* child_env = *child_env_ptr;
+        Unit* unit = *unit_ptr;
 
-        event->kind = fake_messages[call_count++];
-        event->placed_unit = &fake_unit;
+        assert(child_env->puppeteer_event_is_actionable);
+        assert(child_env->puppeteer_event.kind == PIPELINE_TASK_PLACE);
+        assert(child_env->puppeteer_event.unit == unit);
+        unit->flags |= UNIT_IS_PLACED;
+        confirm_response_to_actionable_event(child_env);
+    }
+    else if (intrinsic == "compiler_confirm_patch_unit"_s)
+    {
+        Environment** child_env_ptr; get_runtime_parameter("env"_s,       &child_env_ptr);
+        Unit**        unit_ptr;      get_runtime_parameter("placed"_s,    &unit_ptr);
+
+        Environment* child_env = *child_env_ptr;
+        Unit* unit = *unit_ptr;
+
+        assert(child_env->puppeteer_event_is_actionable);
+        assert(child_env->puppeteer_event.kind == PIPELINE_TASK_PATCH);
+        assert(child_env->puppeteer_event.unit == unit);
+        unit->flags |= UNIT_IS_PATCHED;
+        confirm_response_to_actionable_event(child_env);
     }
     else
     {
         fprintf(stderr, "User is attempting to run an unknown intrinsic '%.*s'\nAborting...\n", StringArgs(intrinsic));
         exit(1);
     }
+
+    return false;
 }
 
-void run_bytecode(User* user, Unit* unit, umm instruction, byte* storage)
+
+void run_bytecode(User* user, Bytecode_Continuation continue_from)
 {
+    Unit* unit        = continue_from.unit;
+    umm   instruction = continue_from.instruction;
+    byte* storage     = continue_from.storage;
+
 run:
     if (!unit) return;
+
+    assert(unit->compiled_bytecode);
+    assert(!(unit->flags & UNIT_IS_STRUCT));
 
     Bytecode const* bc = &unit->bytecode[instruction];
     flags32 flags = bc->flags;
@@ -384,8 +492,13 @@ run:
         Block* block     = (Block*) a;
         String intrinsic = { (umm) s, (u8*) b };
         assert(block->flags & BLOCK_IS_PARAMETER_BLOCK);
-        run_intrinsic(user, unit, storage, block, intrinsic);
+
+        Bytecode_Continuation continuation = { unit, instruction + 1, storage };
+        bool exit_here = run_intrinsic(user, unit, storage, block, intrinsic, continuation);
+
         enter_lockdown(user);
+        if (exit_here)
+            return;
     } break;
     case OP_SWITCH_UNIT:
     {
@@ -451,23 +564,6 @@ run:
     instruction++;
     goto run;
 #undef M
-}
-
-void run_unit(Unit* unit)
-{
-    assert(unit->compiled_bytecode);
-    assert(!(unit->flags & UNIT_IS_STRUCT));
-
-    User* user = create_user();
-    Defer(delete_user(user));
-    enter_lockdown(user);
-    Defer(exit_lockdown(user));
-
-    byte* storage = user_alloc(user, unit->storage_size, unit->storage_alignment);
-    Defer(user_free(user, storage));
-    memset(storage, 0, 3 * sizeof(void*));
-
-    run_bytecode(user, unit, unit->entry_block->first_instruction, storage);
 }
 
 

@@ -1,8 +1,6 @@
 EnterApplicationNamespace
 
 
-struct Compiler;
-
 
 ////////////////////////////////////////////////////////////////////////////////
 // Fraction
@@ -569,8 +567,8 @@ struct Unit
     // up to this point, the members are shared with Fun users //
     /////////////////////////////////////////////////////////////
 
-    Region memory;
-    Compiler* ctx;
+    Region              memory;
+    struct Environment* env;
 
     umm    materialized_block_count;
     Block* most_recent_materialized_block;
@@ -648,7 +646,6 @@ struct Bytecode
     u64                s;
 };
 
-
 struct Bytecode_Patch
 {
     Block*     block;
@@ -663,24 +660,55 @@ struct Bytecode_Patch
 ////////////////////////////////////////////////////////////////////////////////
 
 
-enum Pipeline_Task_Kind
-{
-    INVALID_PIPELINE_TASK,
-    PIPELINE_TASK_INFER_BLOCK,
-};
-
-struct Pipeline_Task
-{
-    Pipeline_Task_Kind kind;
-    Unit*  unit;
-    Block* block;
-};
-
 struct User_Type
 {
     Unit*      unit;
     bool       has_alias;
     Token      alias;
+};
+
+struct Bytecode_Continuation
+{
+    Unit* unit;
+    umm   instruction;
+    byte* storage;
+};
+
+enum Pipeline_Task_Kind
+{
+    INVALID_PIPELINE_TASK,
+    PIPELINE_TASK_INFER_BLOCK,
+    PIPELINE_TASK_PLACE,
+    PIPELINE_TASK_PATCH,
+    PIPELINE_TASK_RUN,
+};
+
+struct Pipeline_Task
+{
+    Pipeline_Task_Kind    kind;
+    Unit*                 unit;
+    Block*                block;
+
+    Environment*          run_environment;
+    Bytecode_Continuation run_from;
+};
+
+struct Environment
+{
+    struct Compiler* ctx;
+    struct User* user;
+
+    Dynamic_Array<User_Type>    user_types;
+    Table(u64, Unit*, hash_u64) top_level_units;
+
+    Dynamic_Array<Pipeline_Task> pipeline;
+
+    Environment*          puppeteer;
+    Bytecode_Continuation puppeteer_continuation;
+    Pipeline_Task         puppeteer_event;
+    bool                  puppeteer_event_is_actionable;
+    bool                  puppeteer_is_waiting;
+    bool                  puppeteer_has_custom_backend;
 };
 
 struct Compiler
@@ -702,15 +730,15 @@ struct Compiler
     Region parser_memory;
     Table(String, Block*, hash_string) top_level_blocks;
 
-    // Inference
-    Dynamic_Array<Pipeline_Task> pipeline;
-    Dynamic_Array<User_Type> user_types;
-    Table(u64, Unit*, hash_u64) top_level_units;
-
-    Dynamic_Array<Unit*> units_to_patch;
+    // Pipeline
+    Region pipeline_memory;
+    Dynamic_Array<Environment*> environments;
 };
 
-void free_compiler(Compiler* compiler);
+
+Environment* make_environment(Compiler* ctx, Environment* puppeteer);
+
+bool pump_pipeline(Compiler* ctx);
 
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -758,7 +786,7 @@ Block* parse_top_level_from_memory(Compiler* ctx, String name, String code);
 ////////////////////////////////////////////////////////////////////////////////
 // Inference
 
-Unit* materialize_unit(Compiler* ctx, Block* initiator, Block* materialized_parent = NULL);
+Unit* materialize_unit(Environment* env, Block* initiator, Block* materialized_parent = NULL);
 
 String vague_type_description(Unit* unit, Type type, bool point_out_soft_types = false);
 String vague_type_description_in_compile_time_context(Unit* unit, Type type);
@@ -771,7 +799,7 @@ enum Find_Result
     FIND_WAIT,
 };
 
-Find_Result find_declaration(Compiler* ctx, Token const* name,
+Find_Result find_declaration(Environment* env, Token const* name,
                              Block* scope, Visibility visibility_limit,
                              Block** out_decl_scope, Expression* out_decl_expr,
                              Dynamic_Array<Resolved_Name::Use>* out_use_chain,
@@ -793,9 +821,7 @@ inline bool       const* get_constant_bool  (Block* block, Expression expr) { Co
 inline Type       const* get_constant_type  (Block* block, Expression expr) { Constant* c = get_constant(block, expr, TYPE_SOFT_TYPE);   return c ? &c->type    : NULL; }
 inline Soft_Block const* get_constant_block (Block* block, Expression expr) { Constant* c = get_constant(block, expr, TYPE_SOFT_BLOCK);  return c ? &c->block   : NULL; }
 
-User_Type* get_user_type_data(Compiler* ctx, Type type);
-
-bool pump_pipeline(Compiler* ctx);
+User_Type* get_user_type_data(Environment* env, Type type);
 
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -825,7 +851,7 @@ void set_most_recent_execution_location(struct User* user, Unit* unit, Bytecode 
 ////////////////////////////////////////////////////////////////////////////////
 // Runtime
 
-void run_unit(Unit* unit);
+void run_bytecode(User* user, Bytecode_Continuation continue_from);
 
 
 

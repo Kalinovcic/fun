@@ -7,20 +7,6 @@
 EnterApplicationNamespace
 
 
-void free_compiler(Compiler* ctx)
-{
-    lk_region_free(&ctx->lexer_memory);
-    free_heap_array(&ctx->sources);
-    free_heap_array(&ctx->token_info_other);
-    free_heap_array(&ctx->token_info_number);
-    free_heap_array(&ctx->token_info_string);
-    free_heap_array(&ctx->identifiers);
-    free_table(&ctx->atom_table);
-    lk_region_free(&ctx->parser_memory);
-
-    ZeroStruct(ctx);
-}
-
 extern "C" int main(int argc, char** argv)
 {
     /*add_log_handler([](String severity, String subsystem, String msg)
@@ -41,18 +27,11 @@ extern "C" int main(int argc, char** argv)
 
     Compiler compiler = {};
     Compiler* ctx = &compiler;
-    Defer(free_compiler(ctx));
 
-    Unit* preload_unit = materialize_unit(ctx, parse_top_level_from_memory(ctx, "<preload>"_s, R"XXX(
-        `string`@ :: struct
-        {
-            length: umm;
-            base: &u8;
-        }
-    )XXX"_s));
-    assert(preload_unit);
-    assert(pump_pipeline(ctx));
-    assert(get_identifier(ctx, &get_user_type_data(ctx, TYPE_STRING)->alias) == "string"_s);
+
+    Environment* env = make_environment(ctx, NULL);
+
+    assert(pump_pipeline(ctx));  // force preload to complete
 
     Block* main;
     if (non_flag_args.count == 2)
@@ -60,8 +39,9 @@ extern "C" int main(int argc, char** argv)
     else
         main = parse_top_level_from_file(ctx, non_flag_args[0]);
     if (!main) return 1;
-    Unit* unit = materialize_unit(ctx, main);
-    if (!unit) return 1;
+
+    materialize_unit(env, main);
+
     if (!pump_pipeline(ctx)) return 1;
     return 0;
 }

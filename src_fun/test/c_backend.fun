@@ -6,31 +6,48 @@ using Compiler :: import "compiler.fun";
 
 run
 {
-    puts("ello m8\n");
+    puts("hello from userland\n");
 
-    make_context(&ctx: &Context);
-    add_file(ctx, "target1.fun");
+    settings: Environment_Settings;
+    settings.custom_backend = cast(bool, false);
+
+    make_environment(&env: &Environment, settings);
+    add_file(env, "src_fun/test/target1.fun");
 
     more_events := cast(bool, true);
     while more_events
     {
-        wait_event(ctx, &event: Event);
-        if event.kind == cast(u32, EVENT_CONTEXT_FINISHED)
+        wait_event(env, &event: Event);
+        if event.kind == cast(u32, EVENT_FINISHED)
         {
             more_events = cast(bool, false);
         }
-        else => if event.kind == cast(u32, EVENT_UNIT_PARSED)
-        {
-            debug "parsed a unit";
-        }
         else => if event.kind == cast(u32, EVENT_UNIT_REQUIRES_PLACEMENT)
         {
-            debug "could do custom unit placement right now, but won't";
+            debug "need to place something";
+            confirm_place_unit(env, event.unit_ref, zero, zero);
         }
-        else => if event.kind == cast(u32, EVENT_UNIT_PLACED)
+        else => if event.kind == cast(u32, EVENT_UNIT_WAS_PLACED)
         {
-            debug "unit placed, size of unit is:";
-            debug event.unit_ref.storage_size;
+            debug "a unit was placed, cool";
+        }
+        else => if event.kind == cast(u32, EVENT_UNIT_REQUIRES_PATCHING)
+        {
+            debug "need to patch something";
+            confirm_patch_unit(env, event.unit_ref);
+        }
+        else => if event.kind == cast(u32, EVENT_UNIT_WAS_PATCHED)
+        {
+            debug "a unit was patched, cool";
+        }
+        else => if event.kind == cast(u32, EVENT_UNIT_REQUIRES_RUNNING)
+        {
+            debug "need to run something";
+            confirm_run_unit(env, event.unit_ref);
+        }
+        else => if event.kind == cast(u32, EVENT_UNIT_IS_ABOUT_TO_RUN)
+        {
+            debug "a unit is about to run, cool";
         }
         else
         {

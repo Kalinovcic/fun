@@ -179,9 +179,11 @@ static Location generate_expression(Bytecode_Builder* builder, Expression id)
 {
     Unit*     unit  = builder->unit;
     Block*    block = builder->block;
-    Compiler* ctx   = unit->ctx;
     auto*     expr  = &block->parsed_expressions  [id];
     auto*     infer = &block->inferred_expressions[id];
+
+    Environment* env = unit->env;
+    Compiler*    ctx = env ->ctx;
 
     Expression previous_expression = builder->expression;
     builder->expression = id;
@@ -198,7 +200,7 @@ static Location generate_expression(Bytecode_Builder* builder, Expression id)
             unit_type = get_element_type(lhs.type);
         }
         assert(is_user_defined_type(unit_type));
-        assert(use.scope->materialized_by_unit == get_user_type_data(ctx, unit_type)->unit);
+        assert(use.scope->materialized_by_unit == get_user_type_data(env, unit_type)->unit);
 
         auto* decl_infer = &use.scope->inferred_expressions[use.declaration];
         if (is_pointer_type(lhs.type) || lhs.indirect)
@@ -606,7 +608,9 @@ static void generate_block(Bytecode_Builder* builder, Block* block)
 
 static void patch_bytecode(Unit* unit)
 {
-    Compiler* ctx = unit->ctx;
+    Environment* env = unit->env;
+    Compiler*    ctx = env ->ctx;
+
     Array<Bytecode> bytecode = { unit->bytecode.count, (Bytecode*) unit->bytecode.address };
     For (unit->bytecode_patches)
     {
@@ -630,7 +634,7 @@ static void patch_bytecode(Unit* unit)
 
             // :PatchCodeofPlaceholder
             assert(bc[0].op == OP_LITERAL);
-            bc[0].a = (umm) get_user_type_data(ctx, unit_type)->unit;
+            bc[0].a = (umm) get_user_type_data(env, unit_type)->unit;
         } break;
 
         case EXPRESSION_DEBUG:

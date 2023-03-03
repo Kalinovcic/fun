@@ -980,8 +980,11 @@ Block* parse_top_level(Compiler* ctx, String canonical_name, String imports_rela
     block = PushValue(&ctx->parser_memory, Block);
     block->flags |= BLOCK_IS_TOP_LEVEL | BLOCK_IS_UNIT | BLOCK_HAS_STRUCTURE_PLACEMENT;
 
-    canonical_name = allocate_string(&ctx->parser_memory, canonical_name);
-    set(&ctx->top_level_blocks, &canonical_name, &block);
+    if (canonical_name)
+    {
+        canonical_name = allocate_string(&ctx->parser_memory, canonical_name);
+        set(&ctx->top_level_blocks, &canonical_name, &block);
+    }
 
     Block_Builder builder = {};
     builder.block = block;
@@ -1023,7 +1026,7 @@ Block* parse_top_level_from_memory(Compiler* ctx, String name, String code)
     Array<Token> tokens = {};
     bool ok = lex_from_memory(ctx, name, code, &tokens);
     if (!ok) return NULL;
-    return parse_top_level(ctx, name, "."_s, tokens);
+    return parse_top_level(ctx, {}, "."_s, tokens);
 }
 
 

@@ -61,30 +61,31 @@ static Block* materialize_block(Unit* unit, Block* materialize_from,
     task.kind  = PIPELINE_TASK_INFER_BLOCK;
     task.unit  = unit;
     task.block = block;
-    add_item(&unit->ctx->pipeline, &task);
+    add_item(&unit->env->pipeline, &task);
     return block;
 }
 
 
 
-User_Type* get_user_type_data(Compiler* ctx, Type type)
+User_Type* get_user_type_data(Environment* env, Type type)
 {
     assert(type >= TYPE_FIRST_USER_TYPE);
-    return &ctx->user_types[type - TYPE_FIRST_USER_TYPE];
+    return &env->user_types[type - TYPE_FIRST_USER_TYPE];
 }
 
-static Type create_user_type(Compiler* ctx, Unit* unit)
+static Type create_user_type(Unit* unit)
 {
-    Type type = (Type)(TYPE_FIRST_USER_TYPE + ctx->user_types.count);
-    User_Type* data = reserve_item(&ctx->user_types);
-    data->unit                  = unit;
+    Environment* env = unit->env;
+    Type type = (Type)(TYPE_FIRST_USER_TYPE + env->user_types.count);
+    User_Type* data = reserve_item(&env->user_types);
+    data->unit = unit;
     return type;
 }
 
-static bool is_user_type_sizeable(Compiler* ctx, Type type)
+static bool is_user_type_sizeable(Environment* env, Type type)
 {
     assert(is_user_defined_type(type));
-    User_Type* data = get_user_type_data(ctx, type);
+    User_Type* data = get_user_type_data(env, type);
     assert(data->unit);
     return data->unit->flags & UNIT_IS_PLACED;
 }
@@ -168,9 +169,9 @@ String exact_type_description(Unit* unit, Type type)
     }
 
     assert(is_user_defined_type(type));
-    User_Type* data = get_user_type_data(unit->ctx, type);
+    User_Type* data = get_user_type_data(unit->env, type);
     if (data->has_alias)
-        return get_identifier(unit->ctx, &data->alias);
+        return get_identifier(unit->env->ctx, &data->alias);
 
     // @ErrorReporting more detail, what unit?
     return "unit"_s;
@@ -179,7 +180,7 @@ String exact_type_description(Unit* unit, Type type)
 
 
 static Find_Result find_declaration_internal(
-        Compiler* ctx, Token const* name,
+        Environment* env, Token const* name,
         Block* scope, Visibility visibility_limit,
         Block** out_decl_scope, Expression* out_decl_expr,
         Dynamic_Array<Resolved_Name::Use>* out_use_chain,
@@ -243,10 +244,10 @@ static Find_Result find_declaration_internal(
                 }
 
                 if (!is_user_defined_type(user_type)) continue;
-                User_Type* data = get_user_type_data(ctx, user_type);
+                User_Type* data = get_user_type_data(env, user_type);
                 assert(data->unit);
 
-                Find_Result result = find_declaration_internal(ctx, name, data->unit->entry_block, using_visibility,
+                Find_Result result = find_declaration_internal(env, name, data->unit->entry_block, using_visibility,
                                                                out_decl_scope, out_decl_expr, out_use_chain,
                                                                /* allow_parent_traversal */ false,
                                                                /* allow_alias_using_traversal */ false,
@@ -270,7 +271,7 @@ static Find_Result find_declaration_internal(
     return FIND_FAILURE;
 }
 
-Find_Result find_declaration(Compiler* ctx, Token const* name,
+Find_Result find_declaration(Environment* env, Token const* name,
                              Block* scope, Visibility visibility_limit,
                              Block** out_decl_scope, Expression* out_decl_expr,
                              Dynamic_Array<Resolved_Name::Use>* out_use_chain,
@@ -278,7 +279,7 @@ Find_Result find_declaration(Compiler* ctx, Token const* name,
 {
     Dynamic_Array<Block*> visited_scopes = {};
     Defer(free_heap_array(&visited_scopes));
-    return find_declaration_internal(ctx, name, scope, visibility_limit,
+    return find_declaration_internal(env, name, scope, visibility_limit,
                                      out_decl_scope, out_decl_expr, out_use_chain,
                                      allow_parent_traversal, /* allow_alias_using_traversal */ true,
                                      &visited_scopes);
@@ -287,6 +288,9 @@ Find_Result find_declaration(Compiler* ctx, Token const* name,
 
 static umm edit_distance(String a, String b)
 {
+    // @Incomplete
+    return a.length + b.length;
+
     if (!a) return b.length;
     if (!b) return a.length;
 
@@ -369,7 +373,7 @@ u64 get_type_size(Unit* unit, Type type)
 
     if (is_user_defined_type(type))
     {
-        User_Type* data = get_user_type_data(unit->ctx, type);
+        User_Type* data = get_user_type_data(unit->env, type);
         assert(data->unit);
         assert(data->unit->flags & UNIT_IS_PLACED);
         return data->unit->storage_size;
@@ -408,7 +412,7 @@ u64 get_type_alignment(Unit* unit, Type type)
 
     if (is_user_defined_type(type))
     {
-        User_Type* data = get_user_type_data(unit->ctx, type);
+        User_Type* data = get_user_type_data(unit->env, type);
         assert(data->unit);
         assert(data->unit->flags & UNIT_IS_PLACED);
         return data->unit->storage_alignment;
@@ -473,23 +477,8 @@ void set_constant(Block* block, Expression expr, Type type_assertion, Constant* 
 }
 
 
-static void place_unit(Unit* unit)
-{
-    assert(!(unit->flags & UNIT_IS_PLACED));
 
-    generate_bytecode_for_unit_placement(unit);
-
-    if (!unit->storage_alignment)
-        unit->storage_alignment = 1;
-    unit->storage_size = unit->next_storage_offset;
-    while (unit->storage_size % unit->storage_alignment)
-        unit->storage_size++;
-    unit->flags |= UNIT_IS_PLACED;
-}
-
-
-
-static bool copy_constant(Compiler* ctx, Block* to_block, Expression to_id, Block* from_block, Expression from_id, Type type_assertion, Token const* alias = NULL)
+static bool copy_constant(Environment* env, Block* to_block, Expression to_id, Block* from_block, Expression from_id, Type type_assertion, Token const* alias = NULL)
 {
     Constant* constant_ptr = get_constant(from_block, from_id, type_assertion);
     if (!constant_ptr) return false;
@@ -508,7 +497,7 @@ static bool copy_constant(Compiler* ctx, Block* to_block, Expression to_id, Bloc
     case TYPE_SOFT_TYPE:
         if (alias && is_user_defined_type(constant.type))
         {
-            User_Type* data = get_user_type_data(ctx, constant.type);
+            User_Type* data = get_user_type_data(env, constant.type);
             if (!data->has_alias)
             {
                 data->has_alias = true;
@@ -534,6 +523,8 @@ static bool copy_constant(Compiler* ctx, Block* to_block, Expression to_id, Bloc
 
 static bool check_constant_fits_in_runtime_type(Unit* unit, Parsed_Expression const* expr, Fraction const* fraction, Type type)
 {
+    Environment* env = unit->env;
+    Compiler*    ctx = env->ctx;
     assert(!is_soft_type(type));
     assert(is_numeric_type(type));
     String name = exact_type_description(unit, type);
@@ -541,7 +532,7 @@ static bool check_constant_fits_in_runtime_type(Unit* unit, Parsed_Expression co
     if (!is_integer_type(type))
         NotImplemented;
 
-#define Error(...) return (report_error(unit->ctx, expr, Format(temp, ##__VA_ARGS__)), false)
+#define Error(...) return (report_error(ctx, expr, Format(temp, ##__VA_ARGS__)), false)
     if (!fract_is_integer(fraction))
         Error("The number is fractional, it can't fit in %.\n"
               "    value: %",
@@ -586,6 +577,8 @@ static bool check_constant_fits_in_runtime_type(Unit* unit, Parsed_Expression co
 static bool pattern_matching_inference(Unit* unit, Block* block, Expression id, Type type,
                                        Parsed_Expression const* inferred_from, Type full_inferred_type)
 {
+    Environment* env = unit->env;
+    Compiler*    ctx = env->ctx;
     assert(type != INVALID_TYPE);
     assert(!is_soft_type(type));
 
@@ -625,9 +618,9 @@ static bool pattern_matching_inference(Unit* unit, Block* block, Expression id, 
         if (!is_pointer_type(type))
         {
             String full_type = exact_type_description(unit, full_inferred_type);
-            Report(unit->ctx).part(expr, "Can't match the type to the expected pattern."_s)
-                             .part(inferred_from, Format(temp, "The type is %, inferred from here:", full_type))
-                             .done();
+            Report(ctx).part(expr, "Can't match the type to the expected pattern."_s)
+                       .part(inferred_from, Format(temp, "The type is %, inferred from here:", full_type))
+                       .done();
             return false;
         }
 
@@ -645,9 +638,9 @@ static bool pattern_matching_inference(Unit* unit, Block* block, Expression id, 
         if (indirection > TYPE_MAX_INDIRECTION)
         {
             String full_type = exact_type_description(unit, full_inferred_type);
-            Report(unit->ctx).part(expr, Format(temp, "Can't match the type to the expected pattern, because it would exceed the maximum indirection %.", TYPE_MAX_INDIRECTION))
-                             .part(inferred_from, Format(temp, "The type is %, inferred from here:", full_type))
-                             .done();
+            Report(ctx).part(expr, Format(temp, "Can't match the type to the expected pattern, because it would exceed the maximum indirection %.", TYPE_MAX_INDIRECTION))
+                       .part(inferred_from, Format(temp, "The type is %, inferred from here:", full_type))
+                       .done();
         }
 
         Type indirected = set_indirection(type, indirection);
@@ -676,8 +669,10 @@ enum Yield_Result
 
 static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
 {
-    Unit*  unit  = task->unit;
-    Block* block = task->block;
+    Unit*        unit  = task->unit;
+    Block*       block = task->block;
+    Environment* env   = unit->env;
+    Compiler*    ctx   = env->ctx;
 
     auto* expr  = &block->parsed_expressions[id];
     auto* infer = &block->inferred_expressions[id];
@@ -694,7 +689,7 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
 
     #define WaitOperand(on_expression) Wait(WAITING_ON_OPERAND, on_expression, block)
 
-    #define Error(...) return (report_error(unit->ctx, expr, Format(temp, ##__VA_ARGS__)), YIELD_ERROR)
+    #define Error(...) return (report_error(ctx, expr, Format(temp, ##__VA_ARGS__)), YIELD_ERROR)
 
     #define InferType(type) set_inferred_type(block, id, type)
     #define InferenceComplete() return (complete_expression(block, id), YIELD_COMPLETED)
@@ -727,13 +722,14 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
     case EXPRESSION_NUMERIC_LITERAL:
     {
         InferType(TYPE_SOFT_NUMBER);
-        Token_Info_Number* token_info = (Token_Info_Number*) get_token_info(unit->ctx, &expr->literal);
+        Token_Info_Number* token_info = (Token_Info_Number*) get_token_info(ctx, &expr->literal);
         set_constant_number(block, id, fract_clone(&token_info->value));
         InferenceComplete();
     } break;
 
     case EXPRESSION_STRING_LITERAL:
     {
+        assert(get_identifier(ctx, &get_user_type_data(env, TYPE_STRING)->alias) == "string"_s);
         InferType(TYPE_STRING);
         InferenceComplete();
     } break;
@@ -761,7 +757,7 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
         InferType(TYPE_SOFT_TYPE);
 
         Block* parent = (expr->flags & EXPRESSION_UNIT_IS_IMPORT) ? NULL : block;
-        Unit* new_unit = materialize_unit(unit->ctx, expr->parsed_block, parent);
+        Unit* new_unit = materialize_unit(env, expr->parsed_block, parent);
         if (expr->parsed_block->flags & BLOCK_HAS_STRUCTURE_PLACEMENT)
             new_unit->flags |= UNIT_IS_STRUCT;
         set_constant_type(block, id, new_unit->type_id);
@@ -775,13 +771,13 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
         Resolved_Name resolved = get(&block->resolved_names, &id);
         if (!resolved.scope)
         {
-            Find_Result result = find_declaration(unit->ctx, name, block, expr->visibility_limit, &resolved.scope, &resolved.declaration, &resolved.use_chain);
+            Find_Result result = find_declaration(env, name, block, expr->visibility_limit, &resolved.scope, &resolved.declaration, &resolved.use_chain);
             if (result == FIND_WAIT)
                 Wait(WAITING_ON_USING_TYPE, resolved.declaration, resolved.scope);
             if (result == FIND_FAILURE)
             {
-                String error = Format(temp, "Can't find '%'.", get_identifier(unit->ctx, name));
-                helpful_error_for_missing_name(unit->ctx, error, &expr->declaration.name,
+                String error = Format(temp, "Can't find '%'.", get_identifier(ctx, name));
+                helpful_error_for_missing_name(ctx, error, &expr->declaration.name,
                                                block, expr->visibility_limit, /* allow_parent_traversal */ true);
                 return YIELD_ERROR;
             }
@@ -797,7 +793,7 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
         InferType(decl_infer->type);
 
         if (is_soft_type(decl_infer->type))
-            if (!copy_constant(unit->ctx, block, id, resolved.scope, resolved.declaration, decl_infer->type))
+            if (!copy_constant(env, block, id, resolved.scope, resolved.declaration, decl_infer->type))
                 Wait(WAITING_ON_DECLARATION, resolved.declaration, resolved.scope);
 
         InferenceComplete();
@@ -823,7 +819,7 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
         if (!is_user_defined_type(user_type))
             Error("Expected a unit type on the left side of the '.' operator, but got %.", vague_type_description(unit, lhs_type));
 
-        User_Type* data = get_user_type_data(unit->ctx, user_type);
+        User_Type* data = get_user_type_data(env, user_type);
         assert(data->unit);
         Block* member_block = data->unit->entry_block;
         assert(member_block);
@@ -831,14 +827,14 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
         Resolved_Name resolved = get(&block->resolved_names, &id);
         if (!resolved.scope)
         {
-            Find_Result result = find_declaration(unit->ctx, &expr->member.name, member_block, member_visibility, &resolved.scope, &resolved.declaration, &resolved.use_chain, /* allow_parent_traversal */ false);
+            Find_Result result = find_declaration(env, &expr->member.name, member_block, member_visibility, &resolved.scope, &resolved.declaration, &resolved.use_chain, /* allow_parent_traversal */ false);
             if (result == FIND_WAIT)
                 Wait(WAITING_ON_USING_TYPE, resolved.declaration, resolved.scope);
             if (result == FIND_FAILURE)
             {
-                String identifier = get_identifier(unit->ctx, &expr->member.name);
+                String identifier = get_identifier(ctx, &expr->member.name);
                 String error = Format(temp, "Can't find member '%' in %.", identifier, exact_type_description(unit, user_type));
-                helpful_error_for_missing_name(unit->ctx, error, &expr->member.name,
+                helpful_error_for_missing_name(ctx, error, &expr->member.name,
                                                member_block, member_visibility, /* allow_parent_traversal */ false);
                 return YIELD_ERROR;
             }
@@ -854,7 +850,7 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
         InferType(decl_infer->type);
 
         if (is_soft_type(decl_infer->type))
-            if (!copy_constant(unit->ctx, block, id, resolved.scope, resolved.declaration, decl_infer->type))
+            if (!copy_constant(env, block, id, resolved.scope, resolved.declaration, decl_infer->type))
                 Wait(WAITING_ON_DECLARATION, resolved.declaration, resolved.scope);
 
         InferenceComplete();
@@ -966,7 +962,7 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
         Type const* type = get_constant_type(block, expr->unary_operand);
         if (!type) WaitOperand(expr->unary_operand);
 
-        if (is_user_defined_type(*type) && !is_user_type_sizeable(unit->ctx, *type))
+        if (is_user_defined_type(*type) && !is_user_type_sizeable(env, *type))
             WaitOperand(expr->unary_operand);
         set_constant_number(block, id, fract_make_u64(get_type_size(unit, *type)));
 
@@ -988,7 +984,7 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
         Type const* type = get_constant_type(block, expr->unary_operand);
         if (!type) WaitOperand(expr->unary_operand);
 
-        if (is_user_defined_type(*type) && !is_user_type_sizeable(unit->ctx, *type))
+        if (is_user_defined_type(*type) && !is_user_type_sizeable(env, *type))
             WaitOperand(expr->unary_operand);
         set_constant_number(block, id, fract_make_u64(get_type_alignment(unit, *type)));
 
@@ -1012,7 +1008,7 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
             if (!is_user_defined_type(*type))
                 Error("Expected a unit as operand to 'codeof', but got %.", exact_type_description(unit, *type));
 
-            User_Type* data = get_user_type_data(unit->ctx, *type);
+            User_Type* data = get_user_type_data(env, *type);
             assert(data->unit);
             if (data->unit->flags & UNIT_IS_STRUCT)
                 Error("'%' is a structure, and those don't have associated code.", exact_type_description(unit, *type));
@@ -1072,8 +1068,8 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
                 !(resolved.scope->flags & BLOCK_HAS_STRUCTURE_PLACEMENT) &&
                 !(resolved.scope->parsed_expressions[resolved.declaration].flags & EXPRESSION_DECLARATION_IS_UNINITIALIZED))
             {
-                String identifier = get_identifier(unit->ctx, &block->parsed_expressions[expr->binary.lhs].member.name);
-                Report(unit->ctx)
+                String identifier = get_identifier(ctx, &block->parsed_expressions[expr->binary.lhs].member.name);
+                Report(ctx)
                     .intro(SEVERITY_WARNING, expr)
                     .message(Format(temp, "Assignment to '%' will be overwritten by the declaration once the unit executes.\n"
                                           "If you're trying to pass data to the unit, the declaration should be uninitialized.",
@@ -1425,7 +1421,7 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
 
         String callee_name = "Callee"_s;
         if (soft_callee->has_alias)
-            callee_name = get_identifier(unit->ctx, &soft_callee->alias);
+            callee_name = get_identifier(ctx, &soft_callee->alias);
 
         // First stage: materializing the callee
         if (!infer->called_block)
@@ -1482,7 +1478,7 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
             assert(param_expr->declaration.type != NO_EXPRESSION);
             assert(param_expr->declaration.value == NO_EXPRESSION);
 
-            String param_name = get_identifier(unit->ctx, &param_expr->declaration.name);
+            String param_name = get_identifier(ctx, &param_expr->declaration.name);
 
             auto* param_type_expr = &callee->parsed_expressions[param_expr->declaration.type];
             if ((param_type_expr->flags & EXPRESSION_HAS_TO_BE_EXTERNALLY_INFERRED) &&
@@ -1497,11 +1493,11 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
 
                 if (is_soft_type(arg_type))
                 {
-                    Report(unit->ctx).part(arg_expr, Format(temp, "A runtime value is required for parameter #% ('%'), but the argument is %.",
-                                                            parameter_index + 1, param_name,
-                                                            vague_type_description_in_compile_time_context(unit, arg_type)))
-                                     .part(param_type_expr, "This is required because the parameter infers its type from the caller."_s)
-                                     .done();
+                    Report(ctx).part(arg_expr, Format(temp, "A runtime value is required for parameter #% ('%'), but the argument is %.",
+                                                      parameter_index + 1, param_name,
+                                                      vague_type_description_in_compile_time_context(unit, arg_type)))
+                               .part(param_type_expr, "This is required because the parameter infers its type from the caller."_s)
+                               .done();
                     return YIELD_ERROR;
                 }
 
@@ -1674,10 +1670,10 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
                 if (value_type == INVALID_TYPE) WaitOperand(expr->declaration.value);
                 if (is_soft_type(value_type))
                 {
-                    Report(unit->ctx).part(value_expr, Format(temp, "A runtime value is required here, but this is %.\n",
-                                                              vague_type_description_in_compile_time_context(unit, value_type)))
-                                     .part(type_expr, "This is because the declaration type is inferred from the value."_s)
-                                     .done();
+                    Report(ctx).part(value_expr, Format(temp, "A runtime value is required here, but this is %.\n",
+                                                        vague_type_description_in_compile_time_context(unit, value_type)))
+                               .part(type_expr, "This is because the declaration type is inferred from the value."_s)
+                               .done();
                     return YIELD_ERROR;
                 }
                 if (!pattern_matching_inference(unit, block, expr->declaration.type, value_type, value_expr, value_type))
@@ -1714,14 +1710,14 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
 
             if (is_soft_type(value_infer->type))
             {
-                if (!copy_constant(unit->ctx, block, id, block, expr->declaration.value, value_infer->type, &expr->declaration.name))
+                if (!copy_constant(env, block, id, block, expr->declaration.value, value_infer->type, &expr->declaration.name))
                     WaitOperand(expr->declaration.value);
             }
             else
             {
-                Report(unit->ctx).part(value_expr, Format(temp, "A compile-time value is required here, but this is %.",
-                                                          vague_type_description_in_compile_time_context(unit, value_infer->type)))
-                                 .done();
+                Report(ctx).part(value_expr, Format(temp, "A compile-time value is required here, but this is %.",
+                                                    vague_type_description_in_compile_time_context(unit, value_infer->type)))
+                           .done();
                 return YIELD_ERROR;
             }
         }
@@ -1736,9 +1732,9 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
                 {
                     assert(expr->declaration.value != NO_EXPRESSION);
                     auto* value_expr = &block->parsed_expressions[expr->declaration.value];
-                    Report(unit->ctx).part(value_expr, Format(temp, "A runtime value is required here, but this is %.\n",
-                                                              vague_type_description_in_compile_time_context(unit, value_type)))
-                                     .done();
+                    Report(ctx).part(value_expr, Format(temp, "A runtime value is required here, but this is %.\n",
+                                                        vague_type_description_in_compile_time_context(unit, value_type)))
+                               .done();
                     return YIELD_ERROR;
                 }
                 type = value_type;
@@ -1763,7 +1759,7 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
         infer->flags |= INFERRED_EXPRESSION_IS_NOT_EVALUATED_AT_RUNTIME;
         InferType(TYPE_VOID);
 
-        Unit* new_unit = materialize_unit(unit->ctx, expr->parsed_block, block);
+        Unit* new_unit = materialize_unit(env, expr->parsed_block, block);
         new_unit->flags |= UNIT_IS_RUN;
         InferenceComplete();
     } break;
@@ -1781,8 +1777,10 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
 
 static Yield_Result infer_block(Pipeline_Task* task)
 {
-    Unit*  unit  = task->unit;
-    Block* block = task->block;
+    Unit*        unit  = task->unit;
+    Block*       block = task->block;
+    Environment* env   = unit->env;
+    Compiler*    ctx   = env->ctx;
 
 
 #if STRESS_TEST
@@ -1839,7 +1837,7 @@ static Yield_Result infer_block(Pipeline_Task* task)
                 block->flags & BLOCK_HAS_STRUCTURE_PLACEMENT &&
                 expr->kind != EXPRESSION_DECLARATION)
             {
-                report_error(unit->ctx, expr, "Blocks with structured placement may not contain any expressions evaluated at runtime."_s);
+                report_error(ctx, expr, "Blocks with structured placement may not contain any expressions evaluated at runtime."_s);
                 return YIELD_ERROR;
             }
 
@@ -1847,7 +1845,7 @@ static Yield_Result infer_block(Pipeline_Task* task)
                 continue;
 
             if (is_user_defined_type(infer->type))
-                if (!is_user_type_sizeable(unit->ctx, infer->type))
+                if (!is_user_type_sizeable(env, infer->type))
                     goto skip_placement;
         }
 
@@ -1858,7 +1856,9 @@ static Yield_Result infer_block(Pipeline_Task* task)
         assert(unit->blocks_not_ready_for_placement > 0);
         if (--unit->blocks_not_ready_for_placement == 0)
         {
-            place_unit(unit);
+            Pipeline_Task* run_task = reserve_item(&env->pipeline);
+            run_task->kind = PIPELINE_TASK_PLACE;
+            run_task->unit = unit;
         }
 
         if (false) skip_placement:
@@ -1870,20 +1870,24 @@ static Yield_Result infer_block(Pipeline_Task* task)
 
     assert(unit->blocks_not_completed > 0);
     if (--unit->blocks_not_completed == 0)
-        add_item(&unit->ctx->units_to_patch, &unit);
+    {
+        Pipeline_Task* run_task = reserve_item(&env->pipeline);
+        run_task->kind = PIPELINE_TASK_PATCH;
+        run_task->unit = unit;
+    }
 
     return YIELD_COMPLETED;
 }
 
 
-Unit* materialize_unit(Compiler* ctx, Block* initiator, Block* materialized_parent)
+Unit* materialize_unit(Environment* env, Block* initiator, Block* materialized_parent)
 {
     if (initiator->flags & BLOCK_IS_TOP_LEVEL)
     {
         assert(materialized_parent == NULL);
 
         u64 key = (u64) initiator;
-        Unit* unit = get(&ctx->top_level_units, &key);
+        Unit* unit = get(&env->top_level_units, &key);
         if (unit) return unit;
     }
 
@@ -1897,17 +1901,17 @@ Unit* materialize_unit(Compiler* ctx, Block* initiator, Block* materialized_pare
     if (initiator->flags & BLOCK_IS_TOP_LEVEL)
     {
         u64 key = (u64) initiator;
-        set(&ctx->top_level_units, &key, &unit);
+        set(&env->top_level_units, &key, &unit);
     }
 
-    unit->ctx            = ctx;
+    unit->env            = env;
     unit->initiator_from = initiator->from;
     unit->initiator_to   = initiator->to;
 
     unit->pointer_size      = sizeof (void*);
     unit->pointer_alignment = alignof(void*);
 
-    unit->type_id = create_user_type(ctx, unit);
+    unit->type_id = create_user_type(unit);
 
     unit->entry_block = materialize_block(unit, initiator, materialized_parent, NO_VISIBILITY);
 
@@ -1915,129 +1919,310 @@ Unit* materialize_unit(Compiler* ctx, Block* initiator, Block* materialized_pare
 }
 
 
-bool pump_pipeline(Compiler* ctx)
+
+Environment* make_environment(Compiler* ctx, Environment* puppeteer)
 {
-    while (ctx->pipeline.count)
+    Environment* env = alloc<Environment>(&ctx->pipeline_memory);
+    env->ctx = ctx;
+    env->user = create_user();
+    env->puppeteer = puppeteer;
+
+    add_item(&ctx->environments, &env);
+
+    materialize_unit(env, parse_top_level_from_memory(ctx, "<preload>"_s, R"XXX(
+        `string`@ :: struct
+        {
+            length: umm;
+            base: &u8;
+        }
+    )XXX"_s));
+    return env;
+}
+
+static void wake_puppeteer(Environment* env, Pipeline_Task for_what, bool actionable)
+{
+    // printf("waking puppeteer\n");
+    assert(env->puppeteer);
+    assert(env->puppeteer_is_waiting);
+    env->puppeteer_is_waiting          = false;
+    env->puppeteer_event               = for_what;
+    env->puppeteer_event_is_actionable = actionable;
+
+    Pipeline_Task* run_task = reserve_item(&env->puppeteer->pipeline);
+    run_task->kind = PIPELINE_TASK_RUN;
+    run_task->run_environment = env->puppeteer;
+    run_task->run_from = env->puppeteer_continuation;
+}
+
+Yield_Result pump_environment(Environment* env)
+{
+    Compiler* ctx = env->ctx;
+    bool made_progress = false;
+
+continue_pipeline:
+    if (env->puppeteer_event.kind != INVALID_PIPELINE_TASK)
     {
+        assert(!env->puppeteer_is_waiting);
+        return made_progress ? YIELD_MADE_PROGRESS : YIELD_NO_PROGRESS;
+    }
+
+    // printf("pumping env %p\n", env);
+
+    if (env->pipeline.count == 0)
+        return YIELD_COMPLETED;
+
 #if STRESS_TEST
-        shuffle_array(&rng, ctx->pipeline);
+    shuffle_array(&rng, env->pipeline);
 #endif
 
-        bool made_progress = false;
-        for (umm it_index = 0; it_index < ctx->pipeline.count; it_index++)
+    bool had_inference_tasks_to_do = false;
+    bool had_placing_to_do = false;
+    for (umm it_index = 0; it_index < env->pipeline.count; it_index++)
+    {
+        bool task_completed = false;
+
+        Pipeline_Task task = env->pipeline[it_index];
+        if (task.kind == PIPELINE_TASK_PLACE)
         {
-            bool task_completed = false;
-            Pipeline_Task* task = &ctx->pipeline[it_index];
-            if (task->kind == PIPELINE_TASK_INFER_BLOCK)
+            had_placing_to_do = true;
+            made_progress = true;
+
+            Unit* unit = task.unit;
+            if (!(unit->flags & UNIT_IS_PLACED))
             {
-                Unit* unit = task->unit;
-                switch (infer_block(task))
+                if (env->puppeteer && env->puppeteer_has_custom_backend)
                 {
-                case YIELD_COMPLETED:       task_completed = true; // fallthrough
-                case YIELD_MADE_PROGRESS:   made_progress = true;  // fallthrough
-                case YIELD_NO_PROGRESS:     break;
-                case YIELD_ERROR:           return false;
-                IllegalDefaultCase;
+                    wake_puppeteer(env, task, /* actionable */ true);
+                    goto continue_pipeline;
                 }
 
-                if (unit->materialized_block_count >= MAX_BLOCKS_PER_UNIT)
-                {
-                    Report(ctx).part(&unit->initiator_from, Format(temp, "Too many blocks instantiated in this unit. Maximum is %.", MAX_BLOCKS_PER_UNIT))
-                               .part(&unit->most_recent_materialized_block->from, "The most recent instantiated block is here. It may or may not be part of the problem."_s)
-                               .done();
-                    return false;
-                }
+                generate_bytecode_for_unit_placement(unit);
+
+                if (!unit->storage_alignment)
+                    unit->storage_alignment = 1;
+                unit->storage_size = unit->next_storage_offset;
+                while (unit->storage_size % unit->storage_alignment)
+                    unit->storage_size++;
+                unit->flags |= UNIT_IS_PLACED;
             }
-            else Unreachable;
 
-            if (task_completed)
+            env->pipeline[it_index] = env->pipeline[env->pipeline.count - 1];
+            env->pipeline.count--;
+            it_index--;
+
+            if (env->puppeteer)
             {
-                ctx->pipeline[it_index] = ctx->pipeline[ctx->pipeline.count - 1];
-                ctx->pipeline.count--;
-                it_index--;
+                wake_puppeteer(env, task, /* actionable */ false);
+                goto continue_pipeline;
+            }
+        }
+        else if (task.kind == PIPELINE_TASK_INFER_BLOCK)
+        {
+            had_inference_tasks_to_do = true;
+
+            Unit* unit = task.unit;
+            switch (infer_block(&task))
+            {
+            case YIELD_COMPLETED:       task_completed = true; // fallthrough
+            case YIELD_MADE_PROGRESS:   made_progress = true;  // fallthrough
+            case YIELD_NO_PROGRESS:     break;
+            case YIELD_ERROR:           return YIELD_ERROR;
+            IllegalDefaultCase;
+            }
+
+            if (unit->materialized_block_count >= MAX_BLOCKS_PER_UNIT)
+            {
+                Report(ctx).part(&unit->initiator_from, Format(temp, "Too many blocks instantiated in this unit. Maximum is %.", MAX_BLOCKS_PER_UNIT))
+                           .part(&unit->most_recent_materialized_block->from, "The most recent instantiated block is here. It may or may not be part of the problem."_s)
+                           .done();
+                return YIELD_ERROR;
             }
         }
 
-        if (!made_progress)
+        if (task_completed)
         {
-            Report report(ctx);
-            report.intro(SEVERITY_ERROR);
-            report.message("Can't make inference progress."_s);
-            For (ctx->pipeline)
-            {
-                if (it->kind != PIPELINE_TASK_INFER_BLOCK) continue;
-                Block* block = it->block;
-                For (block->waiting_expressions)
-                {
-                    auto* expr = &block->parsed_expressions[it->key];
-                    Parsed_Expression const* waiting_on = NULL;
-                    if (it->value.on_expression != NO_EXPRESSION)
-                        waiting_on = &it->value.on_block->parsed_expressions[it->value.on_expression];
+            env->pipeline[it_index] = env->pipeline[env->pipeline.count - 1];
+            env->pipeline.count--;
+            it_index--;
+        }
+    }
 
-                    if (it->value.why == WAITING_ON_OPERAND)
-                        continue;
-                    else if (it->value.why == WAITING_ON_DECLARATION)
+    if (had_inference_tasks_to_do || had_placing_to_do)
+    {
+        if (made_progress)
+            goto continue_pipeline;
+
+        Report report(ctx);
+        report.intro(SEVERITY_ERROR);
+        report.message("Can't make inference progress."_s);
+        For (env->pipeline)
+        {
+            if (it->kind != PIPELINE_TASK_INFER_BLOCK) continue;
+            Block* block = it->block;
+            For (block->waiting_expressions)
+            {
+                auto* expr = &block->parsed_expressions[it->key];
+                Parsed_Expression const* waiting_on = NULL;
+                if (it->value.on_expression != NO_EXPRESSION)
+                    waiting_on = &it->value.on_block->parsed_expressions[it->value.on_expression];
+
+                if (it->value.why == WAITING_ON_OPERAND)
+                    continue;
+                else if (it->value.why == WAITING_ON_DECLARATION)
+                {
+                    report.continuation();
+                    report.message("This name is waiting for a declaration..."_s);
+                    report.snippet(expr, /* skinny */ true);
+                    if (waiting_on)
                     {
-                        report.continuation();
-                        report.message("This name is waiting for a declaration..."_s);
-                        report.snippet(expr, /* skinny */ true);
-                        if (waiting_on)
-                        {
-                            report.message("and this is the declaration it's waiting for."_s);
-                            report.snippet(waiting_on, /* skinny */ true);
-                        }
+                        report.message("and this is the declaration it's waiting for."_s);
+                        report.snippet(waiting_on, /* skinny */ true);
                     }
-                    else if (it->value.why == WAITING_ON_PARAMETER_INFERENCE)
+                }
+                else if (it->value.why == WAITING_ON_PARAMETER_INFERENCE)
+                {
+                    report.continuation();
+                    report.message("This call is waiting for a parameter type."_s);
+                    report.snippet(expr, /* skinny */ true);
+                    if (waiting_on)
                     {
-                        report.continuation();
-                        report.message("This call is waiting for a parameter type."_s);
-                        report.snippet(expr, /* skinny */ true);
-                        if (waiting_on)
-                        {
-                            report.message("and this is the parameter it's waiting for."_s);
-                            report.snippet(waiting_on, /* skinny */ true);
-                        }
+                        report.message("and this is the parameter it's waiting for."_s);
+                        report.snippet(waiting_on, /* skinny */ true);
                     }
-                    else if (it->value.why == WAITING_ON_EXTERNAL_INFERENCE)
-                    {
-                        report.continuation();
-                        report.message("This alias is waiting to be inferred."_s);
-                        report.snippet(expr, /* skinny */ true);
-                    }
-                    else if (it->value.why == WAITING_ON_CONDITION_INFERENCE)
-                    {
-                        report.continuation();
-                        report.message("This block is waiting for the baked condition to be inferred."_s);
-                        report.snippet(expr, /* skinny */ true);
-                    }
-                    else Unreachable;
+                }
+                else if (it->value.why == WAITING_ON_EXTERNAL_INFERENCE)
+                {
+                    report.continuation();
+                    report.message("This alias is waiting to be inferred."_s);
+                    report.snippet(expr, /* skinny */ true);
+                }
+                else if (it->value.why == WAITING_ON_CONDITION_INFERENCE)
+                {
+                    report.continuation();
+                    report.message("This block is waiting for the baked condition to be inferred."_s);
+                    report.snippet(expr, /* skinny */ true);
+                }
+                else
+                {
+                    report.continuation();
+                    report.message("Idk what this is"_s);
+                    report.snippet(expr, /* skinny */ true);
                 }
             }
-            report.done();
+        }
+        report.done();
+        return YIELD_ERROR;
+    }
+
+
+    bool had_patching_to_do = false;
+    for (umm it_index = 0; it_index < env->pipeline.count; it_index++)
+    {
+        Pipeline_Task task = env->pipeline[it_index];
+        if (task.kind != PIPELINE_TASK_PATCH) continue;
+        had_patching_to_do = true;
+        made_progress = true;
+
+        Unit* unit = task.unit;
+        if (!(unit->flags & UNIT_IS_PATCHED))
+        {
+            assert(unit->flags & UNIT_IS_PLACED);
+
+            if (env->puppeteer && env->puppeteer_has_custom_backend)
+            {
+                wake_puppeteer(env, task, /* actionable */ true);
+                goto continue_pipeline;
+            }
+
+            generate_bytecode_for_unit_completion(unit);
+            unit->flags |= UNIT_IS_PATCHED;
+
+            if (unit->flags & UNIT_IS_RUN)
+            {
+                byte* storage = user_alloc(unit->env->user, unit->storage_size, unit->storage_alignment);
+                memset(storage, 0, 3 * sizeof(void*));
+
+                Pipeline_Task* run_task = reserve_item(&env->pipeline);
+                run_task->kind = PIPELINE_TASK_RUN;
+                run_task->run_environment = unit->env;
+                run_task->run_from = { unit, unit->entry_block->first_instruction, storage };
+            }
+        }
+
+        env->pipeline[it_index] = env->pipeline[env->pipeline.count - 1];
+        env->pipeline.count--;
+        it_index--;
+
+        if (env->puppeteer)
+        {
+            wake_puppeteer(env, task, /* actionable */ false);
+            goto continue_pipeline;
+        }
+    }
+
+    if (had_patching_to_do)
+        goto continue_pipeline;
+
+    if (env->pipeline.count)
+    {
+        Pipeline_Task task = env->pipeline[0];
+        env->pipeline[0] = env->pipeline[env->pipeline.count - 1];
+        env->pipeline.count--;
+
+        assert(task.kind == PIPELINE_TASK_RUN);
+
+        enter_lockdown(task.run_environment->user);
+        run_bytecode(task.run_environment->user, task.run_from);
+        exit_lockdown(task.run_environment->user);
+        made_progress = true;
+    }
+
+    goto continue_pipeline;
+}
+
+bool pump_pipeline(Compiler* ctx)
+{
+    while (true)
+    {
+#if STRESS_TEST
+        shuffle_array(&rng, ctx->environments);
+#endif
+
+        bool had_work      = false;
+        bool made_progress = false;
+        for (umm it_index = 0; it_index < ctx->environments.count; it_index++)
+        {
+            Environment* it = ctx->environments[it_index];
+            if (it->pipeline.count == 0)
+            {
+                if (it->puppeteer_is_waiting)
+                {
+                    wake_puppeteer(it, { INVALID_PIPELINE_TASK }, /* actionable */ false);
+                    made_progress = true;
+                    had_work = true;
+                }
+                continue;
+            }
+
+            had_work = true;
+            switch (pump_environment(it))
+            {
+            case YIELD_COMPLETED:
+            case YIELD_MADE_PROGRESS: made_progress = true;  // fallthrough
+            case YIELD_NO_PROGRESS:   break;
+            case YIELD_ERROR:         return false;
+            IllegalDefaultCase
+            }
+        }
+
+        if (!had_work)
+            return true;
+        if (!made_progress)
+        {
+            Report(ctx).intro(SEVERITY_ERROR).message("Environments are stuck!"_s).done();
             return false;
         }
     }
-
-    For (ctx->units_to_patch)
-    {
-        Unit* unit = *it;
-        assert(unit->flags & UNIT_IS_PLACED);
-        assert(!(unit->flags & UNIT_IS_PATCHED));
-
-        generate_bytecode_for_unit_completion(unit);
-        unit->flags |= UNIT_IS_PATCHED;
-    }
-
-    For (ctx->units_to_patch)
-    {
-        Unit* unit = *it;
-        if (!(unit->flags & UNIT_IS_RUN)) continue;
-        run_unit(unit);
-    }
-
-    free_heap_array(&ctx->units_to_patch);
-
-    return true;
 }
 
 

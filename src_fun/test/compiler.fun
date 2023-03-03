@@ -1,4 +1,3 @@
-
 Atom :: u32;
 
 Token :: struct
@@ -54,19 +53,40 @@ Unit :: struct
     // more members exist in the C++ codebase, but are opaque here
 }
 
-EVENT_CONTEXT_FINISHED        :: 1;
-EVENT_UNIT_PARSED             :: 2;
-EVENT_UNIT_REQUIRES_PLACEMENT :: 3;
-EVENT_UNIT_PLACED             :: 4;
+// Non-actionable events
+EVENT_FINISHED                :: 1;
+EVENT_UNIT_WAS_PLACED         :: 2;
+EVENT_UNIT_WAS_PATCHED        :: 3;
+EVENT_UNIT_IS_ABOUT_TO_RUN    :: 4;
+// Actionable events (you will keep getting them forever until you act)
+EVENT_ACTIONABLE_BASE         :: 1000;
+EVENT_UNIT_REQUIRES_PLACEMENT :: EVENT_ACTIONABLE_BASE + EVENT_UNIT_WAS_PLACED;
+EVENT_UNIT_REQUIRES_PATCHING  :: EVENT_ACTIONABLE_BASE + EVENT_UNIT_WAS_PATCHED;
+EVENT_UNIT_REQUIRES_RUNNING   :: EVENT_ACTIONABLE_BASE + EVENT_UNIT_IS_ABOUT_TO_RUN;
 
 Event :: struct {
-    kind: u32;
-    unit_ref: &Unit;
+    kind:       u32;
+    actionable: bool;
+    unit_ref:  &Unit;
 }
 
-Context :: struct {}  // opaque
+Environment :: struct {}  // opaque
 
-make_context :: (out_ctx: &&Context)                                      {} intrinsic "compiler_make_context";
-add_file     :: (ctx: &Context, path: string)                             {} intrinsic "compiler_add_file";
-wait_event   :: (ctx: &Context, event: &Event)                            {} intrinsic "compiler_wait_event";
-place_unit   :: (ctx: &Context, placed: &Unit, size: u64, alignment: u64) {} intrinsic "compiler_place_unit";
+Environment_Settings :: struct
+{
+    custom_backend: bool;
+}
+
+make_environment   :: (out_env: &&Environment, settings: Environment_Settings)      {} intrinsic "compiler_make_environment";
+compiler_yield     :: (env: &Environment)                                           {} intrinsic "compiler_yield";
+add_file           :: (env: &Environment, path: string)                             {} intrinsic "compiler_add_file";
+get_event          :: (env: &Environment, event: &Event)                            {} intrinsic "compiler_get_event";
+confirm_place_unit :: (env: &Environment, placed: &Unit, size: u64, alignment: u64) {} intrinsic "compiler_confirm_place_unit";
+confirm_patch_unit :: (env: &Environment, placed: &Unit)                            {} intrinsic "compiler_confirm_patch_unit";
+confirm_run___unit :: (env: &Environment, placed: &Unit)                            {} intrinsic "compiler_confirm_run_unit";
+
+wait_event :: (env: &Environment, event: &Event)
+{
+    compiler_yield(env);    // give control back to the compiler so it can think about our actions
+    get_event(env, event);  // get what's asked of us
+}
