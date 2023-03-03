@@ -500,24 +500,40 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
     else if (maybe_take_atom(stream, ATOM_BOOL))   make_type_literal(TYPE_BOOL);
     else if (maybe_take_atom(stream, ATOM_TYPE))   make_type_literal(TYPE_TYPE);
     else if (maybe_take_atom(stream, ATOM_STRING)) make_type_literal(TYPE_STRING);
-    else if (maybe_take_atom(stream, ATOM_BLOCK))  return ReportError(stream->ctx, start, "The 'block' keyword can only be used for the type of the last parameter of a block."_s);
+    else if (maybe_take_atom(stream, ATOM_BLOCK))  return ReportError(stream->ctx, start, "'block' can only be used as a type for parameters."_s);
+    else if (maybe_take_atom(stream, ATOM_USING))
+    {
+        if (!take_atom(stream, ATOM_FIRST_IDENTIFIER, "Expected an identifier after 'using'."_s))
+            return false;
+        if (!take_atom(stream, ATOM_COLON, "Expected ':' after the used name."_s))
+            return false;
+        goto parse_using;
+    }
     else if (maybe_take_atom(stream, ATOM_FIRST_IDENTIFIER))
     {
         if (maybe_take_atom(stream, ATOM_COLON))
         {
+            bool is_using;
+            if (false) parse_using:
+                is_using = true;
+            else
+                is_using = false;
+
+            Token* name = start + (is_using ? 1 : 0);
+
             For (builder->expressions)
             {
                 if (it->kind != EXPRESSION_DECLARATION) continue;
                 Token* old_name = &it->declaration.name;
-                if (old_name->atom != start->atom) continue;
+                if (old_name->atom != name->atom) continue;
 
-                String identifier = get_identifier(stream->ctx, start);
+                String identifier = get_identifier(stream->ctx, name);
 
                 String old_source_token = get_source_token(stream->ctx, old_name);
-                String new_source_token = get_source_token(stream->ctx, start);
+                String new_source_token = get_source_token(stream->ctx, name);
 
                 return Report(stream->ctx)
-                    .part(start, Format(temp, "Duplicate declaration of '%'.", identifier))
+                    .part(name, Format(temp, "Duplicate declaration of '%'.", identifier))
                     .part(old_name, (old_source_token != new_source_token)
                         ? "Previously declared here. Keep in mind that multiple '_' characters are collapsed into one."_s
                         : "Previously declared here."_s)
@@ -528,6 +544,9 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
             bool       alias = false;
             Expression type  = NO_EXPRESSION;
             Expression value = NO_EXPRESSION;
+
+            if (is_using)
+                flags |= EXPRESSION_DECLARATION_IS_USING;
 
             if (maybe_take_atom(stream, ATOM_COLON))
             {
@@ -571,7 +590,7 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
 
             Parsed_Expression* expr = add_expression(builder, EXPRESSION_DECLARATION, start, stream->cursor - 1, out_expression);
             expr->flags |= flags;
-            expr->declaration.name  = *start;
+            expr->declaration.name  = *name;
             expr->declaration.type  = type;
             expr->declaration.value = value;
         }

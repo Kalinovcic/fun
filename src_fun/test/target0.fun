@@ -101,6 +101,19 @@ puts :: (what: string) -> (amount_written: umm, error: umm) {
     }
 }
 
+
+Cool_String :: struct {
+    using str: string;
+    cool_factor: u64;
+}
+
+cs: Cool_String;
+cs.str = "asdf";
+cs.cool_factor = cast(u64, 123);
+debug cs.base;
+debug cs.length;
+debug cs.cool_factor;
+
 puts("ello m8\n");
 
 

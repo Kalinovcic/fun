@@ -43,6 +43,7 @@ static void lex_init(Compiler* ctx)
     AddKeyword(ATOM_STRUCT,       "struct"_s);
     AddKeyword(ATOM_STRING,       "string"_s);
     AddKeyword(ATOM_IMPORT,       "import"_s);
+    AddKeyword(ATOM_USING,        "using"_s);
     AddKeyword(ATOM_TYPE,         "type"_s);
     AddKeyword(ATOM_BLOCK,        "block"_s);
     AddKeyword(ATOM_CODE_BLOCK,   "code_block"_s);
