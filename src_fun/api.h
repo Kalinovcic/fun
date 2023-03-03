@@ -543,8 +543,8 @@ struct Unit
     umm     pointer_size;
     umm     pointer_alignment;
 
-    u64     storage_alignment;
     u64     storage_size;
+    u64     storage_alignment;
 
     /////////////////////////////////////////////////////////////
     // up to this point, the members are shared with Fun users //

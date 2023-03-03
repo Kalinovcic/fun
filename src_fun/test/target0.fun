@@ -31,7 +31,13 @@ Block :: struct
     flags:              u32;
     from:               Token;
     to:                 Token;
+
+    // more members exist in the C++ codebase, but are opaque here
 }
+
+UNIT_IS_STRUCT    := cast(u32, 0x0001);
+UNIT_IS_PLACED    := cast(u32, 0x0002);
+UNIT_IS_COMPLETED := cast(u32, 0x0004);
 
 Unit :: struct
 {
@@ -46,31 +52,29 @@ Unit :: struct
     pointer_size:       umm;
     pointer_alignment:  umm;
 
-    storage_alignment:  u64;
     storage_size:       u64;
+    storage_alignment:  u64;
 
     // more members exist in the C++ codebase, but are opaque here
 }
 
-debug sizeof Unit;
-
-
-Context :: struct {}  // opaque
-
-EVENT_CONTEXT_FINISHED:        u32 = cast(u32, 1);
-EVENT_UNIT_PARSED:             u32 = cast(u32, 2);
-EVENT_UNIT_REQUIRES_PLACEMENT: u32 = cast(u32, 3);
-EVENT_UNIT_PLACED:             u32 = cast(u32, 4);
+EVENT_CONTEXT_FINISHED        := cast(u32, 1);
+EVENT_UNIT_PARSED             := cast(u32, 2);
+EVENT_UNIT_REQUIRES_PLACEMENT := cast(u32, 3);
+EVENT_UNIT_PLACED             := cast(u32, 4);
 
 Event :: struct
 {
     kind: u32;
-    placed_unit: &Unit;
+    unit_ref: &Unit;
 }
 
-make_context :: (out_ctx: &&Context)           {} intrinsic "compiler_make_context";
-add_file     :: (ctx: &Context, path: string)  {} intrinsic "compiler_add_file";
-wait_event   :: (ctx: &Context, event: &Event) {} intrinsic "compiler_wait_event";
+Context :: struct {}  // opaque
+
+make_context :: (out_ctx: &&Context)                                      {} intrinsic "compiler_make_context";
+add_file     :: (ctx: &Context, path: string)                             {} intrinsic "compiler_add_file";
+wait_event   :: (ctx: &Context, event: &Event)                            {} intrinsic "compiler_wait_event";
+place_unit   :: (ctx: &Context, placed: &Unit, size: u64, alignment: u64) {} intrinsic "compiler_place_unit";
 
 
 make_context(&ctx: &Context);
@@ -95,7 +99,7 @@ while more_events
     else => if event.kind == EVENT_UNIT_PLACED
     {
         debug "unit placed, size of unit is:";
-        debug event.placed_unit.storage_size;
+        debug event.unit_ref.storage_size;
     }
     else
     {
