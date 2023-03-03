@@ -534,6 +534,28 @@ static Location generate_expression(Bytecode_Builder* builder, Expression id)
         return void_location(infer->type);
     } break;
 
+    case EXPRESSION_YIELD:
+    {
+        for (umm i = 0; i < expr->yield_assignments->count; i++)
+            generate_expression(builder, expr->yield_assignments->expressions[i]);
+
+        Block* yield_from = block;
+        while (!(yield_from->flags & (BLOCK_IS_PARAMETER_BLOCK | BLOCK_IS_UNIT)) &&
+               yield_from->parent_scope &&
+               yield_from->parent_scope_visibility_limit != NO_VISIBILITY)
+            yield_from = yield_from->parent_scope;
+        assert(yield_from->materialized_by_unit == block->materialized_by_unit);
+
+        if (yield_from->flags & BLOCK_IS_UNIT)
+            Op(OP_FINISH_UNIT);
+        else
+        {
+            assert(yield_from->return_address_offset != 0);  // should already have the address known
+            Op(OP_GOTO_INDIRECT, r = yield_from->return_address_offset);
+        }
+        return void_location(infer->type);
+    } break;
+
     case EXPRESSION_DECLARATION:
     {
         u64 offset;

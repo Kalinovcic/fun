@@ -2,104 +2,10 @@
 // =($a: s64, $b: s64)
 // debug a + b;
 
+using System:   import "system.fun";
+using Compiler: import "compiler.fun";
 
-
-
-Atom :: u32;
-
-Token :: struct
-{
-    atom:       Atom;
-    info_index: u32;
-}
-
-Expression_Kind :: u16;
-Expression      :: u32;
-Visibility      :: u32;
-
-Parsed_Expression :: struct
-{
-    kind:               Expression_Kind;
-    flags:              u16;
-    visibility_limit:   Visibility;
-
-    from:               Token;
-    to:                 Token;
-}
-
-Block :: struct
-{
-    flags:              u32;
-    from:               Token;
-    to:                 Token;
-
-    // more members exist in the C++ codebase, but are opaque here
-}
-
-UNIT_IS_STRUCT    := cast(u32, 0x0001);
-UNIT_IS_PLACED    := cast(u32, 0x0002);
-UNIT_IS_COMPLETED := cast(u32, 0x0004);
-
-Unit :: struct
-{
-    flags:              u32;
-
-    initiator_from:     Token;
-    initiator_to:       Token;
-    initiator_block:   &Block;
-
-    entry_block:       &Block;
-
-    pointer_size:       umm;
-    pointer_alignment:  umm;
-
-    storage_size:       u64;
-    storage_alignment:  u64;
-
-    // more members exist in the C++ codebase, but are opaque here
-}
-
-EVENT_CONTEXT_FINISHED        := cast(u32, 1);
-EVENT_UNIT_PARSED             := cast(u32, 2);
-EVENT_UNIT_REQUIRES_PLACEMENT := cast(u32, 3);
-EVENT_UNIT_PLACED             := cast(u32, 4);
-
-Event :: struct {
-    kind: u32;
-    unit_ref: &Unit;
-}
-
-Context :: struct {}  // opaque
-
-make_context :: (out_ctx: &&Context)                                      {} intrinsic "compiler_make_context";
-add_file     :: (ctx: &Context, path: string)                             {} intrinsic "compiler_add_file";
-wait_event   :: (ctx: &Context, event: &Event)                            {} intrinsic "compiler_wait_event";
-place_unit   :: (ctx: &Context, placed: &Unit, size: u64, alignment: u64) {} intrinsic "compiler_place_unit";
-
-syscall :: (rax: umm, rdi: umm, rsi: umm, rdx: umm, r10: umm, r8: umm, r9: umm) -> (rax: umm) {} intrinsic "syscall";
-
-consume :: (str: &string, n: umm) -> (lhs: string) {
-    lhs.length = n;
-    lhs.base   = str.base;
-    str.length = str.length - n;
-    str.base   = str.base  &+ n;
-}
-
-puts :: (what: string) -> (amount_written: umm, error: umm) {
-    SYS_WRITE := cast(umm, 1);
-    fd := cast(umm, 1);  // stdout
-    while what.length > cast(umm, 0) {
-        amount := syscall(SYS_WRITE, fd, cast(umm, what.base), what.length, zero, zero, zero).rax;
-        if amount <= what.length
-         => amount_written = amount_written + amount;
-        else {
-            error = -amount;
-            amount = what.length;
-        }
-         
-        consume(&what, amount);
-    }
-}
+puts("ello m8\n");
 
 
 Cool_String :: struct {
@@ -114,40 +20,6 @@ debug cs.base;
 debug cs.length;
 debug cs.cool_factor;
 
-puts("ello m8\n");
-
-
-make_context(&ctx: &Context);
-add_file(ctx, "target1.fun");
-
-more_events := cast(bool, true);
-while more_events
-{
-    wait_event(ctx, &event: Event);
-    if event.kind == EVENT_CONTEXT_FINISHED
-    {
-        more_events = cast(bool, false);
-    }
-    else => if event.kind == EVENT_UNIT_PARSED
-    {
-        debug "parsed a unit";
-    }
-    else => if event.kind == EVENT_UNIT_REQUIRES_PLACEMENT
-    {
-        debug "could do custom unit placement right now, but won't";
-    }
-    else => if event.kind == EVENT_UNIT_PLACED
-    {
-        debug "unit placed, size of unit is:";
-        debug event.unit_ref.storage_size;
-    }
-    else
-    {
-        debug "unrecognized event";
-    }
-}
-
-debug "finished compilation!";
 
 
 
@@ -258,10 +130,10 @@ debug co.result;
 
 max :: (a: $T, b: T)
 {
-    /*if a > b
+    if a > b
      => debug a;
     else
-     => debug b;*/
+     => debug b;
 }
 
 max(cast(u32, 123), cast(u32, 321));
@@ -326,7 +198,6 @@ debug thing;
 
 
 
-import "proc.fun"();
 
 test :: ($T: type, v: u64)
 {

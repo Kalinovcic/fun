@@ -336,9 +336,11 @@ enum Expression_Kind: u16
     EXPRESSION_BRANCH,
     EXPRESSION_CALL,
     EXPRESSION_INTRINSIC,
+    EXPRESSION_YIELD,
 
     // other
     EXPRESSION_DECLARATION,
+    EXPRESSION_RUN,
 };
 
 enum: flags16
@@ -352,11 +354,12 @@ enum: flags16
     EXPRESSION_DECLARATION_IS_INFERRED_ALIAS = 0x0040,
     EXPRESSION_DECLARATION_IS_USING          = 0x0080,
     EXPRESSION_ALLOW_PARENT_SCOPE_VISIBILITY = 0x0100,
-    EXPRESSION_BLOCK_IS_IMPORTED             = 0x0200,
-    EXPRESSION_BRANCH_IS_LOOP                = 0x0400,
-    EXPRESSION_BRANCH_IS_BAKED               = 0x0800,
-    EXPRESSION_HAS_CONDITIONAL_INFERENCE     = 0x1000,
-    EXPRESSION_HAS_TO_BE_EXTERNALLY_INFERRED = 0x2000,
+    EXPRESSION_UNIT_IS_IMPORT                = 0x0200,
+    EXPRESSION_UNIT_IS_RUN                   = 0x0400,
+    EXPRESSION_BRANCH_IS_LOOP                = 0x0800,
+    EXPRESSION_BRANCH_IS_BAKED               = 0x1000,
+    EXPRESSION_HAS_CONDITIONAL_INFERENCE     = 0x2000,
+    EXPRESSION_HAS_TO_BE_EXTERNALLY_INFERRED = 0x4000,
 };
 
 struct Parsed_Expression
@@ -375,6 +378,8 @@ struct Parsed_Expression
         Expression    unary_operand;
         Type          parsed_type;
         struct Block* parsed_block;
+
+        Expression_List const* yield_assignments;
 
         struct
         {
@@ -498,9 +503,9 @@ enum: flags32
     BLOCK_IS_MATERIALIZED         = 0x0001,
     BLOCK_IS_PARAMETER_BLOCK      = 0x0002,
     BLOCK_READY_FOR_PLACEMENT     = 0x0004,  // means types and sizes are inferred, but constants maybe not
-    BLOCK_IS_TOP_LEVEL            = 0x0008,
-    BLOCK_IS_UNIT                 = 0x0010,
-    BLOCK_HAS_STRUCTURE_PLACEMENT = 0x0020,
+    BLOCK_IS_UNIT                 = 0x0008,
+    BLOCK_HAS_STRUCTURE_PLACEMENT = 0x0010,
+    BLOCK_IS_TOP_LEVEL            = 0x0020,
 };
 
 struct Block
@@ -538,8 +543,9 @@ static constexpr umm MAX_BLOCKS_PER_UNIT = 10000;
 enum: flags32
 {
     UNIT_IS_STRUCT  = 0x0001,
-    UNIT_IS_PLACED  = 0x0002,
-    UNIT_IS_PATCHED = 0x0004,
+    UNIT_IS_RUN     = 0x0002,
+    UNIT_IS_PLACED  = 0x0004,
+    UNIT_IS_PATCHED = 0x0008,
 };
 
 struct Unit
@@ -694,10 +700,12 @@ struct Compiler
 
     // Parser
     Region parser_memory;
+    Table(String, Block*, hash_string) top_level_blocks;
 
     // Inference
     Dynamic_Array<Pipeline_Task> pipeline;
     Dynamic_Array<User_Type> user_types;
+    Table(u64, Unit*, hash_u64) top_level_units;
 
     Dynamic_Array<Unit*> units_to_patch;
 };
@@ -741,7 +749,7 @@ inline String get_identifier(Compiler* ctx, Token const* token)
 ////////////////////////////////////////////////////////////////////////////////
 // Parser
 
-Block* parse_top_level(Compiler* ctx, String imports_relative_to_path, Array<Token> tokens);
+Block* parse_top_level(Compiler* ctx, String canonical_name, String imports_relative_to_path, Array<Token> tokens);
 Block* parse_top_level_from_file(Compiler* ctx, String path);
 // Your responsibility that code remains allocated as long as necessary!
 Block* parse_top_level_from_memory(Compiler* ctx, String name, String code);

@@ -62,7 +62,7 @@ run_tree/fun: $(objects)
 
 
 lines:
-	wc -l src_fun/*.cpp src_fun/*.h
+	wc -l src_fun/*.cpp src_fun/*.inl src_fun/*.h
 
 clean:
 	rm -rf obj/fun

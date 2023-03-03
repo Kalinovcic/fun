@@ -191,7 +191,7 @@ static bool semicolon_after_statement(Token_Stream* stream)
 static bool expression_can_be_followed_by_operators(Parsed_Expression const* expr)
 {
     if (expr->flags & EXPRESSION_IS_IN_PARENTHESES) return true;
-    if (expr->kind == EXPRESSION_BLOCK && !(expr->flags & EXPRESSION_BLOCK_IS_IMPORTED)) return false;
+    if (expr->kind == EXPRESSION_BLOCK) return false;
     if (expr->kind == EXPRESSION_DECLARATION) return false;
     return true;
 }
@@ -432,33 +432,34 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
             builder->expressions[*out_expression].flags |= EXPRESSION_IS_IN_PARENTHESES;
         }
     }
-    else if (maybe_take_atom(stream, ATOM_IMPORT))
-    {
-        Token* name = stream->cursor;
-        if (!take_atom(stream, ATOM_STRING_LITERAL, "Expected a string literal as the import path after 'import'."_s))
-            return false;
-
-        Token_Info_String* info = (Token_Info_String*) get_token_info(stream->ctx, name);
-        // @Reconsider - check if path seems malicious
-        String path = concatenate_path(temp, stream->imports_relative_to_path, info->value);
-
-        Block* imported_block = parse_top_level_from_file(stream->ctx, path);
-        if (!imported_block)
-            return false;
-
-        Parsed_Expression* expr = add_expression(builder, EXPRESSION_BLOCK, start, stream->cursor - 1, out_expression);
-        expr->flags |= EXPRESSION_BLOCK_IS_IMPORTED;
-        expr->parsed_block = imported_block;
-    }
-    else if (maybe_take_atom(stream, ATOM_UNIT) || maybe_take_atom(stream, ATOM_STRUCT))
+    else if (maybe_take_atom(stream, ATOM_IMPORT) || maybe_take_atom(stream, ATOM_RUN) || maybe_take_atom(stream, ATOM_UNIT) || maybe_take_atom(stream, ATOM_STRUCT))
     {
         bool is_struct = (start->atom == ATOM_STRUCT);
+        bool is_import = (start->atom == ATOM_IMPORT);
+        bool is_run    = (start->atom == ATOM_RUN);
 
-        Block* block = parse_block(stream, BLOCK_IS_UNIT | (is_struct ? BLOCK_HAS_STRUCTURE_PLACEMENT : 0));
+        Block* block;
+        if (is_import)
+        {
+            Token* name = stream->cursor;
+            if (!take_atom(stream, ATOM_STRING_LITERAL, "Expected a string literal as the import path after 'import'."_s))
+                return false;
+
+            Token_Info_String* info = (Token_Info_String*) get_token_info(stream->ctx, name);
+            // @Reconsider - check if path seems malicious
+            String path = concatenate_path(temp, stream->imports_relative_to_path, info->value);
+
+            block = parse_top_level_from_file(stream->ctx, path);
+        }
+        else
+        {
+            block = parse_block(stream, BLOCK_IS_UNIT | (is_struct ? BLOCK_HAS_STRUCTURE_PLACEMENT : 0));
+        }
         if (!block)
             return false;
 
-        Parsed_Expression* expr = add_expression(builder, EXPRESSION_UNIT, start, stream->cursor - 1, out_expression);
+        Parsed_Expression* expr = add_expression(builder, is_run ? EXPRESSION_RUN : EXPRESSION_UNIT, start, stream->cursor - 1, out_expression);
+        if (is_import) expr->flags |= EXPRESSION_UNIT_IS_IMPORT;
         expr->parsed_block = block;
     }
     else if (maybe_take_atom(stream, ATOM_MINUS))       { if (!make_unary(EXPRESSION_NEGATE,      parse_flags))                                   return false; }
@@ -706,6 +707,32 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
         expr->binary.lhs = lhs;
         expr->binary.rhs = rhs;
     }
+    else if (maybe_take_atom(stream, ATOM_YIELD))
+    {
+        Dynamic_Array<Expression> exprs = {};
+        Defer(free_heap_array(&exprs));
+        if (maybe_take_atom(stream, ATOM_LEFT_PARENTHESIS))
+        {
+            while (!maybe_take_atom(stream, ATOM_RIGHT_PARENTHESIS))
+            {
+                if (exprs.count && !take_atom(stream, ATOM_COMMA, "Expected ',' between assignments."_s))
+                    return false;
+
+                if (!parse_expression(stream, builder, reserve_item(&exprs), parse_flags))
+                    return false;
+                auto* assignment = &builder->expressions[exprs[exprs.count - 1]];
+                if (assignment->kind != EXPRESSION_ASSIGNMENT)
+                    return ReportError(stream->ctx, assignment, "Expected an assignment as part of 'yield' syntax."_s);
+            }
+        }
+
+        Expression_List* list = make_expression_list(&stream->ctx->parser_memory, exprs.count);
+        for (umm i = 0; i < exprs.count; i++)
+            list->expressions[i] = exprs[i];
+
+        Parsed_Expression* expr = add_expression(builder, EXPRESSION_YIELD, start, start, out_expression);
+        expr->yield_assignments = list;
+    }
     else
     {
         return ReportError(stream->ctx, next_token_or_eof(stream), "Expected an expression."_s);
@@ -945,10 +972,16 @@ static Block* parse_block(Token_Stream* stream, flags32 flags)
     }
 }
 
-Block* parse_top_level(Compiler* ctx, String imports_relative_to_path, Array<Token> tokens)
+Block* parse_top_level(Compiler* ctx, String canonical_name, String imports_relative_to_path, Array<Token> tokens)
 {
-    Block* block = PushValue(&ctx->parser_memory, Block);
-    block->flags |= BLOCK_IS_TOP_LEVEL;
+    Block* block = get(&ctx->top_level_blocks, &canonical_name);
+    if (block) return block;
+
+    block = PushValue(&ctx->parser_memory, Block);
+    block->flags |= BLOCK_IS_TOP_LEVEL | BLOCK_IS_UNIT | BLOCK_HAS_STRUCTURE_PLACEMENT;
+
+    canonical_name = allocate_string(&ctx->parser_memory, canonical_name);
+    set(&ctx->top_level_blocks, &canonical_name, &block);
 
     Block_Builder builder = {};
     builder.block = block;
@@ -982,7 +1015,7 @@ Block* parse_top_level_from_file(Compiler* ctx, String path)
 
     // @Incomplete - normalize path and all that stuff
     String import_path = get_parent_directory_path(path);
-    return parse_top_level(ctx, import_path, tokens);
+    return parse_top_level(ctx, path, import_path, tokens);
 }
 
 Block* parse_top_level_from_memory(Compiler* ctx, String name, String code)
@@ -990,7 +1023,7 @@ Block* parse_top_level_from_memory(Compiler* ctx, String name, String code)
     Array<Token> tokens = {};
     bool ok = lex_from_memory(ctx, name, code, &tokens);
     if (!ok) return NULL;
-    return parse_top_level(ctx, "."_s, tokens);
+    return parse_top_level(ctx, name, "."_s, tokens);
 }
 
 

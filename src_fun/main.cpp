@@ -63,8 +63,6 @@ extern "C" int main(int argc, char** argv)
     Unit* unit = materialize_unit(ctx, main);
     if (!unit) return 1;
     if (!pump_pipeline(ctx)) return 1;
-    run_unit(unit);
-    printf("\ndone\n");
     return 0;
 }
 
