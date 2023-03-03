@@ -14,13 +14,13 @@ static void run_intrinsic(User* user, Unit* unit, byte* storage, Block* block, S
     assert(unit->pointer_size      == sizeof (void*));
     assert(unit->pointer_alignment == alignof(void*));
 
-    auto get_runtime_parameter = [&](String name, auto** out_address, Type* out_type, Type assertion = INVALID_TYPE)
+    auto get_runtime_parameter = [&](String name, auto** out_address, Type assertion = INVALID_TYPE, Type* out_type = NULL)
     {
         for (Expression id = {}; id < block->inferred_expressions.count; id = (Expression)(id + 1))
         {
             auto* expr  = &block->parsed_expressions  [id];
             auto* infer = &block->inferred_expressions[id];
-            if (expr->kind != EXPRESSION_DECLARATION) continue;
+            if (!(expr->flags & EXPRESSION_DECLARATION_IS_PARAMETER)) continue;
             if (get_identifier(unit->ctx, &expr->declaration.name) != name) continue;
             if (is_soft_type(infer->type)) break;
             if (out_type) *out_type = infer->type;
@@ -42,23 +42,62 @@ static void run_intrinsic(User* user, Unit* unit, byte* storage, Block* block, S
         exit(1);
     };
 
+    auto get_runtime_return = [&](String name, auto** out_address, Type assertion = INVALID_TYPE, Type* out_type = NULL)
+    {
+        Block* return_struct = NULL;
+        for (Expression id = {}; id < block->inferred_expressions.count; id = (Expression)(id + 1))
+        {
+            auto* expr  = &block->parsed_expressions  [id];
+            auto* infer = &block->inferred_expressions[id];
+            if (!(expr->flags & EXPRESSION_DECLARATION_IS_RETURN)) continue;
+            if (!is_user_defined_type(infer->type)) break;
+            Block* structure = get_user_type_data(unit->ctx, infer->type)->unit->entry_block;
+
+            u64 structure_offset;
+            assert(get(&block->declaration_placement, &id, &structure_offset));
+
+            enum {} block;
+            for (Expression id = {}; id < structure->inferred_expressions.count; id = (Expression)(id + 1))
+            {
+                auto* expr  = &structure->parsed_expressions  [id];
+                auto* infer = &structure->inferred_expressions[id];
+                if (expr->kind != EXPRESSION_DECLARATION) continue;
+                if (get_identifier(unit->ctx, &expr->declaration.name) != name) continue;
+                if (is_soft_type(infer->type)) break;
+                if (out_type) *out_type = infer->type;
+                if (assertion != INVALID_TYPE && assertion != infer->type)
+                {
+                    String type_desc = exact_type_description(unit, assertion);
+                    fprintf(stderr, "Runtime return '%.*s' to intrinsic '%.*s' must be of type '%.*s'\nAborting...\n",
+                        StringArgs(name), StringArgs(intrinsic), StringArgs(type_desc));
+                    exit(1);
+                }
+
+                u64 offset;
+                assert(get(&structure->declaration_placement, &id, &offset));
+                *(byte**) out_address = storage + structure_offset + offset;
+                return;
+            }
+        }
+
+        fprintf(stderr, "Missing runtime return '%.*s' to intrinsic '%.*s'\nAborting...\n", StringArgs(name), StringArgs(intrinsic));
+        exit(1);
+    };
+
     if (intrinsic == "syscall"_s)
     {
         Scope_Region_Cursor temp_scope(temp);
 
-        umm **result, *rax, *rdi, *rsi, *rdx, *r10, *r8, *r9;
-        get_runtime_parameter("result"_s, &result, NULL, set_indirection(TYPE_UMM, 1));
-        get_runtime_parameter("rax"_s,    &rax,    NULL, TYPE_UMM);
-        get_runtime_parameter("rdi"_s,    &rdi,    NULL, TYPE_UMM);
-        get_runtime_parameter("rsi"_s,    &rsi,    NULL, TYPE_UMM);
-        get_runtime_parameter("rdx"_s,    &rdx,    NULL, TYPE_UMM);
-        get_runtime_parameter("r10"_s,    &r10,    NULL, TYPE_UMM);
-        get_runtime_parameter("r8"_s,     &r8,     NULL, TYPE_UMM);
-        get_runtime_parameter("r9"_s,     &r9,     NULL, TYPE_UMM);
-
-        umm result_value = syscall(*rax, *rdi, *rsi, *rdx, *r10, *r8, *r9);
-        if (*result)
-            **result = result_value;
+        umm *out, *rax, *rdi, *rsi, *rdx, *r10, *r8, *r9;
+        get_runtime_parameter("rax"_s, &rax, TYPE_UMM);
+        get_runtime_parameter("rdi"_s, &rdi, TYPE_UMM);
+        get_runtime_parameter("rsi"_s, &rsi, TYPE_UMM);
+        get_runtime_parameter("rdx"_s, &rdx, TYPE_UMM);
+        get_runtime_parameter("r10"_s, &r10, TYPE_UMM);
+        get_runtime_parameter("r8"_s,  &r8,  TYPE_UMM);
+        get_runtime_parameter("r9"_s,  &r9,  TYPE_UMM);
+        get_runtime_return   ("rax"_s, &out, TYPE_UMM);
+        *out = syscall(*rax, *rdi, *rsi, *rdx, *r10, *r8, *r9);
     }
     else if (intrinsic == "compiler_make_context"_s)
     {
@@ -83,7 +122,7 @@ static void run_intrinsic(User* user, Unit* unit, byte* storage, Block* block, S
         };
 
         Compiler_Event** event_ptr;
-        get_runtime_parameter("event"_s, &event_ptr, NULL);
+        get_runtime_parameter("event"_s, &event_ptr);
         Compiler_Event* event = *event_ptr;
 
 

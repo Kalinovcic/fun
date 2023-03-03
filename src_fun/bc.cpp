@@ -360,8 +360,32 @@ static Location generate_expression(Bytecode_Builder* builder, Expression id)
 
     case EXPRESSION_DIVIDE_WHOLE:       NotImplemented;
     case EXPRESSION_DIVIDE_FRACTIONAL:  NotImplemented;
-    case EXPRESSION_POINTER_ADD:        NotImplemented;
-    case EXPRESSION_POINTER_SUBTRACT:   NotImplemented;
+
+    case EXPRESSION_POINTER_ADD:
+    {
+        Location lhs = direct(builder, generate_expression(builder, expr->binary.lhs));
+        Location rhs = direct(builder, generate_expression(builder, expr->binary.rhs));
+
+        if (is_pointer_type(rhs.type))
+        {
+            Location temp = lhs;
+            lhs = rhs;
+            rhs = temp;
+        }
+
+        assert(is_pointer_type(lhs.type));
+        assert(is_integer_type(rhs.type));
+
+        u64 element_size = get_type_size(unit, get_element_type(lhs.type));
+        Location result = allocate_location(builder, infer->type);
+        Op(OP_MOVE_POINTER_FORWARD, r = result.offset, a = lhs.offset, b = rhs.offset, s = element_size);
+        return result;
+    } break;
+
+    case EXPRESSION_POINTER_SUBTRACT:
+    {
+        NotImplemented;
+    } break;
 
     flags32 compare_flags;
     case EXPRESSION_EQUAL:              compare_flags = OP_COMPARE_EQUAL;                      goto emit_compare;
@@ -376,7 +400,7 @@ static Location generate_expression(Bytecode_Builder* builder, Expression id)
         Location rhs = direct(builder, generate_expression(builder, expr->binary.rhs));
         assert(lhs.type == rhs.type);
         Location result = allocate_location(builder, infer->type);
-        Op(OP_COMPARE, flags = compare_flags, r = result.offset, a = lhs.offset, b = rhs.offset, s = lhs.type);
+        Op(OP_COMPARE, flags = compare_flags, r = result.offset, a = lhs.offset, b = rhs.offset, s = simplify_type(unit, lhs.type));
         return result;
     } break;
 

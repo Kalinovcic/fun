@@ -3,15 +3,7 @@
 // debug a + b;
 
 
-foo :: () -> (poo: u32)
-{
-    poo = cast(u32, 123);
-}
 
-debug foo().poo;
-
-
-/*
 
 Atom :: u32;
 
@@ -72,8 +64,7 @@ EVENT_UNIT_PARSED             := cast(u32, 2);
 EVENT_UNIT_REQUIRES_PLACEMENT := cast(u32, 3);
 EVENT_UNIT_PLACED             := cast(u32, 4);
 
-Event :: struct
-{
+Event :: struct {
     kind: u32;
     unit_ref: &Unit;
 }
@@ -85,14 +76,29 @@ add_file     :: (ctx: &Context, path: string)                             {} int
 wait_event   :: (ctx: &Context, event: &Event)                            {} intrinsic "compiler_wait_event";
 place_unit   :: (ctx: &Context, placed: &Unit, size: u64, alignment: u64) {} intrinsic "compiler_place_unit";
 
-syscall :: (result: &umm, rax: umm, rdi: umm, rsi: umm, rdx: umm, r10: umm, r8: umm, r9: umm) {} intrinsic "syscall";
+syscall :: (rax: umm, rdi: umm, rsi: umm, rdx: umm, r10: umm, r8: umm, r9: umm) -> (rax: umm) {} intrinsic "syscall";
 
-puts :: (what: string)
-{
+consume :: (str: &string, n: umm) -> (lhs: string) {
+    lhs.length = n;
+    lhs.base   = str.base;
+    str.length = str.length - n;
+    str.base   = str.base  &+ n;
+}
+
+puts :: (what: string) -> (amount_written: umm, error: umm) {
     SYS_WRITE := cast(umm, 1);
-
     fd := cast(umm, 1);  // stdout
-    syscall(zero, SYS_WRITE, fd, cast(umm, what.base), what.length, zero, zero, zero);
+    while what.length > cast(umm, 0) {
+        amount := syscall(SYS_WRITE, fd, cast(umm, what.base), what.length, zero, zero, zero).rax;
+        if amount <= what.length
+         => amount_written = amount_written + amount;
+        else {
+            error = -amount;
+            amount = what.length;
+        }
+         
+        consume(&what, amount);
+    }
 }
 
 puts("ello m8\n");
@@ -132,15 +138,7 @@ debug "finished compilation!";
 
 
 
-/*consume :: (res: &string, str: &string, n: umm)
-{
-    res.length = n;
-    res.base   = str.base;
-    str.length = str.length - n;
-    str.base   = str.base  &+ n;
-}
-
-asdf: string = "asdf";
+/*asdf: string = "asdf";
 consume(&lhs: string, &asdf, cast(umm, 1));
 debug lhs;
 debug asdf;*/
@@ -417,6 +415,4 @@ proc_b :: ()
 }
 
 proc_b();
-*/
-
 */
