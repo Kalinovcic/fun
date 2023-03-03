@@ -56,11 +56,14 @@ struct Bytecode_Builder
     Concatenator<Bytecode> bytecode;
 };
 
+#define Label() (builder->bytecode.count)
 #define Op(opcode, ...)                                                                                           \
-    {                                                                                                             \
+    ([&](){                                                                                                       \
         flags32 flags = 0; u64 r = 0, a = 0, b = 0, s = 0; { __VA_ARGS__; }                                       \
-        *reserve_item(&builder->bytecode) = { builder->block, builder->expression, (opcode), flags, r, a, b, s }; \
-    }
+        Bytecode* bc = reserve_item(&builder->bytecode);                                                          \
+        *bc = { builder->block, builder->expression, (opcode), flags, r, a, b, s };                               \
+        return bc;                                                                                                \
+    }())
 
 struct Location
 {
@@ -309,13 +312,21 @@ static Location generate_expression(Bytecode_Builder* builder, Expression id)
     case EXPRESSION_POINTER_ADD:        NotImplemented;
     case EXPRESSION_POINTER_SUBTRACT:   NotImplemented;
 
-    case EXPRESSION_EQUAL:
-    case EXPRESSION_NOT_EQUAL:
-    case EXPRESSION_GREATER_THAN:
-    case EXPRESSION_GREATER_OR_EQUAL:
-    case EXPRESSION_LESS_THAN:
-    case EXPRESSION_LESS_OR_EQUAL:
+    flags32 compare_flags;
+    case EXPRESSION_EQUAL:              compare_flags = OP_COMPARE_EQUAL;                      goto emit_compare;
+    case EXPRESSION_NOT_EQUAL:          compare_flags = OP_COMPARE_GREATER | OP_COMPARE_LESS;  goto emit_compare;
+    case EXPRESSION_GREATER_THAN:       compare_flags = OP_COMPARE_GREATER;                    goto emit_compare;
+    case EXPRESSION_GREATER_OR_EQUAL:   compare_flags = OP_COMPARE_GREATER | OP_COMPARE_EQUAL; goto emit_compare;
+    case EXPRESSION_LESS_THAN:          compare_flags = OP_COMPARE_LESS;                       goto emit_compare;
+    case EXPRESSION_LESS_OR_EQUAL:      compare_flags = OP_COMPARE_LESS | OP_COMPARE_EQUAL;    goto emit_compare;
+    emit_compare:
     {
+        Location lhs = direct(builder, generate_expression(builder, expr->binary.lhs));
+        Location rhs = direct(builder, generate_expression(builder, expr->binary.rhs));
+        assert(lhs.type == rhs.type);
+        Location result = allocate_location(builder, infer->type);
+        Op(OP_COMPARE, flags = compare_flags, r = result.offset, a = lhs.offset, b = rhs.offset, s = lhs.type);
+        return result;
     } break;
 
     case EXPRESSION_CAST:
@@ -335,6 +346,12 @@ static Location generate_expression(Bytecode_Builder* builder, Expression id)
                 assert(int_get_abs_u64(&constant, &fract->num));
                 if (fract->num.negative)
                     constant = -constant;
+            }
+            else if (is_bool_type(cast_type))
+            {
+                bool const* boolean = get_constant_bool(block, expr->binary.rhs);
+                assert(boolean);
+                constant = (*boolean ? 1 : 0);
             }
             else if (cast_type == TYPE_TYPE)
             {
@@ -362,7 +379,51 @@ static Location generate_expression(Bytecode_Builder* builder, Expression id)
         return void_location(infer->type);
     } break;
 
-    case EXPRESSION_BRANCH:             NotImplemented;
+    case EXPRESSION_BRANCH:
+    {
+        Expression condition  = expr->branch.condition;
+        Expression on_success = expr->branch.on_success;
+        Expression on_failure = expr->branch.on_failure;
+        if (expr->flags & EXPRESSION_BRANCH_IS_BAKED)
+        {
+            if (on_success != NO_EXPRESSION && block->inferred_expressions[on_success].flags & INFERRED_EXPRESSION_CONDITION_ENABLED)
+                generate_expression(builder, on_success);
+            if (on_failure != NO_EXPRESSION && block->inferred_expressions[on_failure].flags & INFERRED_EXPRESSION_CONDITION_ENABLED)
+                generate_expression(builder, on_failure);
+        }
+        else if (condition == NO_EXPRESSION)
+        {
+            assert(on_success != NO_EXPRESSION && on_failure == NO_EXPRESSION);
+            u64 loop_label = Label();
+            generate_expression(builder, on_success);
+            if (expr->flags & EXPRESSION_BRANCH_IS_LOOP)
+                Op(OP_GOTO, r = loop_label);
+        }
+        else
+        {
+            u64 loop_label = Label();
+            Location condition_location = direct(builder, generate_expression(builder, condition));
+            Bytecode* goto_if_false = Op(OP_GOTO_IF_FALSE, a = condition_location.offset);
+            generate_expression(builder, on_success);
+            if (expr->flags & EXPRESSION_BRANCH_IS_LOOP)
+                Op(OP_GOTO, r = loop_label);
+            goto_if_false->r = Label();
+            if (on_failure != NO_EXPRESSION)
+            {
+                Bytecode* goto_end = NULL;
+                if (!(expr->flags & EXPRESSION_BRANCH_IS_LOOP))
+                    goto_end = Op(OP_GOTO);
+                goto_if_false->r = Label();
+                generate_expression(builder, on_failure);
+                if (expr->flags & EXPRESSION_BRANCH_IS_LOOP)
+                    Op(OP_GOTO, r = loop_label);
+                else
+                    goto_end->r = Label();
+            }
+        }
+
+        return void_location(infer->type);
+    } break;
 
     case EXPRESSION_CALL:
     {
@@ -439,9 +500,9 @@ static void generate_block(Bytecode_Builder* builder, Block* block)
             generate_expression(builder, *it);
 
     if (block == unit->entry_block)
-        Op(OP_FINISH_UNIT)
+        Op(OP_FINISH_UNIT);
     else
-        Op(OP_GOTO_INDIRECT, r = block->return_address_offset)
+        Op(OP_GOTO_INDIRECT, r = block->return_address_offset);
 
     For (block->inferred_expressions)
         if (it->called_block)

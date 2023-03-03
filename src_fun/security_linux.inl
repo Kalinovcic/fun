@@ -158,6 +158,7 @@ void enter_lockdown(User* user)
 
     user->previous_sigsegv_handler = ::signal(SIGSEGV, sigsegv_handler);
 
+#if 0
     // Freeze non-user memory
     int buffer_size = 0;
     u8  buffer[4096];
@@ -209,6 +210,7 @@ void enter_lockdown(User* user)
         goto parse_line;
     }
     done:;
+#endif
 }
 
 void exit_lockdown(User* user)

@@ -3,6 +3,66 @@
 // debug a + b;
 
 
+
+Compiler_Unit :: struct
+{
+    storage_alignment: u64;
+    storage_size:      u64;
+}
+
+
+Compiler_Context :: struct {}  // opaque
+
+COMPILER_EVENT_CONTEXT_FINISHED:        u32 = cast(u32, 1);
+COMPILER_EVENT_UNIT_PARSED:             u32 = cast(u32, 2);
+COMPILER_EVENT_UNIT_REQUIRES_PLACEMENT: u32 = cast(u32, 3);
+COMPILER_EVENT_UNIT_PLACED:             u32 = cast(u32, 4);
+
+Compiler_Event :: struct
+{
+    kind: u32;
+    placed_unit: &Compiler_Unit;
+}
+
+compiler_make_context :: (otu_ctx: &&Compiler_Context)                    {} intrinsic "compiler_make_context";
+compiler_add_file     :: (ctx: &Compiler_Context, path: string)           {} intrinsic "compiler_add_file";
+compiler_wait_event   :: (ctx: &Compiler_Context, event: &Compiler_Event) {} intrinsic "compiler_wait_event";
+
+
+compiler_make_context(&ctx: &Compiler_Context);
+compiler_add_file(ctx, "target1.fun");
+
+more_events := cast(bool, true);
+while more_events
+{
+    compiler_wait_event(ctx, &event: Compiler_Event);
+    if event.kind == COMPILER_EVENT_CONTEXT_FINISHED
+    {
+        more_events = cast(bool, false);
+    }
+    else => if event.kind == COMPILER_EVENT_UNIT_PARSED
+    {
+        debug "parsed a unit";
+    }
+    else => if event.kind == COMPILER_EVENT_UNIT_REQUIRES_PLACEMENT
+    {
+        debug "could do custom unit placement right now, but won't";
+    }
+    else => if event.kind == COMPILER_EVENT_UNIT_PLACED
+    {
+        debug "unit placed, size of unit is:";
+        debug event.placed_unit.storage_size;
+    }
+    else
+    {
+        debug "unrecognized event";
+    }
+}
+
+debug "finished compilation!";
+
+
+/*
 print :: (value: $T) {} intrinsic "print";
 heap_allocate :: (out_base: &&$T, size: umm) {} intrinsic "heap_allocate";
 heap_free     :: (base: &$T) {} intrinsic "heap_free";
@@ -13,7 +73,6 @@ print(*heap_pointer);
 *heap_pointer = cast(u32, 123);
 print(*heap_pointer);
 heap_free(heap_pointer);
-
 
 
 /*consume :: (res: &string, str: &string, n: umm)
@@ -65,6 +124,7 @@ blok :: ()
 blok();
 
 print("beyond the blok");
+*/
 
 
 /*junit :: unit

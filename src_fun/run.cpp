@@ -98,6 +98,50 @@ static void run_intrinsic(User* user, Unit* unit, byte* storage, Block* block, S
         get_runtime_parameter("base"_s, &base, NULL);
         user_free(user, *base);
     }
+    else if (intrinsic == "compiler_make_context"_s)
+    {
+    }
+    else if (intrinsic == "compiler_add_file"_s)
+    {
+    }
+    else if (intrinsic == "compiler_wait_event"_s)
+    {
+        enum: u32
+        {
+            COMPILER_EVENT_CONTEXT_FINISHED        = 1,
+            COMPILER_EVENT_UNIT_PARSED             = 2,
+            COMPILER_EVENT_UNIT_REQUIRES_PLACEMENT = 3,
+            COMPILER_EVENT_UNIT_PLACED             = 4,
+        };
+
+        struct Compiler_Event
+        {
+            u32   kind;
+            Unit* placed_unit;
+        };
+
+        Compiler_Event** event_ptr;
+        get_runtime_parameter("event"_s, &event_ptr, NULL);
+        Compiler_Event* event = *event_ptr;
+
+
+        static umm call_count;
+        u32 fake_messages[] = {
+            COMPILER_EVENT_UNIT_PARSED,
+            COMPILER_EVENT_UNIT_PARSED,
+            COMPILER_EVENT_UNIT_REQUIRES_PLACEMENT,
+            COMPILER_EVENT_UNIT_PLACED,
+            COMPILER_EVENT_UNIT_REQUIRES_PLACEMENT,
+            COMPILER_EVENT_UNIT_PLACED,
+            COMPILER_EVENT_CONTEXT_FINISHED,
+        };
+
+        static Unit fake_unit;
+        fake_unit.storage_size = (call_count == 3 ? 8 * 31 : 8 * 14);
+
+        event->kind = fake_messages[call_count++];
+        event->placed_unit = &fake_unit;
+    }
     else
     {
         fprintf(stderr, "User is attempting to run an unknown intrinsic '%.*s'\nAborting...\n", StringArgs(intrinsic));

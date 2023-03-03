@@ -59,6 +59,7 @@ static void lex_init(Compiler* ctx)
     AddKeyword(ATOM_DEBUG_FREE,   "debug_free"_s);
     AddKeyword(ATOM_IF,           "if"_s);
     AddKeyword(ATOM_ELSE,         "else"_s);
+    AddKeyword(ATOM_ELIF,         "elif"_s);
     AddKeyword(ATOM_WHILE,        "while"_s);
     AddKeyword(ATOM_DO,           "do"_s);
     AddKeyword(ATOM_RUN,          "run"_s);

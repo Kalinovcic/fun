@@ -754,7 +754,7 @@ static bool parse_expression(Token_Stream* stream, Block_Builder* builder, Expre
         else if (maybe_take_atom(stream, ATOM_PERCENT_SLASH))   op = EXPRESSION_DIVIDE_FRACTIONAL;
         else if (maybe_take_atom(stream, ATOM_AMPERSAND_PLUS))  op = EXPRESSION_POINTER_ADD;
         else if (maybe_take_atom(stream, ATOM_AMPERSAND_MINUS)) op = EXPRESSION_POINTER_SUBTRACT;
-        else if (maybe_take_atom(stream, ATOM_EQUAL))           op = EXPRESSION_EQUAL;
+        else if (maybe_take_atom(stream, ATOM_EQUAL_EQUAL))     op = EXPRESSION_EQUAL;
         else if (maybe_take_atom(stream, ATOM_BANG_EQUAL))      op = EXPRESSION_NOT_EQUAL;
         else if (maybe_take_atom(stream, ATOM_GREATER))         op = EXPRESSION_GREATER_THAN;
         else if (maybe_take_atom(stream, ATOM_GREATER_EQUAL))   op = EXPRESSION_GREATER_OR_EQUAL;

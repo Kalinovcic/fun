@@ -20,20 +20,21 @@ struct Fraction
     Integer den;
 };
 
-Fraction fract_make_u64  (u64 integer);
-Fraction fract_make      (Integer const* num, Integer const* den);
-void     fract_free      (Fraction* f);
-Fraction fract_clone     (Fraction const* from);
-void     fract_reduce    (Fraction* f);
-bool     fract_is_zero   (Fraction const* f);
-bool     fract_is_integer(Fraction const* f);
-Fraction fract_neg       (Fraction const* a);
-Fraction fract_add       (Fraction const* a, Fraction const* b);
-Fraction fract_sub       (Fraction const* a, Fraction const* b);
-Fraction fract_mul       (Fraction const* a, Fraction const* b);
-bool     fract_div_fract (Fraction* out, Fraction const* a, Fraction const* b);
-bool     fract_div_whole (Fraction* out, Fraction const* a, Fraction const* b);
-String   fract_display   (Fraction const* f, Region* memory = temp);
+Fraction fract_make_u64   (u64 integer);
+Fraction fract_make       (Integer const* num, Integer const* den);
+void     fract_free       (Fraction* f);
+Fraction fract_clone      (Fraction const* from);
+void     fract_reduce     (Fraction* f);
+bool     fract_is_zero    (Fraction const* f);
+bool     fract_is_negative(Fraction const* f);
+bool     fract_is_integer (Fraction const* f);
+Fraction fract_neg        (Fraction const* a);
+Fraction fract_add        (Fraction const* a, Fraction const* b);
+Fraction fract_sub        (Fraction const* a, Fraction const* b);
+Fraction fract_mul        (Fraction const* a, Fraction const* b);
+bool     fract_div_fract  (Fraction* out, Fraction const* a, Fraction const* b);
+bool     fract_div_whole  (Fraction* out, Fraction const* a, Fraction const* b);
+String   fract_display    (Fraction const* f, Region* memory = temp);
 
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -90,6 +91,7 @@ enum Atom: u32
     ATOM_DEBUG_FREE,            // debug_free
     ATOM_IF,                    // if
     ATOM_ELSE,                  // else
+    ATOM_ELIF,                  // elif
     ATOM_WHILE,                 // while
     ATOM_DO,                    // do
     ATOM_RUN,                   // run
@@ -530,6 +532,9 @@ enum: flags32
 
 struct Unit
 {
+    u64    storage_alignment;
+    u64    storage_size;
+
     Region memory;
     Compiler* ctx;
     flags32 flags;
@@ -550,8 +555,6 @@ struct Unit
 
     umm    blocks_not_completed;
     umm    blocks_not_ready_for_placement;
-    u64    storage_alignment;
-    u64    storage_size;
 
     bool   compiled_bytecode;
     Array<struct Bytecode const> bytecode;

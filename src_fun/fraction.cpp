@@ -103,6 +103,7 @@ static void quick_asserts(Fraction const* f)
 {
     assert(!f->den.negative);
     assert(!int_is_zero(&f->den));
+    assert(!int_is_zero(&f->num) || !f->num.negative);
 }
 
 Fraction fract_make_u64(u64 integer)
@@ -161,6 +162,12 @@ bool fract_is_zero(Fraction const* f)
 {
     quick_asserts(f);
     return int_is_zero(&f->num);
+}
+
+bool fract_is_negative(Fraction const* f)
+{
+    quick_asserts(f);
+    return f->num.negative;
 }
 
 bool fract_is_integer(Fraction const* f)

@@ -1102,12 +1102,84 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
         NotImplemented;
     } break;
 
-    case EXPRESSION_EQUAL:            NotImplemented;
-    case EXPRESSION_NOT_EQUAL:        NotImplemented;
-    case EXPRESSION_GREATER_THAN:     NotImplemented;
-    case EXPRESSION_GREATER_OR_EQUAL: NotImplemented;
-    case EXPRESSION_LESS_THAN:        NotImplemented;
-    case EXPRESSION_LESS_OR_EQUAL:    NotImplemented;
+    case EXPRESSION_EQUAL:
+    case EXPRESSION_NOT_EQUAL:
+    case EXPRESSION_GREATER_THAN:
+    case EXPRESSION_GREATER_OR_EQUAL:
+    case EXPRESSION_LESS_THAN:
+    case EXPRESSION_LESS_OR_EQUAL:
+    {
+        Type lhs_type = block->inferred_expressions[expr->binary.lhs].type;
+        Type rhs_type = block->inferred_expressions[expr->binary.rhs].type;
+        if (lhs_type == INVALID_TYPE) WaitOperand(expr->binary.lhs);
+        if (rhs_type == INVALID_TYPE) WaitOperand(expr->binary.rhs);
+        if (lhs_type != rhs_type)
+            Error("Types don't match.\n"
+                  "    lhs: %\n"
+                  "    rhs: %",
+                  exact_type_description(unit, lhs_type),
+                  exact_type_description(unit, rhs_type));
+
+        String op_token = "???"_s;
+             if (expr->kind == EXPRESSION_EQUAL)            op_token = "=="_s;
+        else if (expr->kind == EXPRESSION_NOT_EQUAL)        op_token = "!="_s;
+        else if (expr->kind == EXPRESSION_GREATER_THAN)     op_token = ">"_s;
+        else if (expr->kind == EXPRESSION_GREATER_OR_EQUAL) op_token = ">="_s;
+        else if (expr->kind == EXPRESSION_LESS_THAN)        op_token = "<"_s;
+        else if (expr->kind == EXPRESSION_LESS_OR_EQUAL)    op_token = "<="_s;
+        else Unreachable;
+
+        if (!is_numeric_type(lhs_type) && !is_bool_type(lhs_type) && !is_pointer_type(lhs_type))
+            Error("Operands to '%' must be numeric, bool, or pointers, but they are %.\n",
+                  op_token,
+                  vague_type_description(unit, lhs_type));
+
+        if (is_soft_type(lhs_type))
+        {
+            InferType(TYPE_SOFT_BOOL);
+
+            bool zero     = false;
+            bool negative = false;
+            if (lhs_type == TYPE_SOFT_NUMBER)
+            {
+                Fraction const* lhs_fract = get_constant_number(block, expr->binary.lhs);
+                Fraction const* rhs_fract = get_constant_number(block, expr->binary.rhs);
+                if (!lhs_fract) WaitOperand(expr->binary.lhs);
+                if (!rhs_fract) WaitOperand(expr->binary.rhs);
+                Fraction d = fract_sub(lhs_fract, rhs_fract);
+                zero     = fract_is_zero    (&d);
+                negative = fract_is_negative(&d);
+                fract_free(&d);
+            }
+            else if (lhs_type == TYPE_SOFT_BOOL)
+            {
+                bool const* lhs_fract = get_constant_bool(block, expr->binary.lhs);
+                bool const* rhs_fract = get_constant_bool(block, expr->binary.rhs);
+                if (!lhs_fract) WaitOperand(expr->binary.lhs);
+                if (!rhs_fract) WaitOperand(expr->binary.rhs);
+                int d = (*lhs_fract ? 1 : 0) - (*rhs_fract ? 1 : 0);
+                zero     = (d == 0);
+                negative = (d <  0);
+            }
+            else Unreachable;
+
+            bool result = false;
+                 if (expr->kind == EXPRESSION_EQUAL)            result =  zero;
+            else if (expr->kind == EXPRESSION_NOT_EQUAL)        result = !zero;
+            else if (expr->kind == EXPRESSION_GREATER_THAN)     result = !zero && !negative;
+            else if (expr->kind == EXPRESSION_GREATER_OR_EQUAL) result = !negative;
+            else if (expr->kind == EXPRESSION_LESS_THAN)        result =  negative;
+            else if (expr->kind == EXPRESSION_LESS_OR_EQUAL)    result =  zero || negative;
+            else Unreachable;
+            set_constant_bool(block, id, result);
+            InferenceComplete();
+        }
+        else
+        {
+            InferType(TYPE_BOOL);
+            InferenceComplete();
+        }
+    } break;
 
     case EXPRESSION_CAST:
     {
@@ -1146,6 +1218,11 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
                     return YIELD_ERROR;
             }
         }
+        else if (is_bool_type(cast_type))
+        {
+            if (!is_bool_type(rhs_infer->type))  // @Incomplete
+                Error("Expected a bool value as the second operand to 'cast', but got %.", vague_type_description(unit, rhs_infer->type));
+        }
         else
         {
             Error("Type '%' can't be cast to.", exact_type_description(unit, cast_type));
@@ -1183,20 +1260,14 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
             if (expr->flags & EXPRESSION_BRANCH_IS_BAKED)
             {
                 bool baked_condition;
-                if (type == TYPE_SOFT_NUMBER)
-                {
-                    Fraction const* value = get_constant_number(block, condition);
-                    if (!value) WaitOperand(condition);
-                    baked_condition = !fract_is_zero(value);
-                }
-                else if (type == TYPE_SOFT_BOOL)
+                if (type == TYPE_SOFT_BOOL)
                 {
                     bool const* value = get_constant_bool(block, condition);
                     if (!value) WaitOperand(condition);
                     baked_condition = *value;
                 }
                 else
-                    Error("Expected a compile-time integer or boolean value as the condition, but got %.", vague_type_description_in_compile_time_context(unit, type));
+                    Error("Expected a compile-time boolean value as the condition, but got %.", vague_type_description_in_compile_time_context(unit, type));
 
                 if (baked_condition)
                 {
@@ -1208,11 +1279,12 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
                     if (on_success != NO_EXPRESSION) block->inferred_expressions[on_success].flags |= INFERRED_EXPRESSION_CONDITION_DISABLED;
                     if (on_failure != NO_EXPRESSION) block->inferred_expressions[on_failure].flags |= INFERRED_EXPRESSION_CONDITION_ENABLED;
                 }
+                override_made_progress = true;  // we made progress by enabling/disabling expressions
             }
             else
             {
                 if (!is_integer_type(type) && !is_bool_type(type))
-                    Error("Expected an integer or boolean value as the condition, but got %.", vague_type_description(unit, type));
+                    Error("Expected a boolean value as the condition, but got %.", vague_type_description(unit, type));
                 if (is_soft_type(type))
                     Error("@Incomplete - condition may not be a compile-time value");
             }
@@ -1849,6 +1921,12 @@ bool pump_pipeline(Compiler* ctx)
                     {
                         report.continuation();
                         report.message("This alias is waiting to be inferred."_s);
+                        report.snippet(expr, /* skinny */ true);
+                    }
+                    else if (it->value.why == WAITING_ON_CONDITION_INFERENCE)
+                    {
+                        report.continuation();
+                        report.message("This block is waiting for the baked condition to be inferred."_s);
                         report.snippet(expr, /* skinny */ true);
                     }
                     else Unreachable;
