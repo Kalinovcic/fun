@@ -1013,7 +1013,7 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
         if (rhs_type == INVALID_TYPE) WaitOperand(expr->binary.rhs);
         if (is_soft_type(lhs_type))
             Error("Can't assign to a constant expression.");
-        if (lhs_type != rhs_type)
+        if (lhs_type != rhs_type && rhs_type != TYPE_SOFT_ZERO)
             Error("Types don't match.\n"
                   "    lhs: %\n"
                   "    rhs: %",
@@ -1207,7 +1207,7 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
         }
         else if (is_numeric_type(cast_type))
         {
-            if (!is_numeric_type(rhs_infer->type))  // @Incomplete
+            if (!is_numeric_type(rhs_infer->type) && !is_pointer_type(rhs_infer->type))  // @Incomplete
                 Error("Expected a numeric value as the second operand to 'cast', but got %.", vague_type_description(unit, rhs_infer->type));
 
             if (rhs_infer->type == TYPE_SOFT_NUMBER)
@@ -1535,7 +1535,7 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
             }
             else
             {
-                if (param_type != arg_type)
+                if (param_type != arg_type && arg_type != TYPE_SOFT_ZERO)
                     Error("Argument #% ('%') doesn't match the parameter type.\n"
                           "    expected: %\n"
                           "    received: %",

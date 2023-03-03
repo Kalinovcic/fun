@@ -579,6 +579,7 @@ enum Bytecode_Operation: u32
     INVALID_OP,
 
     OP_ZERO,                    // r =  destination                s = size
+    OP_ZERO_INDIRECT,           // r = &destination                s = size
     OP_LITERAL,                 // r =  destination  a =  content  s = size
     OP_COPY,                    // r =  destination  a =  source   s = size
     OP_COPY_FROM_INDIRECT,      // r =  destination  a = &source   s = size

@@ -42,61 +42,23 @@ static void run_intrinsic(User* user, Unit* unit, byte* storage, Block* block, S
         exit(1);
     };
 
-    if (intrinsic == "print"_s)
+    if (intrinsic == "syscall"_s)
     {
         Scope_Region_Cursor temp_scope(temp);
 
-        byte* value;
-        Type type;
-        get_runtime_parameter("value"_s, &value, &type);
+        umm **result, *rax, *rdi, *rsi, *rdx, *r10, *r8, *r9;
+        get_runtime_parameter("result"_s, &result, NULL, set_indirection(TYPE_UMM, 1));
+        get_runtime_parameter("rax"_s,    &rax,    NULL, TYPE_UMM);
+        get_runtime_parameter("rdi"_s,    &rdi,    NULL, TYPE_UMM);
+        get_runtime_parameter("rsi"_s,    &rsi,    NULL, TYPE_UMM);
+        get_runtime_parameter("rdx"_s,    &rdx,    NULL, TYPE_UMM);
+        get_runtime_parameter("r10"_s,    &r10,    NULL, TYPE_UMM);
+        get_runtime_parameter("r8"_s,     &r8,     NULL, TYPE_UMM);
+        get_runtime_parameter("r9"_s,     &r9,     NULL, TYPE_UMM);
 
-        String text = {};
-        switch (type)
-        {
-        case TYPE_F16:    NotImplemented;
-        case TYPE_VOID:   text = "void"_s;                                 break;
-        case TYPE_U8:     text = Format(temp, "%",      *(u8*    ) value); break;
-        case TYPE_U16:    text = Format(temp, "%",      *(u16*   ) value); break;
-        case TYPE_U32:    text = Format(temp, "%",      *(u32*   ) value); break;
-        case TYPE_U64:    text = Format(temp, "%",      *(u64*   ) value); break;
-        case TYPE_UMM:    text = Format(temp, "%",      *(umm*   ) value); break;
-        case TYPE_S8:     text = Format(temp, "%",      *(s8*    ) value); break;
-        case TYPE_S16:    text = Format(temp, "%",      *(s16*   ) value); break;
-        case TYPE_S32:    text = Format(temp, "%",      *(s32*   ) value); break;
-        case TYPE_S64:    text = Format(temp, "%",      *(s64*   ) value); break;
-        case TYPE_SMM:    text = Format(temp, "%",      *(smm*   ) value); break;
-        case TYPE_F32:    text = Format(temp, "%",      *(f32*   ) value); break;
-        case TYPE_F64:    text = Format(temp, "%",      *(f64*   ) value); break;
-        case TYPE_BOOL:   text = Format(temp, "%",      *(bool*  ) value); break;
-        case TYPE_TYPE:   text = Format(temp, "type %", *(Type*  ) value); break;
-        case TYPE_STRING: text =                        *(String*) value;  break;
-        default:
-            if (is_pointer_type(type))
-            {
-                text = Format(temp, "%", *(void**) value);
-            }
-            else
-            {
-                assert(is_user_defined_type(type));
-                text = "user defined type"_s;
-            }
-            break;
-        }
-        printf("%.*s\n", StringArgs(text));
-    }
-    else if (intrinsic == "heap_allocate"_s)
-    {
-        umm* size;
-        byte*** out_base;
-        get_runtime_parameter("size"_s,     &size,     NULL, TYPE_UMM);
-        get_runtime_parameter("out_base"_s, &out_base, NULL);
-        **out_base = user_alloc(user, *size, 16);
-    }
-    else if (intrinsic == "heap_free"_s)
-    {
-        byte** base;
-        get_runtime_parameter("base"_s, &base, NULL);
-        user_free(user, *base);
+        umm result_value = syscall(*rax, *rdi, *rsi, *rdx, *r10, *r8, *r9);
+        if (*result)
+            **result = result_value;
     }
     else if (intrinsic == "compiler_make_context"_s)
     {
@@ -168,6 +130,7 @@ run:
     switch (bc->op)
     {
     case OP_ZERO:                  opname = "OP_ZERO"_s;                  break;
+    case OP_ZERO_INDIRECT:         opname = "OP_ZERO_INDIRECT"_s;         break;
     case OP_LITERAL:               opname = "OP_LITERAL"_s;               break;
     case OP_COPY:                  opname = "OP_COPY"_s;                  break;
     case OP_COPY_FROM_INDIRECT:    opname = "OP_COPY_FROM_INDIRECT"_s;    break;
@@ -214,6 +177,7 @@ run:
     IllegalDefaultCase;
 
     case OP_ZERO:                   memset(storage + r, 0, s);              break;
+    case OP_ZERO_INDIRECT:          memset(M(void*, r), 0, s);              break;
     case OP_LITERAL:                memcpy(storage + r, &a, s);             break;
     case OP_COPY:                   memcpy(storage + r, storage + a, s);    break;
     case OP_COPY_FROM_INDIRECT:     memcpy(storage + r, M(void*, a), s);    break;

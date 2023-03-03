@@ -76,6 +76,18 @@ add_file     :: (ctx: &Context, path: string)                             {} int
 wait_event   :: (ctx: &Context, event: &Event)                            {} intrinsic "compiler_wait_event";
 place_unit   :: (ctx: &Context, placed: &Unit, size: u64, alignment: u64) {} intrinsic "compiler_place_unit";
 
+syscall :: (result: &umm, rax: umm, rdi: umm, rsi: umm, rdx: umm, r10: umm, r8: umm, r9: umm) {} intrinsic "syscall";
+
+puts :: (what: string)
+{
+    SYS_WRITE := cast(umm, 1);
+
+    fd := cast(umm, 1);  // stdout
+    syscall(zero, SYS_WRITE, fd, cast(umm, what.base), what.length, zero, zero, zero);
+}
+
+puts("ello m8\n");
+
 
 make_context(&ctx: &Context);
 add_file(ctx, "target1.fun");
@@ -110,18 +122,6 @@ while more_events
 debug "finished compilation!";
 
 
-/*
-print :: (value: $T) {} intrinsic "print";
-heap_allocate :: (out_base: &&$T, size: umm) {} intrinsic "heap_allocate";
-heap_free     :: (base: &$T) {} intrinsic "heap_free";
-
-heap_allocate(&heap_pointer: &u32, cast(umm, sizeof u32));
-print(heap_pointer);
-print(*heap_pointer);
-*heap_pointer = cast(u32, 123);
-print(*heap_pointer);
-heap_free(heap_pointer);
-
 
 /*consume :: (res: &string, str: &string, n: umm)
 {
@@ -140,42 +140,42 @@ foo :: unit
 {
     x: string = _;
     y: string = _;
-    print(x);
-    print(y);
+    debug x;
+    debug y;
 }
 
 poo := "asdf";
-print(poo);
+debug poo;
 
 ptr1 := &poo;
 ptr2 := &ptr1;
 
 **ptr2 = "no longer asdf";
-print(poo);
+debug poo;
 
-print(cast(u64, 12345678910));
-print(cast(u8, cast(u64, 12345678910)));
+debug cast(u64, 12345678910);
+debug cast(u8, cast(u64, 12345678910));
 
 
 f: foo;
 (*&f).x = "foo";
 (*&f).y = "foofoo";
 goto(codeof f, &f);
-print("back");
+debug "back";
 
 
 blok :: ()
 {
-    print("eyo");
+    debug "eyo";
 }
 
 blok();
 
-print("beyond the blok");
-*/
+debug "beyond the blok";
 
 
-/*junit :: unit
+
+junit :: unit
 {
     debug "ello";
 }
@@ -198,10 +198,10 @@ $if false
 else
 {
     debug "yay";
-}*/
+}
 
 
-/*
+
 U :: unit
 {
     x: u64 = cast(u64, 420);
@@ -273,12 +273,12 @@ debug p1.SIZE;
 
 
 
-poo := debug_alloc u32;
-debug poo;
-*poo = cast(u32, 123);
-debug *poo;
-debug &poo;
-debug_free poo;
+/*poof := debug_alloc u32;
+debug poof;
+*poof = cast(u32, 123);
+debug *poof;
+debug &poof;
+debug_free poof;*/
 
 if cast(u64, 1)
 {
@@ -330,18 +330,18 @@ else
 N :: 10;
 M :: 420e100;
 
-foo :: () => debug M;
+foo2 :: () => debug M;
 
 repeat :: ($N: u32, $a: block)
 {
-    foo();
+    foo2();
     n := cast(u8, N);
     while n
     {
         a();
         n = n - cast(u8, 1);
     }
-    foo();
+    foo2();
 }
 
 repeat(N)
@@ -376,7 +376,7 @@ debug var2;
 
 *ptr = *ptr + cast(u32, 1);
 debug var;
-*/
+
 
 /*proc1  :: (x: u32) { debug x; }
 proc2  :: (x: u32) { proc1 (x * cast(u32, 2) + cast(u32, 0)); proc1 (x * cast(u32, 2) + cast(u32, 1)); }

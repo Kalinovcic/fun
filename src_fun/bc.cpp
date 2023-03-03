@@ -86,6 +86,11 @@ static Location allocate_location(Bytecode_Builder* builder, Type type)
     return Location(offset, type, false);
 }
 
+static void zero(Bytecode_Builder* builder, Location what)
+{
+    Op(what.indirect ? OP_ZERO_INDIRECT : OP_ZERO, r = what.offset, s = get_type_size(builder->unit, what.type));
+}
+
 static void copy(Bytecode_Builder* builder, Location to, Location from)
 {
     Unit* unit = builder->unit;
@@ -138,6 +143,34 @@ static Type simplify_type(Unit* unit, Type type)
     assert(!is_soft_type(type));
     assert(type != TYPE_VOID);
     assert(is_primitive_type(type));
+    return type;
+}
+
+static Type simplify_type_sf(Unit* unit, Type type)
+{
+    type = simplify_type(unit, type);
+    switch (type)
+    {
+    case TYPE_U8:  type = TYPE_S8;  break;
+    case TYPE_U16: type = TYPE_S16; break;
+    case TYPE_U32: type = TYPE_S32; break;
+    case TYPE_U64: type = TYPE_S64; break;
+    }
+    assert(!is_unsigned_integer_type(type));
+    return type;
+}
+
+static Type simplify_type_uf(Unit* unit, Type type)
+{
+    type = simplify_type(unit, type);
+    switch (type)
+    {
+    case TYPE_S8:  type = TYPE_U8;  break;
+    case TYPE_S16: type = TYPE_U16; break;
+    case TYPE_S32: type = TYPE_U32; break;
+    case TYPE_S64: type = TYPE_U64; break;
+    }
+    assert(!is_signed_integer_type(type));
     return type;
 }
 
@@ -219,7 +252,13 @@ static Location generate_expression(Bytecode_Builder* builder, Expression id)
         }
     } break;
 
-    case EXPRESSION_NEGATE:             NotImplemented;
+    case EXPRESSION_NEGATE:
+    {
+        Location operand = direct(builder, generate_expression(builder, expr->unary_operand));
+        Location result = allocate_location(builder, infer->type);
+        Op(OP_NEGATE, r = result.offset, a = operand.offset, s = simplify_type_sf(unit, operand.type));
+        return result;
+    } break;
 
     case EXPRESSION_ADDRESS:
     {
@@ -299,14 +338,32 @@ static Location generate_expression(Bytecode_Builder* builder, Expression id)
     case EXPRESSION_ASSIGNMENT:
     {
         Location lhs = generate_expression(builder, expr->binary.lhs);
-        Location rhs = generate_expression(builder, expr->binary.rhs);
-        copy(builder, lhs, rhs);
-        return rhs;
+        if (block->inferred_expressions[expr->binary.rhs].type == TYPE_SOFT_ZERO)
+        {
+            zero(builder, lhs);
+        }
+        else
+        {
+            Location rhs = generate_expression(builder, expr->binary.rhs);
+            copy(builder, lhs, rhs);
+        }
+        return lhs;
     } break;
 
-    case EXPRESSION_ADD:                NotImplemented;
-    case EXPRESSION_SUBTRACT:           NotImplemented;
-    case EXPRESSION_MULTIPLY:           NotImplemented;
+    Bytecode_Operation binary_uf_op;
+    case EXPRESSION_ADD:                binary_uf_op = OP_ADD;      goto emit_binary_uf;
+    case EXPRESSION_SUBTRACT:           binary_uf_op = OP_SUBTRACT; goto emit_binary_uf;
+    case EXPRESSION_MULTIPLY:           binary_uf_op = OP_MULTIPLY; goto emit_binary_uf;
+    emit_binary_uf:
+    {
+        Location lhs = direct(builder, generate_expression(builder, expr->binary.lhs));
+        Location rhs = direct(builder, generate_expression(builder, expr->binary.rhs));
+        assert(lhs.type == rhs.type);
+        Location result = allocate_location(builder, infer->type);
+        Op(binary_uf_op, r = result.offset, a = lhs.offset, b = rhs.offset, s = simplify_type_uf(unit, lhs.type));
+        return result;
+    } break;
+
     case EXPRESSION_DIVIDE_WHOLE:       NotImplemented;
     case EXPRESSION_DIVIDE_FRACTIONAL:  NotImplemented;
     case EXPRESSION_POINTER_ADD:        NotImplemented;
@@ -443,8 +500,16 @@ static Location generate_expression(Bytecode_Builder* builder, Expression id)
             Location parameter(param_offset, callee->inferred_expressions[*it].type, false);
 
             assert(parameter_index < args->count);
-            Location argument = generate_expression(builder, args->expressions[parameter_index]);
-            copy(builder, parameter, argument);
+            Expression arg_id = args->expressions[parameter_index];
+            if (block->inferred_expressions[arg_id].type == TYPE_SOFT_ZERO)
+            {
+                zero(builder, parameter);
+            }
+            else
+            {
+                Location argument = generate_expression(builder, arg_id);
+                copy(builder, parameter, argument);
+            }
         }
 
         Op(OP_CALL, r = (umm) callee);  // :CallPlaceholder
@@ -468,9 +533,7 @@ static Location generate_expression(Bytecode_Builder* builder, Expression id)
         if (expr->declaration.value == NO_EXPRESSION)
         {
             if (!(expr->flags & EXPRESSION_DECLARATION_IS_UNINITIALIZED))
-            {
-                Op(OP_ZERO, r = offset, s = get_type_size(unit, infer->type));
-            }
+                zero(builder, location);
         }
         else
         {
