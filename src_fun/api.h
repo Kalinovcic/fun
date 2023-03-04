@@ -557,9 +557,6 @@ struct Unit
 
     Block*  entry_block;
 
-    umm     pointer_size;
-    umm     pointer_alignment;
-
     u64     storage_size;
     u64     storage_alignment;
 
@@ -697,6 +694,10 @@ struct Environment
 {
     struct Compiler* ctx;
     struct User* user;
+
+    bool silence_errors;
+    u64  pointer_size;
+    u64  pointer_alignment;
 
     Dynamic_Array<User_Type>    user_types;
     Table(u64, Unit*, hash_u64) top_level_units;

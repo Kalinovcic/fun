@@ -15,8 +15,8 @@ static bool run_intrinsic(User* user, Unit* unit, byte* storage, Block* block, S
     Environment* env = unit->env;
     Compiler*    ctx = env->ctx;
 
-    assert(unit->pointer_size      == sizeof (void*));
-    assert(unit->pointer_alignment == alignof(void*));
+    assert(env->pointer_size      == sizeof (void*));
+    assert(env->pointer_alignment == alignof(void*));
 
     auto get_runtime_parameter = [&](String name, auto** out_address, Type assertion = INVALID_TYPE, Type* out_type = NULL)
     {
@@ -113,14 +113,25 @@ static bool run_intrinsic(User* user, Unit* unit, byte* storage, Block* block, S
     {
         struct Environment_Settings
         {
+            bool silence_errors;
             bool custom_backend;
+            u64  pointer_size;
+            u64  pointer_alignment;
         };
 
         Environment_Settings* settings; get_runtime_parameter("settings"_s, &settings);
         Environment***        out_env;  get_runtime_parameter("out_env"_s,  &out_env);
 
         Environment* child_env = make_environment(ctx, env);
+        child_env->silence_errors               = settings->silence_errors;
         child_env->puppeteer_has_custom_backend = settings->custom_backend;
+        if (settings->custom_backend)
+        {
+            child_env->pointer_size      = settings->pointer_size;
+            child_env->pointer_alignment = settings->pointer_alignment;
+            if (!child_env->pointer_alignment)
+                child_env->pointer_alignment = 1;
+        }
         **out_env = child_env;
     }
     else if (intrinsic == "compiler_yield"_s)
@@ -162,6 +173,7 @@ static bool run_intrinsic(User* user, Unit* unit, byte* storage, Block* block, S
             EVENT_UNIT_WAS_PLACED         = 2,
             EVENT_UNIT_WAS_PATCHED        = 3,
             EVENT_UNIT_WAS_RUN            = 4,
+            EVENT_ERROR                   = 5,
 
             EVENT_ACTIONABLE_BASE         = 1000,
             EVENT_UNIT_REQUIRES_PLACEMENT = EVENT_ACTIONABLE_BASE + EVENT_UNIT_WAS_PLACED,
@@ -171,9 +183,10 @@ static bool run_intrinsic(User* user, Unit* unit, byte* storage, Block* block, S
 
         struct Compiler_Event
         {
-            u32   kind;
-            bool  actionable;
-            Unit* unit;
+            u32    kind;
+            bool   actionable;
+            Unit*  unit;
+            String error;
         };
 
         Environment** child_env_ptr;

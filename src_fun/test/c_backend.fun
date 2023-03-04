@@ -9,7 +9,9 @@ run
     puts("hello from userland\n");
 
     settings: Environment_Settings;
-    settings.custom_backend = cast(bool, false);
+    settings.custom_backend    = cast(bool, false);
+    settings.pointer_size      = cast(u64, 8);
+    settings.pointer_alignment = cast(u64, 8);
 
     make_environment(&env: &Environment, settings);
     add_file(env, "src_fun/test/target1.fun");
@@ -48,6 +50,10 @@ run
         else => if event.kind == cast(u32, EVENT_UNIT_WAS_RUN)
         {
             debug "a unit was run, cool";
+        }
+        else => if event.kind == cast(u32, EVENT_ERROR)
+        {
+            debug "an error occured!";
         }
         else
         {

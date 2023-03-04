@@ -369,7 +369,7 @@ static void helpful_error_for_missing_name(Compiler* ctx, String base_error, Tok
 u64 get_type_size(Unit* unit, Type type)
 {
     if (get_indirection(type))
-        return unit->pointer_size;
+        return unit->env->pointer_size;
 
     if (is_user_defined_type(type))
     {
@@ -387,12 +387,12 @@ u64 get_type_size(Unit* unit, Type type)
     case TYPE_U16:         return 2;
     case TYPE_U32:         return 4;
     case TYPE_U64:         return 8;
-    case TYPE_UMM:         return unit->pointer_size;
+    case TYPE_UMM:         return unit->env->pointer_size;
     case TYPE_S8:          return 1;
     case TYPE_S16:         return 2;
     case TYPE_S32:         return 4;
     case TYPE_S64:         return 8;
-    case TYPE_SMM:         return unit->pointer_size;
+    case TYPE_SMM:         return unit->env->pointer_size;
     case TYPE_F16:         return 2;
     case TYPE_F32:         return 4;
     case TYPE_F64:         return 8;
@@ -408,7 +408,7 @@ u64 get_type_size(Unit* unit, Type type)
 u64 get_type_alignment(Unit* unit, Type type)
 {
     if (get_indirection(type))
-        return unit->pointer_alignment;
+        return unit->env->pointer_alignment;
 
     if (is_user_defined_type(type))
     {
@@ -1908,9 +1908,6 @@ Unit* materialize_unit(Environment* env, Block* initiator, Block* materialized_p
     unit->initiator_from = initiator->from;
     unit->initiator_to   = initiator->to;
 
-    unit->pointer_size      = sizeof (void*);
-    unit->pointer_alignment = alignof(void*);
-
     unit->type_id = create_user_type(unit);
 
     unit->entry_block = materialize_block(unit, initiator, materialized_parent, NO_VISIBILITY);
@@ -1961,6 +1958,11 @@ Environment* make_environment(Compiler* ctx, Environment* puppeteer)
     Environment* env = alloc<Environment>(&ctx->pipeline_memory);
     env->ctx = ctx;
     env->user = create_user();
+
+    env->silence_errors    = false;
+    env->pointer_size      = sizeof(void*);
+    env->pointer_alignment = alignof(void*);
+
     env->puppeteer = puppeteer;
 
     add_item(&ctx->environments, &env);

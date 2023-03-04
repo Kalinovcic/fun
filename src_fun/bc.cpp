@@ -120,7 +120,7 @@ static Type simplify_type(Unit* unit, Type type)
         type = TYPE_U32;
     else if (type == TYPE_UMM || is_pointer_type(type))
     {
-        switch (unit->pointer_size)
+        switch (unit->env->pointer_size)
         {
         case 1: type = TYPE_U8;  break;
         case 2: type = TYPE_U16; break;
@@ -131,7 +131,7 @@ static Type simplify_type(Unit* unit, Type type)
     }
     else if (type == TYPE_SMM)
     {
-        switch (unit->pointer_size)
+        switch (unit->env->pointer_size)
         {
         case 1: type = TYPE_S8;  break;
         case 2: type = TYPE_S16; break;
@@ -205,7 +205,7 @@ static Location generate_expression(Bytecode_Builder* builder, Expression id)
         auto* decl_infer = &use.scope->inferred_expressions[use.declaration];
         if (is_pointer_type(lhs.type) || lhs.indirect)
         {
-            Location result(allocate_storage(unit, unit->pointer_size, unit->pointer_alignment), decl_infer->type, true);
+            Location result(allocate_storage(unit, env->pointer_size, env->pointer_alignment), decl_infer->type, true);
 
             // :PatchDeclarationPlaceholder
             *reserve_item(&builder->patches) = { use.scope, use.declaration, Label() };
@@ -218,7 +218,7 @@ static Location generate_expression(Bytecode_Builder* builder, Expression id)
             if (get(&use.scope->declaration_placement, &use.declaration, &offset))
                 return Location(lhs.offset + offset, decl_infer->type, false);
 
-            Location result(allocate_storage(unit, unit->pointer_size, unit->pointer_alignment), decl_infer->type, true);
+            Location result(allocate_storage(unit, env->pointer_size, env->pointer_alignment), decl_infer->type, true);
 
             // :PatchDeclarationPlaceholder
             *reserve_item(&builder->patches) = { use.scope, use.declaration, Label() };
