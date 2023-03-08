@@ -288,23 +288,24 @@ Find_Result find_declaration(Environment* env, Token const* name,
 
 static umm edit_distance(String a, String b)
 {
-    // @Incomplete
-    return a.length + b.length;
+    Scope_Region_Cursor temp_cursor(temp);
+    if (a.length < b.length) swap(&a, &b);
+    Array<umm> prev = allocate_array<umm>(temp, b.length + 1);
+    Array<umm> next = allocate_array<umm>(temp, b.length + 1);
 
-    if (!a) return b.length;
-    if (!b) return a.length;
-
-    if (a[0] == b[0])
-        return edit_distance(consume(a, 1), consume(b, 1));
-
-    umm option1 = edit_distance(consume(a, 1), b);
-    umm option2 = edit_distance(a, consume(b, 1));
-    umm option3 = edit_distance(consume(a, 1), consume(b, 1));
-
-    umm best = option1;
-    if (best > option2) best = option2;
-    if (best > option3) best = option3;
-    return 1 + best;
+    auto min3 = [](umm x, umm y, umm z) { return x < y ? (x < z ? x : z) : (y < z ? y : z); };
+    for (umm j = 0; j <= b.length; j++) prev[j] = j;
+    for (umm i = 1; i <= a.length; i++)
+    {
+        next[0] = i;
+        for (umm j = 1; j <= b.length; j++)
+            if (a[a.length - i] == b[b.length - j])
+                next[j] = prev[j - 1];
+            else
+                next[j] = 1 + min3(next[j - 1], prev[j - 1], prev[j]);
+        swap(&prev, &next);
+    }
+    return prev[b.length];
 }
 
 static void helpful_error_for_missing_name(Compiler* ctx, String base_error, Token const* name,
