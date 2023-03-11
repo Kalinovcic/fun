@@ -646,31 +646,59 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
         else
             is_baked = false;
 
-        Expression expression;
-        if (!parse_expression(stream, builder, &expression, parse_flags))
-            return false;
+        auto parse_condition_and_true_body = [&]() -> Expression
+        {
+            Expression condition;
+            if (!parse_expression(stream, builder, &condition, parse_flags))
+                return NO_EXPRESSION;
 
-        Expression if_true;
-        if (!parse_child_block(stream, builder, &if_true))
-            return false;
-        if (!semicolon_after_statement(stream))
-            return false;
+            Expression if_true;
+            if (!parse_child_block(stream, builder, &if_true))
+                return NO_EXPRESSION;
+            if (!semicolon_after_statement(stream))
+                return NO_EXPRESSION;
 
-        Expression if_false = NO_EXPRESSION;
+            Expression id;
+            Parsed_Expression* expr = add_expression(builder, EXPRESSION_BRANCH, start, stream->cursor - 1, &id);
+            if (is_baked)
+            {
+                expr->flags |= EXPRESSION_BRANCH_IS_BAKED;
+                builder->expressions[if_true].flags |= EXPRESSION_HAS_CONDITIONAL_INFERENCE;
+            }
+            expr->branch.condition  = condition;
+            expr->branch.on_success = if_true;
+            expr->branch.on_failure = NO_EXPRESSION;
+
+            return id;
+        };
+
+        Expression last_branch = parse_condition_and_true_body();
+        if (last_branch == NO_EXPRESSION)
+            return false;
+        *out_expression = last_branch;
+
+        while (maybe_take_atom(stream, ATOM_ELIF))
+        {
+            Expression if_false = parse_condition_and_true_body();
+            if (if_false == NO_EXPRESSION)
+                return false;
+
+            if (is_baked)
+                builder->expressions[if_false].flags |= EXPRESSION_HAS_CONDITIONAL_INFERENCE;
+            builder->expressions[last_branch].branch.on_failure = if_false;
+            last_branch = if_false;
+        }
+
         if (maybe_take_atom(stream, ATOM_ELSE))
+        {
+            Expression if_false = NO_EXPRESSION;
             if (!parse_child_block(stream, builder, &if_false))
                 return false;
 
-        Parsed_Expression* expr = add_expression(builder, EXPRESSION_BRANCH, start, stream->cursor - 1, out_expression);
-        if (is_baked)
-        {
-            expr->flags |= EXPRESSION_BRANCH_IS_BAKED;
-            if (if_true  != NO_EXPRESSION) builder->expressions[if_true ].flags |= EXPRESSION_HAS_CONDITIONAL_INFERENCE;
-            if (if_false != NO_EXPRESSION) builder->expressions[if_false].flags |= EXPRESSION_HAS_CONDITIONAL_INFERENCE;
+            if (is_baked)
+                builder->expressions[if_false].flags |= EXPRESSION_HAS_CONDITIONAL_INFERENCE;
+            builder->expressions[last_branch].branch.on_failure = if_false;
         }
-        expr->branch.condition  = expression;
-        expr->branch.on_success = if_true;
-        expr->branch.on_failure = if_false;
     }
     else if (maybe_take_atom(stream, ATOM_WHILE))
     {

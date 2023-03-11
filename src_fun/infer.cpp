@@ -575,6 +575,25 @@ static bool check_constant_fits_in_runtime_type(Unit* unit, Parsed_Expression co
     return true;
 }
 
+static bool infer_assignment(Unit* unit, Parsed_Expression const* report_expr, Type lhs_type, Type rhs_type)
+{
+    Environment* env = unit->env;
+    Compiler*    ctx = env->ctx;
+#define Error(...) return (report_error(ctx, report_expr, Format(temp, ##__VA_ARGS__)), false)
+
+    if (is_soft_type(lhs_type))
+        Error("Can't assign to a constant expression.");
+    if (lhs_type != rhs_type && rhs_type != TYPE_SOFT_ZERO)
+        Error("Types don't match.\n"
+              "    lhs: %\n"
+              "    rhs: %",
+              exact_type_description(unit, lhs_type),
+              exact_type_description(unit, rhs_type));
+
+#undef Error
+    return true;
+}
+
 static bool pattern_matching_inference(Unit* unit, Block* block, Expression id, Type type,
                                        Parsed_Expression const* inferred_from, Type full_inferred_type)
 {
@@ -1084,14 +1103,8 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
         Type rhs_type = block->inferred_expressions[expr->binary.rhs].type;
         if (lhs_type == INVALID_TYPE) WaitOperand(expr->binary.lhs);
         if (rhs_type == INVALID_TYPE) WaitOperand(expr->binary.rhs);
-        if (is_soft_type(lhs_type))
-            Error("Can't assign to a constant expression.");
-        if (lhs_type != rhs_type && rhs_type != TYPE_SOFT_ZERO)
-            Error("Types don't match.\n"
-                  "    lhs: %\n"
-                  "    rhs: %",
-                  exact_type_description(unit, lhs_type),
-                  exact_type_description(unit, rhs_type));
+        if (!infer_assignment(unit, expr, lhs_type, rhs_type))
+            return YIELD_ERROR;
         InferType(lhs_type);
         InferenceComplete();
     } break;

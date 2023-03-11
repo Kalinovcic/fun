@@ -4,8 +4,7 @@ using Self     :: import "c_backend.fun";
 using System   :: import "system.fun";
 using Compiler :: import "compiler.fun";
 
-run
-{
+run {
     puts("hello from userland\n");
 
     settings: Environment_Settings;
@@ -17,48 +16,32 @@ run
     add_file(env, "src_fun/test/target1.fun");
 
     more_events := cast(bool, true);
-    while more_events
-    {
+    while more_events {
         wait_event(env, &event: Event);
         if event.kind == cast(u32, EVENT_FINISHED)
-        {
-            more_events = cast(bool, false);
-        }
-        else => if event.kind == cast(u32, EVENT_UNIT_REQUIRES_PLACEMENT)
-        {
+         => more_events = cast(bool, false);
+        elif event.kind == cast(u32, EVENT_UNIT_REQUIRES_PLACEMENT) {
             debug "need to place something";
             confirm_place_unit(env, event.unit_ref, zero, zero);
         }
-        else => if event.kind == cast(u32, EVENT_UNIT_WAS_PLACED)
-        {
-            debug "a unit was placed, cool";
-        }
-        else => if event.kind == cast(u32, EVENT_UNIT_REQUIRES_PATCHING)
-        {
+        elif event.kind == cast(u32, EVENT_UNIT_WAS_PLACED)
+         => debug "a unit was placed, cool";
+        elif event.kind == cast(u32, EVENT_UNIT_REQUIRES_PATCHING) {
             debug "need to patch something";
             confirm_patch_unit(env, event.unit_ref);
         }
-        else => if event.kind == cast(u32, EVENT_UNIT_WAS_PATCHED)
-        {
-            debug "a unit was patched, cool";
-        }
-        else => if event.kind == cast(u32, EVENT_UNIT_REQUIRES_RUNNING)
-        {
+        elif event.kind == cast(u32, EVENT_UNIT_WAS_PATCHED)
+         => debug "a unit was patched, cool";
+        elif event.kind == cast(u32, EVENT_UNIT_REQUIRES_RUNNING) {
             debug "need to run something";
             confirm_run_unit(env, event.unit_ref);
         }
-        else => if event.kind == cast(u32, EVENT_UNIT_WAS_RUN)
-        {
-            debug "a unit was run, cool";
-        }
-        else => if event.kind == cast(u32, EVENT_ERROR)
-        {
-            debug "an error occured!";
-        }
+        elif event.kind == cast(u32, EVENT_UNIT_WAS_RUN)
+         => debug "a unit was run, cool";
+        elif event.kind == cast(u32, EVENT_ERROR)
+         => debug "an error occured!";
         else
-        {
-            debug "unrecognized event";
-        }
+         => debug "unrecognized event";
     }
 
     puts("done compiling\n");
