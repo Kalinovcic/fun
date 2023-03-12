@@ -189,6 +189,19 @@ static Location generate_expression(Bytecode_Builder* builder, Expression id)
     builder->expression = id;
     Defer(builder->expression = previous_expression);
 
+    if (infer->flags & INFERRED_EXPRESSION_IS_HARDENED_CONSTANT)
+    {
+        assert(infer->flags & INFERRED_EXPRESSION_IS_NOT_EVALUATED_AT_RUNTIME);
+        assert(infer->hardened_type != INVALID_TYPE);
+        assert(!is_soft_type(infer->hardened_type));
+
+        Location literal = allocate_location(builder, infer->hardened_type);
+        // :PatchHardenedConstantPlaceholder
+        *reserve_item(&builder->patches) = { block, id, Label() };
+        Op(OP_LITERAL, r = literal.offset, s = get_type_size(unit, literal.type));
+        return literal;
+    }
+
     assert(!(infer->flags & INFERRED_EXPRESSION_IS_NOT_EVALUATED_AT_RUNTIME));
 
     auto apply_use = [&](Location lhs, Resolved_Name::Use use) -> Location
@@ -414,7 +427,7 @@ static Location generate_expression(Bytecode_Builder* builder, Expression id)
         Location value = allocate_location(builder, cast_type);
         if (is_soft_type(value_type))
         {
-            // :PatchCastPlaceholder
+            // :PatchHardenedConstantPlaceholder
             *reserve_item(&builder->patches) = { block, id, Label() };
             Op(OP_LITERAL, r = value.offset, s = get_type_size(unit, value.type));
         }
@@ -621,7 +634,34 @@ static void patch_bytecode(Unit* unit)
         auto*      infer = &block->inferred_expressions[id];
         Bytecode*  bc    = &bytecode[label];
 
-        switch (expr->kind)
+        if (infer->flags & INFERRED_EXPRESSION_IS_HARDENED_CONSTANT || expr->kind == EXPRESSION_CAST)
+        {
+            Expression constant_expression = (expr->kind == EXPRESSION_CAST) ? expr->binary.rhs : id;
+            Type       constant_type       = (expr->kind == EXPRESSION_CAST) ? infer->type      : infer->hardened_type;
+
+            assert(is_soft_type(block->inferred_expressions[constant_expression].type));
+
+            u64 constant;
+            if (is_integer_type(constant_type))
+            {
+                Fraction const* fract = get_constant_number(block, constant_expression);
+                assert(fract);
+                assert(fract_is_integer(fract));
+                assert(int_get_abs_u64(&constant, &fract->num));
+                if (fract->num.negative)
+                    constant = -constant;
+            }
+            else if (is_bool_type(constant_type))
+                constant = (*get_constant_bool(block, constant_expression) ? 1 : 0);
+            else if (constant_type == TYPE_TYPE)
+                constant = *get_constant_type(block, constant_expression);
+            else Unreachable;
+
+            // :PatchHardenedConstantPlaceholder
+            assert(bc[0].op == OP_LITERAL);
+            bc[0].a = constant;
+        }
+        else switch (expr->kind)
         {
         IllegalDefaultCase;
 
@@ -669,31 +709,6 @@ static void patch_bytecode(Unit* unit)
             assert(bc[0].op == OP_LITERAL && bc[1].op == OP_LITERAL);
             bc[0].a = (umm) text.length;
             bc[1].a = (umm) text.data;
-        } break;
-
-        case EXPRESSION_CAST:
-        {
-            assert(is_soft_type(block->inferred_expressions[expr->binary.rhs].type));
-
-            u64 constant;
-            if (is_integer_type(infer->type))
-            {
-                Fraction const* fract = get_constant_number(block, expr->binary.rhs);
-                assert(fract);
-                assert(fract_is_integer(fract));
-                assert(int_get_abs_u64(&constant, &fract->num));
-                if (fract->num.negative)
-                    constant = -constant;
-            }
-            else if (is_bool_type(infer->type))
-                constant = (*get_constant_bool(block, expr->binary.rhs) ? 1 : 0);
-            else if (infer->type == TYPE_TYPE)
-                constant = *get_constant_type(block, expr->binary.rhs);
-            else Unreachable;
-
-            // :PatchCastPlaceholder
-            assert(bc[0].op == OP_LITERAL);
-            bc[0].a = constant;
         } break;
 
         case EXPRESSION_CALL:

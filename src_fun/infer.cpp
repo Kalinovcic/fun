@@ -437,14 +437,15 @@ static void complete_expression(Block* block, Expression id)
     remove(&block->waiting_expressions, &id);
 }
 
-static void set_inferred_type(Block* block, Expression id, Type type)
+static bool set_inferred_type(Block* block, Expression id, Type type)
 {
     auto* expr  = &block->parsed_expressions[id];
     auto* infer = &block->inferred_expressions[id];
 
     assert(!(infer->flags & INFERRED_EXPRESSION_COMPLETED_INFERENCE));
     assert(type != INVALID_TYPE);
-    assert(infer->type == INVALID_TYPE || infer->type == type);
+    bool first_time = (infer->type == INVALID_TYPE);
+    assert(first_time || infer->type == type);
 
     if (type == TYPE_SOFT_ZERO)
         assert(expr->kind == EXPRESSION_ZERO);
@@ -454,6 +455,8 @@ static void set_inferred_type(Block* block, Expression id, Type type)
         infer->flags |= INFERRED_EXPRESSION_DOES_NOT_ALLOCATE_STORAGE;
     }
     infer->type = type;
+
+    return first_time;
 }
 
 
@@ -575,23 +578,24 @@ static bool check_constant_fits_in_runtime_type(Unit* unit, Parsed_Expression co
     return true;
 }
 
-static bool infer_assignment(Unit* unit, Parsed_Expression const* report_expr, Type lhs_type, Type rhs_type)
+static void harden(Unit* unit, Block* block, Expression expr, Type type)
 {
-    Environment* env = unit->env;
-    Compiler*    ctx = env->ctx;
-#define Error(...) return (report_error(ctx, report_expr, Format(temp, ##__VA_ARGS__)), false)
+    auto* infer = &block->inferred_expressions[expr];
+    assert(infer->flags & INFERRED_EXPRESSION_IS_NOT_EVALUATED_AT_RUNTIME);
+    assert(is_soft_type(infer->type));
+    assert(!is_soft_type(type));
 
-    if (is_soft_type(lhs_type))
-        Error("Can't assign to a constant expression.");
-    if (lhs_type != rhs_type && rhs_type != TYPE_SOFT_ZERO)
-        Error("Types don't match.\n"
-              "    lhs: %\n"
-              "    rhs: %",
-              exact_type_description(unit, lhs_type),
-              exact_type_description(unit, rhs_type));
-
-#undef Error
-    return true;
+    if (infer->hardened_type == INVALID_TYPE)
+    {
+        assert(!(infer->flags & INFERRED_EXPRESSION_IS_HARDENED_CONSTANT));
+        infer->flags |= INFERRED_EXPRESSION_IS_HARDENED_CONSTANT;
+        infer->hardened_type = type;
+    }
+    else
+    {
+        assert(infer->flags & INFERRED_EXPRESSION_IS_HARDENED_CONSTANT);
+        assert(infer->hardened_type == type);
+    }
 }
 
 static bool pattern_matching_inference(Unit* unit, Block* block, Expression id, Type type,
@@ -679,6 +683,89 @@ static bool pattern_matching_inference(Unit* unit, Block* block, Expression id, 
 }
 
 
+enum Hardening_Result
+{
+    HARDENING_NONE,         // both types aren't soft and match
+    HARDENING_SOFT,         // both types are soft and match
+    HARDENING_HARDENED,     // one of the types was soft and hardened to match
+    HARDENING_MISMATCH,     // types can't be made to match, caller should report
+    HARDENING_ERROR,        // error in hardening, already reported
+    HARDENING_WAIT,         // have to wait to harden
+};
+
+static Hardening_Result harden_binary(Unit* unit, Block* block, Expression id, Type* out_type)
+{
+    *out_type = INVALID_TYPE;
+
+    Environment* env = unit->env;
+    Compiler*    ctx = env->ctx;
+
+    auto* expr  = &block->parsed_expressions  [id];
+    auto* infer = &block->inferred_expressions[id];
+
+    Expression lhs = expr->binary.lhs;
+    Expression rhs = expr->binary.rhs;
+
+    Type lhs_type = block->inferred_expressions[lhs].type;
+    Type rhs_type = block->inferred_expressions[rhs].type;
+
+    bool lhs_soft = is_soft_type(lhs_type);
+    bool rhs_soft = is_soft_type(rhs_type);
+    if (lhs_soft && rhs_soft)
+    {
+        if (lhs_soft != rhs_soft)
+            return HARDENING_MISMATCH;
+        *out_type = lhs_type;
+        return HARDENING_SOFT;
+    }
+
+    if (lhs_soft || rhs_soft);
+    {
+        assert(!lhs_soft || !rhs_soft);
+        Expression soft      = lhs_soft ? lhs : rhs;
+        Expression hard      = lhs_soft ? rhs : lhs;
+        Type       soft_type = block->inferred_expressions[soft].type;
+        Type       hard_type = block->inferred_expressions[hard].type;
+
+        *out_type = hard_type;
+
+        if (is_bool_type(hard_type) && soft_type == TYPE_SOFT_BOOL)
+        {
+            harden(unit, block, soft, hard_type);
+            return HARDENING_HARDENED;
+        }
+
+        if (is_type_type(hard_type) && soft_type == TYPE_SOFT_TYPE)
+        {
+            harden(unit, block, soft, hard_type);
+            return HARDENING_HARDENED;
+        }
+
+        if (is_numeric_type(hard_type) && soft_type == TYPE_SOFT_NUMBER)
+        {
+            Fraction const* value = get_constant_number(block, soft);
+            if (!value)
+            {
+                Wait_Info info = { WAITING_ON_OPERAND, soft, block };
+                set(&block->waiting_expressions, &id, &info);
+                return HARDENING_WAIT;
+            }
+
+            if (!check_constant_fits_in_runtime_type(unit, expr, value, lhs_type))
+                return HARDENING_ERROR;
+
+            harden(unit, block, soft, hard_type);
+            return HARDENING_HARDENED;
+        }
+    }
+
+    if (lhs_type != rhs_type)
+        return HARDENING_MISMATCH;
+    *out_type = lhs_type;
+    return HARDENING_NONE;
+}
+
+
 enum Yield_Result
 {
     YIELD_COMPLETED,
@@ -686,6 +773,55 @@ enum Yield_Result
     YIELD_NO_PROGRESS,
     YIELD_ERROR,
 };
+
+static Yield_Result harden_assignment(Unit* unit, Parsed_Expression const* report_expr,
+                                      Block* block, Type lhs_type, Expression rhs,
+                                      String report_header)
+{
+    Type rhs_type = block->inferred_expressions[rhs].type;
+
+    Environment* env = unit->env;
+    Compiler*    ctx = env->ctx;
+#define Error(...) return (report_error(ctx, report_expr, Format(temp, ##__VA_ARGS__)), YIELD_ERROR)
+
+    if (is_soft_type(lhs_type))
+        Error("Can't assign to a constant expression.");
+
+    if (is_bool_type(lhs_type) && rhs_type == TYPE_SOFT_BOOL)
+    {
+        harden(unit, block, rhs, lhs_type);
+        return YIELD_COMPLETED;
+    }
+
+    if (is_type_type(lhs_type) && rhs_type == TYPE_SOFT_TYPE)
+    {
+        harden(unit, block, rhs, lhs_type);
+        return YIELD_COMPLETED;
+    }
+
+    if (is_numeric_type(lhs_type) && rhs_type == TYPE_SOFT_NUMBER)
+    {
+        Fraction const* value = get_constant_number(block, rhs);
+        if (!value) return YIELD_NO_PROGRESS;
+
+        if (!check_constant_fits_in_runtime_type(unit, report_expr, value, lhs_type))
+            return YIELD_ERROR;
+
+        harden(unit, block, rhs, lhs_type);
+        return YIELD_COMPLETED;
+    }
+
+    if (lhs_type != rhs_type && rhs_type != TYPE_SOFT_ZERO) types_dont_match:
+        Error("%\n"
+              "    lhs: %\n"
+              "    rhs: %",
+              report_header,
+              exact_type_description(unit, lhs_type),
+              exact_type_description(unit, rhs_type));
+
+#undef Error
+    return YIELD_COMPLETED;
+}
 
 static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
 {
@@ -700,18 +836,20 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
 
 
     bool override_made_progress = false;
+    #define WaitReturn() return override_made_progress ? YIELD_MADE_PROGRESS : YIELD_NO_PROGRESS;
+
     #define Wait(why, on_expression, on_block)                                      \
     {                                                                               \
         Wait_Info info = { why, on_expression, on_block };                          \
         set(&block->waiting_expressions, &id, &info);                               \
-        return override_made_progress ? YIELD_MADE_PROGRESS : YIELD_NO_PROGRESS;    \
+        WaitReturn();                                                               \
     }
 
     #define WaitOperand(on_expression) Wait(WAITING_ON_OPERAND, on_expression, block)
 
     #define Error(...) return (report_error(ctx, expr, Format(temp, ##__VA_ARGS__)), YIELD_ERROR)
 
-    #define InferType(type) set_inferred_type(block, id, type)
+    #define InferType(type) { if (set_inferred_type(block, id, type)) override_made_progress = true; }
     #define InferenceComplete() return (complete_expression(block, id), YIELD_COMPLETED)
 
 
@@ -1103,9 +1241,16 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
         Type rhs_type = block->inferred_expressions[expr->binary.rhs].type;
         if (lhs_type == INVALID_TYPE) WaitOperand(expr->binary.lhs);
         if (rhs_type == INVALID_TYPE) WaitOperand(expr->binary.rhs);
-        if (!infer_assignment(unit, expr, lhs_type, rhs_type))
-            return YIELD_ERROR;
         InferType(lhs_type);
+
+        switch (harden_assignment(unit, expr, block, lhs_type, expr->binary.rhs, "Types don't match."_s))
+        {
+        IllegalDefaultCase;
+        case YIELD_COMPLETED:   break;
+        case YIELD_ERROR:       return YIELD_ERROR;
+        case YIELD_NO_PROGRESS: WaitOperand(expr->binary.rhs);
+        }
+
         InferenceComplete();
     } break;
 
@@ -1119,18 +1264,44 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
         Type rhs_type = block->inferred_expressions[expr->binary.rhs].type;
         if (lhs_type == INVALID_TYPE) WaitOperand(expr->binary.lhs);
         if (rhs_type == INVALID_TYPE) WaitOperand(expr->binary.rhs);
-        if (lhs_type != rhs_type)
-            Error("Types don't match.\n"
+
+        String op_token = "???"_s;
+             if (expr->kind == EXPRESSION_ADD)               op_token = "+"_s;
+        else if (expr->kind == EXPRESSION_SUBTRACT)          op_token = "-"_s;
+        else if (expr->kind == EXPRESSION_MULTIPLY)          op_token = "*"_s;
+        else if (expr->kind == EXPRESSION_DIVIDE_WHOLE)      op_token = "!/"_s;
+        else if (expr->kind == EXPRESSION_DIVIDE_FRACTIONAL) op_token = "%/"_s;
+        else Unreachable;
+
+
+        Type common_type = INVALID_TYPE;
+        Hardening_Result hardening_result = harden_binary(unit, block, id, &common_type);
+        if (common_type != INVALID_TYPE)
+            InferType(common_type);
+        switch (hardening_result)
+        {
+        case HARDENING_NONE:
+        case HARDENING_SOFT:
+        case HARDENING_HARDENED:
+        {
+            if (!is_numeric_type(common_type))
+                Error("Operands to '%' must be numeric, but they are %.",
+                      op_token, vague_type_description(unit, common_type));
+        } break;
+        case HARDENING_MISMATCH:
+        {
+            Error("Operands to '%' must match and be numeric, but they are:\n"
                   "    lhs: %\n"
                   "    rhs: %",
+                  op_token,
                   exact_type_description(unit, lhs_type),
                   exact_type_description(unit, rhs_type));
-        if (!is_numeric_type(lhs_type))
-            Error("Expected a numeric operand, but got %.", vague_type_description(unit, lhs_type));
+        } break;
+        case HARDENING_ERROR: return YIELD_ERROR;
+        case HARDENING_WAIT:  WaitReturn();
+        }
 
-        InferType(lhs_type);
-
-        if (lhs_type == TYPE_SOFT_NUMBER)
+        if (hardening_result == HARDENING_SOFT)
         {
             Fraction const* lhs_fract = get_constant_number(block, expr->binary.lhs);
             Fraction const* rhs_fract = get_constant_number(block, expr->binary.rhs);
@@ -1199,12 +1370,9 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
         Type rhs_type = block->inferred_expressions[expr->binary.rhs].type;
         if (lhs_type == INVALID_TYPE) WaitOperand(expr->binary.lhs);
         if (rhs_type == INVALID_TYPE) WaitOperand(expr->binary.rhs);
-        if (lhs_type != rhs_type)
-            Error("Types don't match.\n"
-                  "    lhs: %\n"
-                  "    rhs: %",
-                  exact_type_description(unit, lhs_type),
-                  exact_type_description(unit, rhs_type));
+
+        bool soft_result = is_soft_type(lhs_type) && is_soft_type(rhs_type);
+        InferType(soft_result ? TYPE_SOFT_BOOL : TYPE_BOOL);
 
         String op_token = "???"_s;
              if (expr->kind == EXPRESSION_EQUAL)            op_token = "=="_s;
@@ -1215,15 +1383,32 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
         else if (expr->kind == EXPRESSION_LESS_OR_EQUAL)    op_token = "<="_s;
         else Unreachable;
 
-        if (!is_numeric_type(lhs_type) && !is_bool_type(lhs_type) && !is_pointer_type(lhs_type))
-            Error("Operands to '%' must be numeric, bool, or pointers, but they are %.\n",
-                  op_token,
-                  vague_type_description(unit, lhs_type));
-
-        if (is_soft_type(lhs_type))
+        Type common_type;
+        switch (harden_binary(unit, block, id, &common_type))
         {
-            InferType(TYPE_SOFT_BOOL);
+        case HARDENING_NONE:
+        case HARDENING_SOFT:
+        case HARDENING_HARDENED:
+        {
+            if (!is_numeric_type(common_type) && !is_bool_type(common_type) && !is_pointer_type(common_type))
+                Error("Operands to '%' must be numeric, bool, or pointers, but they are %.",
+                      op_token, vague_type_description(unit, common_type));
+        } break;
+        case HARDENING_MISMATCH:
+        {
+            Error("Operands to '%' must match and be numeric, bool, or pointers, but they are:\n"
+                  "    lhs: %\n"
+                  "    rhs: %",
+                  op_token,
+                  exact_type_description(unit, lhs_type),
+                  exact_type_description(unit, rhs_type));
+        } break;
+        case HARDENING_ERROR: return YIELD_ERROR;
+        case HARDENING_WAIT:  WaitReturn();
+        }
 
+        if (soft_result)
+        {
             bool zero     = false;
             bool negative = false;
             if (lhs_type == TYPE_SOFT_NUMBER)
@@ -1258,13 +1443,9 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
             else if (expr->kind == EXPRESSION_LESS_OR_EQUAL)    result =  zero || negative;
             else Unreachable;
             set_constant_bool(block, id, result);
-            InferenceComplete();
         }
-        else
-        {
-            InferType(TYPE_BOOL);
-            InferenceComplete();
-        }
+
+        InferenceComplete();
     } break;
 
     case EXPRESSION_CAST:
@@ -1631,13 +1812,15 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
             }
             else
             {
-                if (param_type != arg_type && arg_type != TYPE_SOFT_ZERO)
-                    Error("Argument #% ('%') doesn't match the parameter type.\n"
-                          "    expected: %\n"
-                          "    received: %",
-                          parameter_index + 1, param_name,
-                          exact_type_description(unit, param_type),
-                          exact_type_description(unit, arg_type));
+                switch (harden_assignment(unit, expr, block, param_type, arg_id,
+                                          Format(temp, "Argument #% ('%') doesn't match the parameter type.",
+                                                      parameter_index + 1, param_name)))
+                {
+                IllegalDefaultCase;
+                case YIELD_COMPLETED:   break;
+                case YIELD_ERROR:       return YIELD_ERROR;
+                case YIELD_NO_PROGRESS: waiting_on_an_argument = arg_id; break;
+                }
             }
         }
 
@@ -1672,6 +1855,26 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
         if (expr->flags & (EXPRESSION_DECLARATION_IS_PARAMETER | EXPRESSION_DECLARATION_IS_UNINITIALIZED))
             infer->flags |= INFERRED_EXPRESSION_IS_NOT_EVALUATED_AT_RUNTIME;
 
+        auto infer_default_type = [&](Type type) -> Type
+        {
+            if (!is_soft_type(type))
+                return type;
+
+            if (type == TYPE_SOFT_BOOL)
+                return TYPE_BOOL;
+
+            if (type == TYPE_SOFT_TYPE)
+                return TYPE_TYPE;
+
+            assert(expr->declaration.value != NO_EXPRESSION);
+            auto* value_expr = &block->parsed_expressions[expr->declaration.value];
+            Report(ctx).part(value_expr, Format(temp, "A runtime value is required here, but this is %.\n",
+                                                vague_type_description_in_compile_time_context(unit, type)))
+                       .part(expr, "This is because the declaration type is inferred from the value."_s)
+                       .done();
+            return INVALID_TYPE;
+        };
+
         Type type = INVALID_TYPE;
         if (expr->declaration.type != NO_EXPRESSION)
         {
@@ -1682,14 +1885,9 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
                 auto* value_expr = &block->parsed_expressions[expr->declaration.value];
                 Type value_type = block->inferred_expressions[expr->declaration.value].type;
                 if (value_type == INVALID_TYPE) WaitOperand(expr->declaration.value);
-                if (is_soft_type(value_type))
-                {
-                    Report(ctx).part(value_expr, Format(temp, "A runtime value is required here, but this is %.\n",
-                                                        vague_type_description_in_compile_time_context(unit, value_type)))
-                               .part(type_expr, "This is because the declaration type is inferred from the value."_s)
-                               .done();
+                value_type = infer_default_type(value_type);
+                if (value_type == INVALID_TYPE)
                     return YIELD_ERROR;
-                }
                 if (!pattern_matching_inference(unit, block, expr->declaration.type, value_type, value_expr, value_type))
                     return YIELD_ERROR;
             }
@@ -1742,27 +1940,22 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
                 Error("Blocks can't be assigned to runtime values.");
             if (expr->declaration.type == NO_EXPRESSION)
             {
-                if (is_soft_type(value_type))
-                {
-                    assert(expr->declaration.value != NO_EXPRESSION);
-                    auto* value_expr = &block->parsed_expressions[expr->declaration.value];
-                    Report(ctx).part(value_expr, Format(temp, "A runtime value is required here, but this is %.\n",
-                                                        vague_type_description_in_compile_time_context(unit, value_type)))
-                               .done();
-                    return YIELD_ERROR;
-                }
+                value_type = infer_default_type(value_type);
                 type = value_type;
             }
             assert(type != INVALID_TYPE);
-
-            if (expr->declaration.value != NO_EXPRESSION && type != value_type)
-                Error("Types don't match.\n"
-                      "    lhs: %\n"
-                      "    rhs: %",
-                      exact_type_description(unit, type),
-                      exact_type_description(unit, value_type));
-
             InferType(type);
+
+            if (expr->declaration.value != NO_EXPRESSION)
+            {
+                switch (harden_assignment(unit, expr, block, type, expr->declaration.value, "Types don't match."_s))
+                {
+                IllegalDefaultCase;
+                case YIELD_COMPLETED:   break;
+                case YIELD_ERROR:       return YIELD_ERROR;
+                case YIELD_NO_PROGRESS: WaitOperand(expr->declaration.value);
+                }
+            }
         }
 
         InferenceComplete();

@@ -432,17 +432,19 @@ enum: flags32
     INFERRED_EXPRESSION_COMPLETED_INFERENCE         = 0x0004,
     INFERRED_EXPRESSION_CONDITION_DISABLED          = 0x0008,
     INFERRED_EXPRESSION_CONDITION_ENABLED           = 0x0010,
+    INFERRED_EXPRESSION_IS_HARDENED_CONSTANT        = 0x0020,
 };
 
 struct Inferred_Expression
 {
     flags32       flags;
     Type          type;
+    Type          hardened_type;
     struct Block* called_block;
     u64           constant;
 };
 
-CompileTimeAssert(sizeof(Inferred_Expression) == 24);
+CompileTimeAssert(sizeof(Inferred_Expression) == 32);
 
 
 struct Soft_Block
