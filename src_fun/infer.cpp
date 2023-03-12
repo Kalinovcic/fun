@@ -1536,24 +1536,27 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
                 else
                     Error("Expected a compile-time boolean value as the condition, but got %.", vague_type_description_in_compile_time_context(unit, type));
 
-                if (baked_condition)
+                auto set_flag = [&](Expression expression, flags32 to_set)
                 {
-                    if (on_success != NO_EXPRESSION) block->inferred_expressions[on_success].flags |= INFERRED_EXPRESSION_CONDITION_ENABLED;
-                    if (on_failure != NO_EXPRESSION) block->inferred_expressions[on_failure].flags |= INFERRED_EXPRESSION_CONDITION_DISABLED;
-                }
-                else
-                {
-                    if (on_success != NO_EXPRESSION) block->inferred_expressions[on_success].flags |= INFERRED_EXPRESSION_CONDITION_DISABLED;
-                    if (on_failure != NO_EXPRESSION) block->inferred_expressions[on_failure].flags |= INFERRED_EXPRESSION_CONDITION_ENABLED;
-                }
-                override_made_progress = true;  // we made progress by enabling/disabling expressions
+                    if (expression == NO_EXPRESSION) return;
+                    flags32* flags = &block->inferred_expressions[expression].flags;
+                    if ((*flags & to_set) != to_set)
+                        override_made_progress = true;  // we made progress by enabling/disabling expressions
+                    *flags |= to_set;
+                };
+
+                set_flag(on_success, baked_condition ? INFERRED_EXPRESSION_CONDITION_ENABLED  : INFERRED_EXPRESSION_CONDITION_DISABLED);
+                set_flag(on_failure, baked_condition ? INFERRED_EXPRESSION_CONDITION_DISABLED : INFERRED_EXPRESSION_CONDITION_ENABLED);
             }
             else
             {
-                if (!is_integer_type(type) && !is_bool_type(type))
+                if (!is_bool_type(type))
                     Error("Expected a boolean value as the condition, but got %.", vague_type_description(unit, type));
                 if (is_soft_type(type))
-                    Error("@Incomplete - condition may not be a compile-time value");
+                {
+                    assert(type == TYPE_SOFT_BOOL);
+                    harden(unit, block, condition, TYPE_BOOL);
+                }
             }
         }
         else
@@ -1700,9 +1703,9 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
                     return YIELD_ERROR;
 
                 param_infer->flags |= INFERRED_EXPRESSION_IS_NOT_EVALUATED_AT_RUNTIME;
-                set_inferred_type(callee, param_id, arg_type);
+                if (set_inferred_type(callee, param_id, arg_type))
+                    override_made_progress = true;  // We made progress by inferring the callee's param type.
                 complete_expression(callee, param_id);
-                override_made_progress = true;  // We made progress by inferring the callee's param type.
             }
 
             auto* type_infer = &callee->inferred_expressions[param_expr->declaration.type];
@@ -1750,10 +1753,10 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
                     if (!check_constant_fits_in_runtime_type(unit, arg_expr, fraction, param_type))
                         return YIELD_ERROR;
 
-                    set_inferred_type(callee, param_id, TYPE_SOFT_NUMBER);
+                    if (set_inferred_type(callee, param_id, TYPE_SOFT_NUMBER))
+                        override_made_progress = true;  // We made progress by inferring the callee's param type.
                     set_constant_number(callee, param_id, fract_clone(fraction));
                     complete_expression(callee, param_id);
-                    override_made_progress = true;  // We made progress by inferring the callee's param type.
                 }
                 else if (is_bool_type(param_type))
                 {
@@ -1767,10 +1770,10 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
                         waiting_on_an_argument = arg_id;
                         continue;
                     }
-                    set_inferred_type(callee, param_id, TYPE_SOFT_BOOL);
+                    if (set_inferred_type(callee, param_id, TYPE_SOFT_BOOL))
+                        override_made_progress = true;  // We made progress by inferring the callee's param type.
                     set_constant_bool(callee, param_id, *constant);
                     complete_expression(callee, param_id);
-                    override_made_progress = true;  // We made progress by inferring the callee's param type.
                 }
                 else if (param_type == TYPE_TYPE)
                 {
@@ -1784,10 +1787,10 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
                         waiting_on_an_argument = arg_id;
                         continue;
                     }
-                    set_inferred_type(callee, param_id, TYPE_SOFT_TYPE);
+                    if (set_inferred_type(callee, param_id, TYPE_SOFT_TYPE))
+                        override_made_progress = true;  // We made progress by inferring the callee's param type.
                     set_constant_type(callee, param_id, *constant);
                     complete_expression(callee, param_id);
-                    override_made_progress = true;  // We made progress by inferring the callee's param type.
                 }
                 else if (param_type == TYPE_SOFT_BLOCK)
                 {
@@ -1803,10 +1806,10 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
                         continue;
                     }
 
-                    set_inferred_type(callee, param_id, TYPE_SOFT_BLOCK);
+                    if (set_inferred_type(callee, param_id, TYPE_SOFT_BLOCK))
+                        override_made_progress = true;  // We made progress by inferring the callee's param type.
                     set_constant_block(callee, param_id, *soft);
                     complete_expression(callee, param_id);
-                    override_made_progress = true;  // We made progress by inferring the callee's param type.
                 }
                 else Unreachable;
             }

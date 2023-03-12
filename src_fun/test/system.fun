@@ -9,9 +9,9 @@ consume :: (str: &string, n: umm) -> (lhs: string) {
 }
 
 puts :: (what: string) -> (amount_written: umm, error: umm) {
-    SYS_WRITE := cast(umm, 1);
-    fd := cast(umm, 1);  // stdout
-    while what.length > cast(umm, 0) {
+    SYS_WRITE: umm = 1;
+    fd: umm = 1;  // stdout
+    while what.length > 0 {
         amount := syscall(SYS_WRITE, fd, cast(umm, what.base), what.length, zero, zero, zero).rax;
         if amount <= what.length
          => amount_written = amount_written + amount;
