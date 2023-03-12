@@ -751,7 +751,7 @@ static Hardening_Result harden_binary(Unit* unit, Block* block, Expression id, T
                 return HARDENING_WAIT;
             }
 
-            if (!check_constant_fits_in_runtime_type(unit, expr, value, lhs_type))
+            if (!check_constant_fits_in_runtime_type(unit, expr, value, hard_type))
                 return HARDENING_ERROR;
 
             harden(unit, block, soft, hard_type);
