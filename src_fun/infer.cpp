@@ -860,6 +860,21 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
             infer->flags |= INFERRED_EXPRESSION_IS_NOT_EVALUATED_AT_RUNTIME;
             infer->flags |= INFERRED_EXPRESSION_DOES_NOT_ALLOCATE_STORAGE;
             InferType(TYPE_VOID);
+
+            if (expr->kind == EXPRESSION_BRANCH)
+            {
+                // spread the disabledness
+                Expression on_success = expr->branch.on_success;
+                Expression on_failure = expr->branch.on_failure;
+                if (on_success != NO_EXPRESSION) block->inferred_expressions[on_success].flags |= INFERRED_EXPRESSION_CONDITION_DISABLED;
+                if (on_failure != NO_EXPRESSION) block->inferred_expressions[on_failure].flags |= INFERRED_EXPRESSION_CONDITION_DISABLED;
+            }
+            else if (expr->kind == EXPRESSION_CALL)
+            {
+                // nothing to be done
+            }
+            else Unreachable;
+
             InferenceComplete();
         }
         if (!(infer->flags & INFERRED_EXPRESSION_CONDITION_ENABLED))
@@ -1474,7 +1489,12 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
         }
         else if (is_numeric_type(cast_type))
         {
-            if (!is_numeric_type(rhs_infer->type) && !is_pointer_type(rhs_infer->type))  // @Incomplete
+            if (is_pointer_type(rhs_infer->type))
+            {
+                if (!is_pointer_integer_type(cast_type))
+                    Error("Can't cast a pointer to type '%', only to pointer-sized integers.", exact_type_description(unit, cast_type));
+            }
+            else if (!is_numeric_type(rhs_infer->type))  // @Incomplete
                 Error("Expected a numeric value as the second operand to 'cast', but got %.", vague_type_description(unit, rhs_infer->type));
 
             if (rhs_infer->type == TYPE_SOFT_NUMBER)
@@ -1489,6 +1509,11 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
         {
             if (!is_bool_type(rhs_infer->type))  // @Incomplete
                 Error("Expected a bool value as the second operand to 'cast', but got %.", vague_type_description(unit, rhs_infer->type));
+        }
+        else if (is_pointer_type(cast_type))
+        {
+            if (!is_pointer_type(rhs_infer->type) && !is_pointer_integer_type(rhs_infer->type))
+                Error("Expected a pointer or pointer-sized integer as the second operand to 'cast', but got %.", vague_type_description(unit, rhs_infer->type));
         }
         else
         {

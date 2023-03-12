@@ -373,8 +373,18 @@ static Location generate_expression(Bytecode_Builder* builder, Expression id)
         return result;
     } break;
 
-    case EXPRESSION_DIVIDE_WHOLE:       NotImplemented;
-    case EXPRESSION_DIVIDE_FRACTIONAL:  NotImplemented;
+    Bytecode_Operation binary_usf_op;
+    case EXPRESSION_DIVIDE_WHOLE:       binary_usf_op = OP_DIVIDE_WHOLE;      goto emit_binary_usf;
+    case EXPRESSION_DIVIDE_FRACTIONAL:  binary_usf_op = OP_DIVIDE_FRACTIONAL; goto emit_binary_usf;
+    emit_binary_usf:
+    {
+        Location lhs = direct(builder, generate_expression(builder, expr->binary.lhs));
+        Location rhs = direct(builder, generate_expression(builder, expr->binary.rhs));
+        assert(lhs.type == rhs.type);
+        Location result = allocate_location(builder, infer->type);
+        Op(binary_usf_op, r = result.offset, a = lhs.offset, b = rhs.offset, s = simplify_type(unit, lhs.type));
+        return result;
+    } break;
 
     case EXPRESSION_POINTER_ADD:
     {

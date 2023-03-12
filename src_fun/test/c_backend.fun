@@ -5,7 +5,11 @@ using System   :: import "system.fun";
 using Compiler :: import "compiler.fun";
 
 run {
-    puts("hello from userland\n");
+    mem: Region;
+    mem.page_size = 123;
+    debug push(&mem, u32).base;
+
+    puts(FD_STDOUT, "hello from userland\n");
 
     settings: Environment_Settings;
     settings.custom_backend    = false;
@@ -45,5 +49,5 @@ run {
          => debug "unrecognized event";
     }
 
-    puts("done compiling\n");
+    puts(FD_STDOUT, "done compiling\n");
 }

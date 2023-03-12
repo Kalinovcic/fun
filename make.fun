@@ -69,4 +69,6 @@ clean:
 	rm -f  run_tree/fun
 	echo "Removed all binaries"
 
+.PHONY: all lines clean
+
 -include $(objects:.o=.d)

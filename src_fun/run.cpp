@@ -99,7 +99,7 @@ static bool run_intrinsic(User* user, Unit* unit, byte* storage, Block* block, S
         Scope_Region_Cursor temp_scope(temp);
 
         umm *out, *rax, *rdi, *rsi, *rdx, *r10, *r8, *r9;
-        get_runtime_parameter("rax"_s, &rax, TYPE_UMM);
+        get_runtime_parameter("sys"_s, &rax, TYPE_UMM);
         get_runtime_parameter("rdi"_s, &rdi, TYPE_UMM);
         get_runtime_parameter("rsi"_s, &rsi, TYPE_UMM);
         get_runtime_parameter("rdx"_s, &rdx, TYPE_UMM);
@@ -427,10 +427,10 @@ run:
         switch (s)
         {
         IllegalDefaultCase;
-        case TYPE_U8:   M(u8,  r) = M(u8,  a) * M(u8,  b); break;
-        case TYPE_U16:  M(u16, r) = M(u16, a) * M(u16, b); break;
-        case TYPE_U32:  M(u32, r) = M(u32, a) * M(u32, b); break;
-        case TYPE_U64:  M(u64, r) = M(u64, a) * M(u64, b); break;
+        case TYPE_U8:   M(u8,  r) = M(u8,  a) / M(u8,  b); break;
+        case TYPE_U16:  M(u16, r) = M(u16, a) / M(u16, b); break;
+        case TYPE_U32:  M(u32, r) = M(u32, a) / M(u32, b); break;
+        case TYPE_U64:  M(u64, r) = M(u64, a) / M(u64, b); break;
         case TYPE_S8:   M(s8,  r) = M(s8,  a) / M(s8,  b); break;
         case TYPE_S16:  M(s16, r) = M(s16, a) / M(s16, b); break;
         case TYPE_S32:  M(s32, r) = M(s32, a) / M(s32, b); break;
