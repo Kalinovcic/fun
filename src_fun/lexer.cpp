@@ -652,6 +652,7 @@ bool lex_from_memory(Compiler* ctx, String name, String code, Array<Token>* out_
             cursor++, atom = ATOM_PERCENT;
             if (cursor < end && *cursor == '/') cursor++, atom = ATOM_PERCENT_SLASH;
         }
+        else if (c == '|') cursor++, atom = ATOM_PIPE;
         else if (c == '&')
         {
             cursor++, atom = ATOM_AMPERSAND;

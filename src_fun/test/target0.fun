@@ -7,7 +7,7 @@ run
     using System   :: import "system.fun";
     using Compiler :: import "compiler.fun";
 
-    puts("ello m8\n");
+    puts(FD_STDOUT, "ello m8\n");
 
 
     Cool_String :: struct {
@@ -174,7 +174,7 @@ run
     debug &poof;
     debug_free poof;*/
 
-    if cast(u64, 1)
+    if cast(u64, 1) != 0
     {
         x: u32 = cast(u32, 123);
         y: &u32 = &x;
@@ -213,7 +213,7 @@ run
     print :: ($b: u32, $c: bool)
      => debug b;
 
-    if cast(u64, 1)
+    if cast(u64, 1) != 0
      => print(123, true);
     else
      => debug 420;
@@ -229,7 +229,7 @@ run
     {
         foo2();
         n := cast(u8, N);
-        while n
+        while n != 0
         {
             a();
             n = n - cast(u8, 1);
@@ -269,6 +269,28 @@ run
 
     *ptr = *ptr + cast(u32, 1);
     debug var;
+
+
+    debug true;
+    debug !true;
+    š := true;
+    debug !š;
+    debug !!š;
+
+
+    debug "and test";
+    debug (š     & true);
+    debug (š     & false);
+    debug (true  & š);
+    debug (false & š);
+    debug (false & !š);
+
+    debug "or test";
+    debug (š     | true);
+    debug (š     | false);
+    debug (true  | š);
+    debug (false | š);
+    debug (false | !š);
 
 
     /*proc1  :: (x: u32) { debug x; }

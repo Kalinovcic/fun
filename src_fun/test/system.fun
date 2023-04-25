@@ -165,8 +165,7 @@ allocate :: (region: &Region, size: umm, alignment: umm, debug_type: type) -> (b
     region.last_page = page;
 
     base = page + header_size;
-    if big_allocation {}  // @Cleanup: stupid, don't have a ! operator yet
-    else {
+    if !big_allocation {
         region.page_end = page + allocation_size;
         region.cursor   = page + min_size;
     }

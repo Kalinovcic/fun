@@ -462,6 +462,7 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
         if (is_import) expr->flags |= EXPRESSION_UNIT_IS_IMPORT;
         expr->parsed_block = block;
     }
+    else if (maybe_take_atom(stream, ATOM_BANG))        { if (!make_unary(EXPRESSION_NOT,         parse_flags))                                   return false; }
     else if (maybe_take_atom(stream, ATOM_MINUS))       { if (!make_unary(EXPRESSION_NEGATE,      parse_flags))                                   return false; }
     else if (maybe_take_atom(stream, ATOM_AMPERSAND))   { if (!make_unary(EXPRESSION_ADDRESS,     InheritFlags(PARSE_ALLOW_INFERRED_TYPE_ALIAS))) return false; }
     else if (maybe_take_atom(stream, ATOM_STAR))        { if (!make_unary(EXPRESSION_DEREFERENCE, InheritFlags(PARSE_ALLOW_INFERRED_TYPE_ALIAS))) return false; }
@@ -849,19 +850,21 @@ static bool parse_expression(Token_Stream* stream, Block_Builder* builder, Expre
             switch (kind)
             {
             case EXPRESSION_ASSIGNMENT:        return 0;
-            case EXPRESSION_EQUAL:             return 1;
-            case EXPRESSION_NOT_EQUAL:         return 1;
-            case EXPRESSION_GREATER_THAN:      return 2;
-            case EXPRESSION_GREATER_OR_EQUAL:  return 2;
-            case EXPRESSION_LESS_THAN:         return 2;
-            case EXPRESSION_LESS_OR_EQUAL:     return 2;
-            case EXPRESSION_ADD:               return 3;
-            case EXPRESSION_SUBTRACT:          return 3;
-            case EXPRESSION_POINTER_ADD:       return 3;
-            case EXPRESSION_POINTER_SUBTRACT:  return 3;
-            case EXPRESSION_MULTIPLY:          return 4;
-            case EXPRESSION_DIVIDE_WHOLE:      return 4;
-            case EXPRESSION_DIVIDE_FRACTIONAL: return 4;
+            case EXPRESSION_OR:                return 1;
+            case EXPRESSION_AND:               return 2;
+            case EXPRESSION_EQUAL:             return 3;
+            case EXPRESSION_NOT_EQUAL:         return 3;
+            case EXPRESSION_GREATER_THAN:      return 4;
+            case EXPRESSION_GREATER_OR_EQUAL:  return 4;
+            case EXPRESSION_LESS_THAN:         return 4;
+            case EXPRESSION_LESS_OR_EQUAL:     return 4;
+            case EXPRESSION_ADD:               return 5;
+            case EXPRESSION_SUBTRACT:          return 5;
+            case EXPRESSION_POINTER_ADD:       return 5;
+            case EXPRESSION_POINTER_SUBTRACT:  return 5;
+            case EXPRESSION_MULTIPLY:          return 6;
+            case EXPRESSION_DIVIDE_WHOLE:      return 6;
+            case EXPRESSION_DIVIDE_FRACTIONAL: return 6;
             default:                           return U32_MAX;
             }
         };
@@ -892,6 +895,8 @@ static bool parse_expression(Token_Stream* stream, Block_Builder* builder, Expre
     {
         Expression_Kind op;
              if (maybe_take_atom(stream, ATOM_EQUAL))           op = EXPRESSION_ASSIGNMENT;
+        else if (maybe_take_atom(stream, ATOM_PIPE))            op = EXPRESSION_OR;
+        else if (maybe_take_atom(stream, ATOM_AMPERSAND))       op = EXPRESSION_AND;
         else if (maybe_take_atom(stream, ATOM_PLUS))            op = EXPRESSION_ADD;
         else if (maybe_take_atom(stream, ATOM_MINUS))           op = EXPRESSION_SUBTRACT;
         else if (maybe_take_atom(stream, ATOM_STAR))            op = EXPRESSION_MULTIPLY;

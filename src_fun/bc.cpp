@@ -287,6 +287,14 @@ static Location generate_expression(Bytecode_Builder* builder, Expression id)
         return apply_use(location, { resolved.scope, resolved.declaration });
     } break;
 
+    case EXPRESSION_NOT:
+    {
+        Location operand = direct(builder, generate_expression(builder, expr->unary_operand));
+        Location result = allocate_location(builder, infer->type);
+        Op(OP_NOT, r = result.offset, a = operand.offset);
+        return result;
+    } break;
+
     case EXPRESSION_NEGATE:
     {
         Location operand = direct(builder, generate_expression(builder, expr->unary_operand));
@@ -426,6 +434,42 @@ static Location generate_expression(Bytecode_Builder* builder, Expression id)
         assert(lhs.type == rhs.type);
         Location result = allocate_location(builder, infer->type);
         Op(OP_COMPARE, flags = compare_flags, r = result.offset, a = lhs.offset, b = rhs.offset, s = simplify_type(unit, lhs.type));
+        return result;
+    } break;
+
+    case EXPRESSION_AND:
+    {
+        Location result = allocate_location(builder, TYPE_BOOL);
+
+        Location lhs = direct(builder, generate_expression(builder, expr->binary.lhs));
+        Bytecode* goto_if_false = Op(OP_GOTO_IF_FALSE, a = lhs.offset);
+
+        // lhs is true, result = rhs
+        copy(builder, result, direct(builder, generate_expression(builder, expr->binary.rhs)));
+        Bytecode* goto_end = Op(OP_GOTO);
+        goto_if_false->r = Label();
+
+        // lhs is false, result = 0
+        Op(OP_LITERAL, r = result.offset, a = 0, s = get_type_size(unit, result.type));
+        goto_end->r = Label();
+        return result;
+    } break;
+
+    case EXPRESSION_OR:
+    {
+        Location result = allocate_location(builder, TYPE_BOOL);
+
+        Location lhs = direct(builder, generate_expression(builder, expr->binary.lhs));
+        Bytecode* goto_if_false = Op(OP_GOTO_IF_FALSE, a = lhs.offset);
+
+        // lhs is true, result = 1
+        Op(OP_LITERAL, r = result.offset, a = 1, s = get_type_size(unit, result.type));
+        Bytecode* goto_end = Op(OP_GOTO);
+        goto_if_false->r = Label();
+
+        // lhs is false, result = rhs
+        copy(builder, result, direct(builder, generate_expression(builder, expr->binary.rhs)));
+        goto_end->r = Label();
         return result;
     } break;
 

@@ -121,6 +121,7 @@ enum Atom: u32
     ATOM_BANG_SLASH,            // !/
     ATOM_PERCENT_SLASH,         // %/
     ATOM_PERCENT,               // %
+    ATOM_PIPE,                  // |
     ATOM_AMPERSAND,             // &
     ATOM_AMPERSAND_PLUS,        // &+
     ATOM_AMPERSAND_MINUS,       // &-
@@ -302,6 +303,7 @@ enum Expression_Kind: u16
     EXPRESSION_MEMBER,
 
     // unary operators
+    EXPRESSION_NOT,
     EXPRESSION_NEGATE,
     EXPRESSION_ADDRESS,
     EXPRESSION_DEREFERENCE,
@@ -327,6 +329,8 @@ enum Expression_Kind: u16
     EXPRESSION_GREATER_OR_EQUAL,
     EXPRESSION_LESS_THAN,
     EXPRESSION_LESS_OR_EQUAL,
+    EXPRESSION_AND,
+    EXPRESSION_OR,
     EXPRESSION_CAST,
     EXPRESSION_GOTO_UNIT,
 
@@ -604,6 +608,7 @@ enum Bytecode_Operation: u32
     OP_COPY_BETWEEN_INDIRECT,   // r = &destination  a = &source   s = size
     OP_ADDRESS,                 // r =  destination  a =  offset
 
+    OP_NOT,                     // r = result  a = operand
     OP_NEGATE,                  // r = result  a = operand       s = type  (type options: s,f)
     OP_ADD,                     // r = result  a = lhs  b = rhs  s = type  (type options: u,f)
     OP_SUBTRACT,                // r = result  a = lhs  b = rhs  s = type  (type options: u,f)

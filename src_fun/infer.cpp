@@ -1029,6 +1029,26 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
         InferenceComplete();
     } break;
 
+    case EXPRESSION_NOT:
+    {
+        Inferred_Expression* op_infer = &block->inferred_expressions[expr->unary_operand];
+        if (op_infer->type == INVALID_TYPE)
+            WaitOperand(expr->unary_operand);
+
+        if (!is_bool_type(op_infer->type))
+            Error("Unary operator '!' expects a bool argument, but got %.", vague_type_description(unit, op_infer->type));
+        InferType(op_infer->type);
+
+        if (op_infer->type == TYPE_SOFT_BOOL)
+        {
+            bool const* value = get_constant_bool(block, expr->unary_operand);
+            if (!value) WaitOperand(expr->unary_operand);
+            set_constant_bool(block, id, !value);
+        }
+
+        InferenceComplete();
+    } break;
+
     case EXPRESSION_NEGATE:
     {
         Inferred_Expression* op_infer = &block->inferred_expressions[expr->unary_operand];
@@ -1457,6 +1477,66 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
             else if (expr->kind == EXPRESSION_LESS_THAN)        result =  negative;
             else if (expr->kind == EXPRESSION_LESS_OR_EQUAL)    result =  zero || negative;
             else Unreachable;
+            set_constant_bool(block, id, result);
+        }
+
+        InferenceComplete();
+    } break;
+
+    case EXPRESSION_AND:
+    case EXPRESSION_OR:
+    {
+        Type lhs_type = block->inferred_expressions[expr->binary.lhs].type;
+        Type rhs_type = block->inferred_expressions[expr->binary.rhs].type;
+        if (lhs_type == INVALID_TYPE) WaitOperand(expr->binary.lhs);
+        if (rhs_type == INVALID_TYPE) WaitOperand(expr->binary.rhs);
+
+        String op_token = "???"_s;
+             if (expr->kind == EXPRESSION_AND) op_token = "&"_s;
+        else if (expr->kind == EXPRESSION_OR)  op_token = "|"_s;
+        else Unreachable;
+
+
+        Type common_type = INVALID_TYPE;
+        Hardening_Result hardening_result = harden_binary(unit, block, id, &common_type);
+        if (common_type != INVALID_TYPE)
+            InferType(common_type);
+        switch (hardening_result)
+        {
+        case HARDENING_NONE:
+        case HARDENING_SOFT:
+        case HARDENING_HARDENED:
+        {
+            if (!is_bool_type(common_type))
+                Error("Operands to '%' must be bools, but they are %.",
+                      op_token, vague_type_description(unit, common_type));
+        } break;
+        case HARDENING_MISMATCH:
+        {
+            Error("Operands to '%' must be bools, but they are:\n"
+                  "    lhs: %\n"
+                  "    rhs: %",
+                  op_token,
+                  exact_type_description(unit, lhs_type),
+                  exact_type_description(unit, rhs_type));
+        } break;
+        case HARDENING_ERROR: return YIELD_ERROR;
+        case HARDENING_WAIT:  WaitReturn();
+        }
+
+        if (hardening_result == HARDENING_SOFT)
+        {
+            bool const* lhs_value = get_constant_bool(block, expr->binary.lhs);
+            bool const* rhs_value = get_constant_bool(block, expr->binary.rhs);
+            if (!lhs_value) WaitOperand(expr->binary.lhs);
+            if (!rhs_value) WaitOperand(expr->binary.rhs);
+
+            bool result;
+                 if (expr->kind == EXPRESSION_AND) result = *lhs_value && *rhs_value;
+            else if (expr->kind == EXPRESSION_OR)  result = *lhs_value || *rhs_value;
+            else Unreachable;
+
+            assert(infer->type == TYPE_SOFT_BOOL);
             set_constant_bool(block, id, result);
         }
 

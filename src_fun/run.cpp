@@ -319,6 +319,7 @@ run:
     case OP_COPY_TO_INDIRECT:      opname = "OP_COPY_TO_INDIRECT"_s;      break;
     case OP_COPY_BETWEEN_INDIRECT: opname = "OP_COPY_BETWEEN_INDIRECT"_s; break;
     case OP_ADDRESS:               opname = "OP_ADDRESS"_s;               break;
+    case OP_NOT:                   opname = "OP_NOT"_s;                   break;
     case OP_NEGATE:                opname = "OP_NEGATE"_s;                break;
     case OP_ADD:                   opname = "OP_ADD"_s;                   break;
     case OP_SUBTRACT:              opname = "OP_SUBTRACT"_s;              break;
@@ -366,6 +367,7 @@ run:
     case OP_COPY_TO_INDIRECT:       memcpy(M(void*, r), storage + a, s);    break;
     case OP_COPY_BETWEEN_INDIRECT:  memcpy(M(void*, r), M(void*, a), s);    break;
     case OP_ADDRESS:                M(byte*, r) = storage + a;              break;
+    case OP_NOT:                    M(u8, r) = M(u8, a) ? 0 : 1;            break;
     case OP_NEGATE:
     {
         switch (s)
