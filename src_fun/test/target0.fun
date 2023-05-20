@@ -7,6 +7,16 @@ run
     using System   :: import "system.fun";
     using Compiler :: import "compiler.fun";
 
+    x: u64 = 1;
+    while true {
+        if x > 100 {
+            debug x;
+            yield;
+        }
+        x = x + 1;
+    }
+
+/*
     puts(FD_STDOUT, "ello m8\n");
 
 
@@ -324,5 +334,5 @@ run
 
     proc_b();
     */
-
+*/
 }

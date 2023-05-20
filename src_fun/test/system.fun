@@ -4,8 +4,7 @@ ARCH_X64 :: true;  // @Reconsider - how do we set this?
 
 arch_info :: () -> (name: string, page_size: umm) {
     $if ARCH_X64 {
-        yield (name = "x86_64",
-               page_size = 4096);
+        yield(name = "x86_64", page_size = 4096);
     }
     else {
         x: u8 = "architecture not implemented yet";
