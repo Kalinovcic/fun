@@ -614,6 +614,9 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
         if (!take_atom(stream, ATOM_FIRST_IDENTIFIER, "Expected the type alias name after '$'."_s))
             return false;
 
+        if (lookahead_atom(stream, ATOM_COLON, 0))
+            return ReportError(stream->ctx, stream->cursor - 2, "An alias can't have an inferred type because aliases don't have assigned runtime types."_s);
+
         Parsed_Expression* expr = add_expression(builder, EXPRESSION_DECLARATION, start, stream->cursor - 1, out_expression);
         expr->flags |= EXPRESSION_HAS_TO_BE_EXTERNALLY_INFERRED | EXPRESSION_DECLARATION_IS_ALIAS | EXPRESSION_DECLARATION_IS_INFERRED_ALIAS;
         expr->declaration.name  = *name;
