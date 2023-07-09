@@ -20,7 +20,12 @@ struct Token_Stream
     Token* start;
     Token* cursor;
     Token* end;
+
     String imports_relative_to_path;
+
+    Token* comment_start;
+    Token* comment_cursor;
+    Token* comment_end;
 };
 
 static void set_nonempty_token_stream(Token_Stream* stream, Compiler* ctx, Array<Token> tokens)
@@ -103,10 +108,97 @@ struct Block_Builder
     Dynamic_Array<Expression> imperative_order;
 };
 
+static bool is_token_before(Compiler* ctx, Token* a, Token* b)
+{
+    auto* a_info = get_token_info(ctx, a);
+    auto* b_info = get_token_info(ctx, b);
+    assert(a_info->source_index == b_info->source_index);
+    return a_info->offset < b_info->offset;
+}
+
 static void finish_building(Compiler* ctx, Block_Builder* builder)
 {
     Block* block = builder->block;
     Region* memory = &ctx->parser_memory;
+
+    // Complete comment parsing, fill in their relation to other expressions.
+    // We do this in 2 sweeps. In the first backwards sweep we find all comments
+    // which are before expressions. In the second forward sweep we find all
+    // coments which are inside or after expressions.
+
+    Expression next = NO_EXPRESSION;
+    u32 line_next;
+    for (umm it_index = builder->imperative_order.count; it_index; it_index--)
+    {
+        Expression it = builder->imperative_order[it_index - 1];
+        auto* expr = &builder->expressions[it];
+        if (expr->kind != EXPRESSION_COMMENT)
+        {
+            line_next = get_line(ctx, &expr->from);
+            next = it;
+            continue;
+        }
+        if (next == NO_EXPRESSION)
+            continue;
+
+        auto* next_expr = &builder->expressions[next];
+        assert(is_token_before(ctx, &expr->to, &next_expr->from));
+        u32 line_comment = get_line(ctx, &expr->to);
+        assert(line_comment <= line_next);
+        if (line_comment == line_next || line_comment == line_next - 1)
+        {
+            expr->comment.relation = COMMENT_IS_BEFORE;
+            expr->comment.relative_to = next;
+            line_next = get_line(ctx, &expr->from);
+        }
+    }
+
+    Expression previous = NO_EXPRESSION;
+    for (umm it_index = 0; it_index < builder->imperative_order.count; it_index++)
+    {
+        Expression it = builder->imperative_order[it_index];
+        auto* expr = &builder->expressions[it];
+        if (expr->kind != EXPRESSION_COMMENT)
+        {
+            previous = it;
+            continue;
+        }
+        if (previous == NO_EXPRESSION)
+            continue;
+
+        auto* previous_expr = &builder->expressions[previous];
+        assert(is_token_before(ctx, &previous_expr->from, &expr->from));
+        if (is_token_before(ctx, &expr->from, &previous_expr->to))
+        {
+            expr->comment.relation = COMMENT_IS_INSIDE;
+            expr->comment.relative_to = previous;
+            continue;
+        }
+
+        assert(is_token_before(ctx, &previous_expr->to, &expr->from));
+        u32 line_previous = get_line(ctx, &previous_expr->to);
+        u32 line_comment  = get_line(ctx, &expr->from);
+
+        assert(line_comment >= line_previous);
+        if (line_comment == line_previous ||
+            (line_comment == line_previous + 1 && expr->comment.relation != COMMENT_IS_BEFORE))
+        {
+            expr->comment.relation = COMMENT_IS_AFTER;
+            expr->comment.relative_to = previous;
+        }
+    }
+
+#if 0
+    for (umm it_index = 0; it_index < builder->imperative_order.count; it_index++)
+    {
+        Expression it = builder->imperative_order[it_index];
+        auto* expr = &builder->expressions[it];
+        if (expr->kind != EXPRESSION_COMMENT)
+            continue;
+        const char* name[] = { "Inside", "Alone", "After", "Before" };
+        Report(ctx).message(Format(temp, "Relation % to %", name[expr->comment.relation], expr->comment.relative_to)).snippet(expr).done();
+    }
+#endif
 
     block->parsed_expressions = const_array(allocate_array(memory, &builder->expressions));
     block->imperative_order   = const_array(allocate_array(memory, &builder->imperative_order));
@@ -181,6 +273,7 @@ static bool semicolon_after_statement(Token_Stream* stream)
         Token* previous = stream->cursor - 1;
         if (previous->atom == ATOM_SEMICOLON)   return true;
         if (previous->atom == ATOM_RIGHT_BRACE) return true;
+        if (previous->atom == ATOM_COMMENT)     return true;
     }
     Token* semicolon = stream->cursor;
     if (!take_atom(stream, ATOM_SEMICOLON, "Expected ';' after the statement."_s))
@@ -953,8 +1046,14 @@ static bool parse_expression(Token_Stream* stream, Block_Builder* builder, Expre
 
 static bool parse_statement(Token_Stream* stream, Block_Builder* builder)
 {
+    Token* start = stream->cursor;
     Expression expression;
-    if (!parse_expression(stream, builder, &expression, PARSE_ALLOW_BLOCKS))
+    if (maybe_take_atom(stream, ATOM_COMMENT))
+    {
+        Parsed_Expression* expr = add_expression(builder, EXPRESSION_COMMENT, start, start, &expression);
+        expr->literal = *start;
+    }
+    else if (!parse_expression(stream, builder, &expression, PARSE_ALLOW_BLOCKS))
         return false;
 
     assert(expression != NO_EXPRESSION);
@@ -976,6 +1075,29 @@ static bool parse_statement(Token_Stream* stream, Block_Builder* builder)
     return true;
 }
 
+static void add_comment_expressions_to_block(Token_Stream* stream, Block_Builder* builder)
+{
+    // The regular token stream cursor points to the next token to be parsed.
+    // We insert all comments in front of the cursor.
+    while (stream->comment_cursor < stream->comment_end)
+    {
+        auto* token = stream->comment_cursor;
+        if (stream->cursor < stream->end && is_token_before(stream->ctx, stream->cursor, token))
+            break;
+
+        Expression comment_expr_id;
+        auto* expr = add_expression(builder, EXPRESSION_COMMENT, token, token, &comment_expr_id);
+        expr->comment.token = *token;
+        // The comment's relation to neighboring expressions is determined when
+        // finishing building the block in finish_building.
+        expr->comment.relation = COMMENT_IS_ALONE;
+        expr->comment.relative_to = NO_EXPRESSION;
+        stream->comment_cursor++;
+
+        add_item(&builder->imperative_order, &comment_expr_id);
+    }
+}
+
 static Block* parse_block(Token_Stream* stream, flags32 flags)
 {
     Compiler* ctx = stream->ctx;
@@ -992,8 +1114,10 @@ static Block* parse_block(Token_Stream* stream, flags32 flags)
 
         while (stream->cursor < stream->end && stream->cursor->atom != ATOM_RIGHT_BRACE)
         {
+            add_comment_expressions_to_block(stream, &builder);
             if (!parse_statement(stream, &builder)) return NULL;
             if (!semicolon_after_statement(stream)) return NULL;
+            add_comment_expressions_to_block(stream, &builder);
         }
         Token* block_end = stream->cursor;
         if (!take_atom(stream, ATOM_RIGHT_BRACE, "Body was not closed by '}'.\n"
@@ -1025,7 +1149,7 @@ static Block* parse_block(Token_Stream* stream, flags32 flags)
     }
 }
 
-Block* parse_top_level(Compiler* ctx, String canonical_name, String imports_relative_to_path, Array<Token> tokens)
+Block* parse_top_level(Compiler* ctx, String canonical_name, String imports_relative_to_path, Array<Token> tokens, Array<Token> comments)
 {
     Block* block = get(&ctx->top_level_blocks, &canonical_name);
     if (block) return block;
@@ -1050,11 +1174,17 @@ Block* parse_top_level(Compiler* ctx, String canonical_name, String imports_rela
         set_nonempty_token_stream(&stream, ctx, tokens);
         stream.imports_relative_to_path = imports_relative_to_path;
 
+        stream.comment_start  = comments.address;
+        stream.comment_cursor = comments.address;
+        stream.comment_end    = comments.address + comments.count;
+
         block->from = *next_token_or_eof(&stream);
         while (stream.cursor < stream.end)
         {
+            add_comment_expressions_to_block(&stream, &builder);
             if (!parse_statement(&stream, &builder)) return NULL;
             if (!semicolon_after_statement(&stream)) return NULL;
+            add_comment_expressions_to_block(&stream, &builder);
         }
         block->to = *next_token_or_eof(&stream);
     }
@@ -1065,21 +1195,23 @@ Block* parse_top_level(Compiler* ctx, String canonical_name, String imports_rela
 Block* parse_top_level_from_file(Compiler* ctx, String path)
 {
     Array<Token> tokens = {};
-    bool ok = lex_file(ctx, path, &tokens);
+    Array<Token> comments = {};
+    bool ok = lex_file(ctx, path, &tokens, &comments);
     if (!ok)
         return NULL;
 
     // @Incomplete - normalize path and all that stuff
     String import_path = get_parent_directory_path(path);
-    return parse_top_level(ctx, path, import_path, tokens);
+    return parse_top_level(ctx, path, import_path, tokens, comments);
 }
 
 Block* parse_top_level_from_memory(Compiler* ctx, String name, String code)
 {
     Array<Token> tokens = {};
-    bool ok = lex_from_memory(ctx, name, code, &tokens);
+    Array<Token> comments = {};
+    bool ok = lex_from_memory(ctx, name, code, &tokens, &comments);
     if (!ok) return NULL;
-    return parse_top_level(ctx, {}, "."_s, tokens);
+    return parse_top_level(ctx, {}, "."_s, tokens, comments);
 }
 
 

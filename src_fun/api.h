@@ -47,6 +47,7 @@ enum Atom: u32
     // literals
     ATOM_NUMBER_LITERAL,        // any numeric literal
     ATOM_STRING_LITERAL,        // any string literal
+    ATOM_COMMENT,               // any comment
     ATOM_ZERO,                  // zero
     ATOM_TRUE,                  // true
     ATOM_FALSE,                 // false
@@ -296,6 +297,7 @@ enum Expression_Kind: u16
     EXPRESSION_NUMERIC_LITERAL,
     EXPRESSION_STRING_LITERAL,
     EXPRESSION_TYPE_LITERAL,
+    EXPRESSION_COMMENT,
     EXPRESSION_BLOCK,
     EXPRESSION_UNIT,
 
@@ -364,6 +366,18 @@ enum: flags16
     EXPRESSION_HAS_TO_BE_EXTERNALLY_INFERRED = 0x4000,
 };
 
+enum Comment_Relation
+{
+    // The relations are defined based on separation from the nearest non-comment
+    // expressions on either side. If there's at least one blank row between
+    // an expression and a comment, then this comment and expression are separated.
+
+    COMMENT_IS_INSIDE,  // within an expression
+    COMMENT_IS_ALONE,   // separated on both sides
+    COMMENT_IS_AFTER,   // separated from below, or on the same line as the previous expr
+    COMMENT_IS_BEFORE,  // default case
+};
+
 struct Parsed_Expression
 {
     Expression_Kind kind;
@@ -382,6 +396,13 @@ struct Parsed_Expression
         struct Block* parsed_block;
 
         Expression_List const* yield_assignments;
+
+        struct
+        {
+            Token            token;
+            Comment_Relation relation;
+            Expression       relative_to;  // may be NO_EXPRESSION if relation == 'COMMENT_IS_ALONE'
+        } comment;
 
         struct
         {
@@ -753,8 +774,11 @@ bool pump_pipeline(Compiler* ctx);
 // Lexer
 
 // Your responsibility that code remains allocated as long as necessary!
-bool lex_from_memory(Compiler* ctx, String name, String code, Array<Token>* out_tokens);
-bool lex_file(Compiler* ctx, String path, Array<Token>* out_tokens);
+// As comments should be considered whitespace, they are not included in the resulting
+// tokens array, however we do keep track of their locations and return a
+// separate comments array.
+bool lex_from_memory(Compiler* ctx, String name, String code, Array<Token>* out_tokens, Array<Token>* out_comments);
+bool lex_file(Compiler* ctx, String path, Array<Token>* out_tokens, Array<Token>* out_comments);
 
 inline Token_Info* get_token_info(Compiler* ctx, Token const* token)
 {
@@ -938,6 +962,7 @@ inline bool report_error(Compiler* ctx, T at, String message, Severity severity 
     return Report(ctx).part(at, message, severity).done();
 }
 
+u32 get_line(Compiler* ctx, Token* token);
 void get_line(Compiler* ctx, Token_Info const* info, u32* out_line, u32* out_column = NULL, String* out_source_name = NULL);
 
 bool supports_colored_output();

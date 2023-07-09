@@ -75,7 +75,7 @@ static void lex_init(Compiler* ctx)
 #undef AddKeyword
 }
 
-bool lex_from_memory(Compiler* ctx, String name, String code, Array<Token>* out_tokens)
+bool lex_from_memory(Compiler* ctx, String name, String code, Array<Token>* out_tokens, Array<Token>* out_comments)
 {
     lex_init(ctx);
 
@@ -133,8 +133,12 @@ bool lex_from_memory(Compiler* ctx, String name, String code, Array<Token>* out_
     *reserve_item(&line_offsets) = 0;
 
     Concatenator<Token> tokens = {};
-    ensure_space(&tokens, Megabyte(16) / sizeof(Token));
+    ensure_space(&tokens, Megabyte(1) / sizeof(Token));
     Defer(*out_tokens = resolve_to_array_and_free(&tokens, &ctx->lexer_memory));
+
+    Concatenator<Token> comments = {};
+    ensure_space(&comments, Megabyte(1) / sizeof(Token));
+    Defer(*out_comments = resolve_to_array_and_free(&comments, &ctx->lexer_memory));
 
     u8* start  = code.data;
     u8* end    = start + code.length;
@@ -604,13 +608,12 @@ bool lex_from_memory(Compiler* ctx, String name, String code, Array<Token>* out_
             cursor++, atom = ATOM_SLASH;
             if (cursor < end && *cursor == '/')  // single-line comment
             {
-                cursor++;
+                cursor++, atom = ATOM_COMMENT;
                 while (cursor < end && *cursor != '\n') cursor++;
-                continue;
             }
             else if (cursor < end && *cursor == '*')  // multi-line comment
             {
-                cursor++;
+                cursor++, atom = ATOM_COMMENT;
 
                 u32 line        = line_offsets.count;
                 u32 line_offset = line_offsets.base[line - 1];
@@ -637,14 +640,14 @@ bool lex_from_memory(Compiler* ctx, String name, String code, Array<Token>* out_
                             *reserve_item(&line_offsets) = cursor - start;
                     }
                 }
-                if (!depth)
-                    continue;
-
-                u32 column = (start_cursor - start) - line_offset + 1;
-                fprintf(stderr, "Multi-line not closed at the end of file.\n"
-                                " .. Started at %.*s @ %u:%u\n",
-                                StringArgs(name), line, column);
-                return false;
+                if (depth)
+                {
+                    u32 column = (start_cursor - start) - line_offset + 1;
+                    fprintf(stderr, "Multi-line not closed at the end of file.\n"
+                                    " .. Started at %.*s @ %u:%u\n",
+                                    StringArgs(name), line, column);
+                    return false;
+                }
             }
         }
         else if (c == '%')
@@ -693,7 +696,7 @@ bool lex_from_memory(Compiler* ctx, String name, String code, Array<Token>* out_
             LexError("Unrecognized token.")
         }
 
-        Token* token = reserve_item(&tokens);
+        Token* token = reserve_item(atom == ATOM_COMMENT ? &comments : &tokens);
         token->atom       = atom;
         token->info_index = ctx->token_info_other.count;
 
@@ -708,7 +711,7 @@ bool lex_from_memory(Compiler* ctx, String name, String code, Array<Token>* out_
     return true;
 }
 
-bool lex_file(Compiler* ctx, String path, Array<Token>* out_tokens)
+bool lex_file(Compiler* ctx, String path, Array<Token>* out_tokens, Array<Token>* out_comments)
 {
     lex_init(ctx);
 
@@ -719,7 +722,7 @@ bool lex_file(Compiler* ctx, String path, Array<Token>* out_tokens)
         return false;
     }
 
-    return lex_from_memory(ctx, get_file_name(path), code, out_tokens);
+    return lex_from_memory(ctx, get_file_name(path), code, out_tokens, out_comments);
 }
 
 

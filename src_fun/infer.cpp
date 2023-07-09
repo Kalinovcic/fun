@@ -889,9 +889,15 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
     switch (expr->kind)
     {
 
-    case EXPRESSION_ZERO:   InferType(TYPE_SOFT_ZERO); InferenceComplete();
-    case EXPRESSION_TRUE:   InferType(TYPE_SOFT_BOOL); set_constant_bool(block, id, true);  InferenceComplete();
-    case EXPRESSION_FALSE:  InferType(TYPE_SOFT_BOOL); set_constant_bool(block, id, false); InferenceComplete();
+    case EXPRESSION_COMMENT:
+        infer->flags |= INFERRED_EXPRESSION_IS_NOT_EVALUATED_AT_RUNTIME;
+        infer->flags |= INFERRED_EXPRESSION_DOES_NOT_ALLOCATE_STORAGE;
+        InferType(TYPE_VOID);
+        InferenceComplete();
+
+    case EXPRESSION_ZERO:    InferType(TYPE_SOFT_ZERO); InferenceComplete();
+    case EXPRESSION_TRUE:    InferType(TYPE_SOFT_BOOL); set_constant_bool(block, id, true);  InferenceComplete();
+    case EXPRESSION_FALSE:   InferType(TYPE_SOFT_BOOL); set_constant_bool(block, id, false); InferenceComplete();
     case EXPRESSION_NUMERIC_LITERAL:
     {
         InferType(TYPE_SOFT_NUMBER);

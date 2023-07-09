@@ -1,10 +1,13 @@
-#!/home/kalinovcic/schedulebot/run_tree/fun
+#!/home/kalinovcic/fun/run_tree/fun
 // =($a: s64, $b: s64)
 // debug a + b;
 
 run unit {
     using System   :: import "system.fun";
     using Compiler :: import "compiler.fun";
+
+    a: u32 = /* zero; */
+    123;
 
     x: u64 = 1;
     while true {
