@@ -100,12 +100,48 @@ static void split_source_around_token_info(Token_Info const* info, u32 source_of
     *out_after = source;
 }
 
+static String string_from_token_info(Compiler* ctx, Token_Info info)
+{
+    String source;
+    u32 source_offset, source_line;
+    get_source_code_slice(ctx, &info, 0, 0, &source, &source_offset, &source_line);
+
+    String code_before, code_inside, code_after;
+    split_source_around_token_info(&info, source_offset, source, &code_before, &code_inside, &code_after);
+
+    return code_inside;
+}
+
 static String get_severity_label(bool colored, Severity severity)
 {
     if (severity == SEVERITY_ERROR)   return colored ? "\x1b[31;1m[error]\x1b[m"_s   : "[error]"_s;
     if (severity == SEVERITY_WARNING) return colored ? "\x1b[33;1m[warning]\x1b[m"_s : "[warning]"_s;
     return "??????????"_s;
 }
+
+
+static const String ANSI_HIGHLIGHT_GREEN = "\x1b[32;4;3;1m"_s;
+static const String ANSI_STRIKETHROUGH   = "\x1b[31;9m"_s;
+
+static String apply_ansi_escape_sequence(Region* region, String string, String escape_sequence)
+{
+    auto split_whitespace = [](String *s, String* out_leading, String* out_trailing)
+    {
+        String trimmed_back = trim_back(*s);
+        *out_trailing = { s->length - trimmed_back.length, s->data + trimmed_back.length };
+        *s = trimmed_back;
+        String trimmed_front = trim_front(trimmed_back);
+        *out_leading  = { s->length - trimmed_front.length, s->data };
+        *s = trimmed_front;
+    };
+
+    String leading_ws, trailing_ws;
+    split_whitespace(&string,  &leading_ws, &trailing_ws);
+
+    String reset = "\x1b[m"_s;
+    return concatenate(region, leading_ws,  escape_sequence, string,  reset, trailing_ws);
+}
+
 
 Report::Report(Compiler* ctx)
 : cat({}),
@@ -196,7 +232,7 @@ Report& Report::internal_snippet(Token_Info info, bool skinny, umm before, umm a
     return *this;
 }
 
-Report& Report::internal_suggestion(String left, Token_Info info, String right, bool skinny, umm before, umm after)
+Report& Report::internal_suggestion_insert(String left, Token_Info info, String right, bool skinny, umm before, umm after)
 {
     if (skinny) before = after = 0;
     String source;
@@ -205,10 +241,8 @@ Report& Report::internal_suggestion(String left, Token_Info info, String right, 
 
     if (colored)
     {
-        String highlight = "\x1b[32;4;3;1m"_s;
-        String reset     = "\x1b[m"_s;
-        left  = concatenate(temp, highlight, left, reset);
-        right = concatenate(temp, highlight, right, reset);
+        left  = apply_ansi_escape_sequence(temp, left,  ANSI_HIGHLIGHT_GREEN);
+        right = apply_ansi_escape_sequence(temp, right, ANSI_HIGHLIGHT_GREEN);
     }
 
     String code_before, code_inside, code_after;
@@ -219,6 +253,45 @@ Report& Report::internal_suggestion(String left, Token_Info info, String right, 
     FormatAdd(&cat, "%~%", skinny ? ""_s : "\n"_s, format_line_numbers(colored, source, source_line, file));
     return *this;
 }
+
+Report& Report::internal_suggestion_replace(Token_Info info, Token_Info replace_with, bool skinny, umm before, umm after)
+{
+    String replacement = string_from_token_info(ctx, replace_with);
+    if (colored)
+        replacement = apply_ansi_escape_sequence(temp, replacement, ANSI_HIGHLIGHT_GREEN);
+
+    if (skinny) before = after = 0;
+    String source;
+    u32 source_offset, source_line;
+    get_source_code_slice(ctx, &info, before, after, &source, &source_offset, &source_line);
+
+    String code_before, code_inside, code_after;
+    split_source_around_token_info(&info, source_offset, source, &code_before, &code_inside, &code_after);
+    source = concatenate(temp, code_before, replacement, code_after);
+
+    String file = skinny ? get_file_name(ctx->sources[info.source_index].name) : ""_s;
+    FormatAdd(&cat, "%~%", skinny ? ""_s : "\n"_s, format_line_numbers(colored, source, source_line, file));
+    return *this;
+}
+
+Report& Report::internal_suggestion_remove(Token_Info info, bool skinny, umm before, umm after)
+{
+    if (skinny) before = after = 0;
+    String source;
+    u32 source_offset, source_line;
+    get_source_code_slice(ctx, &info, before, after, &source, &source_offset, &source_line);
+
+    String code_before, code_inside, code_after;
+    split_source_around_token_info(&info, source_offset, source, &code_before, &code_inside, &code_after);
+
+    code_inside = apply_ansi_escape_sequence(temp, code_inside, ANSI_STRIKETHROUGH);
+    source = concatenate(temp, code_before, code_inside, code_after);
+
+    String file = skinny ? get_file_name(ctx->sources[info.source_index].name) : ""_s;
+    FormatAdd(&cat, "%~%", skinny ? ""_s : "\n"_s, format_line_numbers(colored, source, source_line, file));
+    return *this;
+}
+
 
 bool Report::done()
 {

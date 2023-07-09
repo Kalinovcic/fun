@@ -2074,7 +2074,58 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
         infer->flags |= INFERRED_EXPRESSION_IS_NOT_EVALUATED_AT_RUNTIME;
         InferType(TYPE_VOID);
 
-        Unit* new_unit = materialize_unit(env, expr->parsed_block, block);
+        Inferred_Expression* op_infer = &block->inferred_expressions[expr->unary_operand];
+        if (op_infer->type == INVALID_TYPE) WaitOperand(expr->unary_operand);
+
+        auto get_user_type_data_if_unit = [env](Type type) -> User_Type*
+        {
+            if (!is_user_defined_type(type)) return NULL;
+            User_Type* data = get_user_type_data(env, type);
+            if (!data) return NULL;
+            assert(data->unit);
+            if (data->unit->flags & UNIT_IS_STRUCT) return NULL;
+            if (data->unit->flags & UNIT_IS_RUN)    return NULL;
+            return data;
+        };
+
+        if (op_infer->type != TYPE_SOFT_TYPE)
+        {
+            // This is an error, but try give a good error when the user passes a runtime value with a unit type, instead of its type.
+            User_Type* data = get_user_type_data_if_unit(op_infer->type);
+            if (data && data->has_alias)
+            {
+                Report report(ctx);
+                report.intro(SEVERITY_ERROR)
+                      .part(expr, "Expected a unit type as an operand to 'run', but got a runtime unit value."_s)
+                      .continuation()
+                      .message("Try replacing it with the runtime value's type instead."_s)
+                      .suggestion_replace(&block->parsed_expressions[expr->unary_operand], &data->alias);
+
+                Resolved_Name resolved = get(&block->resolved_names, &expr->unary_operand);
+                if (resolved.scope)
+                {
+                    report.continuation();
+                    report.message(Format(temp, "Note: the object is declared to be of type '%' here:", exact_type_description(data->unit, op_infer->type)));
+                    report.snippet(&resolved.scope->parsed_expressions[resolved.declaration], /* skinny */ true);
+                }
+
+                report.done();
+                return YIELD_ERROR;
+            }
+            else Error("Expected a unit type as an operand to 'run', but got %.", vague_type_description(unit, op_infer->type));
+        }
+
+        Type const* type = get_constant_type(block, expr->unary_operand);
+        if (!type) WaitOperand(expr->unary_operand);
+
+        User_Type* data = get_user_type_data(env, *type);
+        if (!data)
+            Error("Expected a unit type as an operand to 'run', but got %.", exact_type_description(unit, *type));
+
+        assert(data->unit->entry_block);
+        assert(data->unit->entry_block->flags & BLOCK_IS_MATERIALIZED);
+
+        Unit* new_unit = materialize_unit(env, data->unit->entry_block->materialized_from, block);
         new_unit->flags |= UNIT_IS_RUN;
         InferenceComplete();
     } break;

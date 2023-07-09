@@ -2,8 +2,7 @@
 // =($a: s64, $b: s64)
 // debug a + b;
 
-run
-{
+run unit {
     using System   :: import "system.fun";
     using Compiler :: import "compiler.fun";
 
