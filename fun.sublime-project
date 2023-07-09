@@ -1,0 +1,9 @@
+{
+    "default_line_ending": "unix",
+
+	"folders":
+	[
+		{ "path": "src_fun" },
+        { "path": "src_common" }
+	]
+}
