@@ -120,10 +120,10 @@ static String get_severity_label(bool colored, Severity severity)
 }
 
 
-static const String ASCII_HIGHLIGHT_GREEN = "\x1b[32;4;3;1m"_s;
-static const String ASCII_STRIKETHROUGH   = "\x1b[31;9m"_s;
+static const String ANSI_HIGHLIGHT_GREEN = "\x1b[32;4;3;1m"_s;
+static const String ANSI_STRIKETHROUGH   = "\x1b[31;9m"_s;
 
-static String apply_ascii_escape_sequence(Region* region, String string, String escape_sequence)
+static String apply_ansi_escape_sequence(Region* region, String string, String escape_sequence)
 {
     auto split_whitespace = [](String *s, String* out_leading, String* out_trailing)
     {
@@ -241,8 +241,8 @@ Report& Report::internal_suggestion_insert(String left, Token_Info info, String 
 
     if (colored)
     {
-        left  = apply_ascii_escape_sequence(temp, left,  ASCII_HIGHLIGHT_GREEN);
-        right = apply_ascii_escape_sequence(temp, right, ASCII_HIGHLIGHT_GREEN);
+        left  = apply_ansi_escape_sequence(temp, left,  ANSI_HIGHLIGHT_GREEN);
+        right = apply_ansi_escape_sequence(temp, right, ANSI_HIGHLIGHT_GREEN);
     }
 
     String code_before, code_inside, code_after;
@@ -258,7 +258,7 @@ Report& Report::internal_suggestion_replace(Token_Info info, Token_Info replace_
 {
     String replacement = string_from_token_info(ctx, replace_with);
     if (colored)
-        replacement = apply_ascii_escape_sequence(temp, replacement, ASCII_HIGHLIGHT_GREEN);
+        replacement = apply_ansi_escape_sequence(temp, replacement, ANSI_HIGHLIGHT_GREEN);
 
     if (skinny) before = after = 0;
     String source;
@@ -284,7 +284,7 @@ Report& Report::internal_suggestion_remove(Token_Info info, bool skinny, umm bef
     String code_before, code_inside, code_after;
     split_source_around_token_info(&info, source_offset, source, &code_before, &code_inside, &code_after);
 
-    code_inside = apply_ascii_escape_sequence(temp, code_inside, ASCII_STRIKETHROUGH);
+    code_inside = apply_ansi_escape_sequence(temp, code_inside, ANSI_STRIKETHROUGH);
     source = concatenate(temp, code_before, code_inside, code_after);
 
     String file = skinny ? get_file_name(ctx->sources[info.source_index].name) : ""_s;
