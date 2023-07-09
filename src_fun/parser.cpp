@@ -587,7 +587,16 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
                 if (!parse_expression_leaf(stream, builder, &type, parse_flags | PARSE_ALLOW_INFERRED_TYPE_ALIAS))
                     return false;
 
-                if (maybe_take_atom(stream, ATOM_EQUAL))
+                if (maybe_take_atom(stream, ATOM_COLON))
+                {
+                    return Report(stream->ctx)
+                        .intro(SEVERITY_ERROR, &builder->expressions[type])
+                        .message("An alias does not have an inferrable runtime type.\n"
+                                 "Try removing the type:"_s)
+                        .suggestion_remove(&builder->expressions[type])
+                        .done();
+                }
+                else if (maybe_take_atom(stream, ATOM_EQUAL))
                 {
                     if (maybe_take_atom(stream, ATOM_UNDERSCORE))
                     {
@@ -624,9 +633,6 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
         Token* name = stream->cursor;
         if (!take_atom(stream, ATOM_FIRST_IDENTIFIER, "Expected the type alias name after '$'."_s))
             return false;
-
-        if (lookahead_atom(stream, ATOM_COLON, 0))
-            return ReportError(stream->ctx, stream->cursor - 2, "An alias can't have an inferred type because aliases don't have assigned runtime types."_s);
 
         Parsed_Expression* expr = add_expression(builder, EXPRESSION_DECLARATION, start, stream->cursor - 1, out_expression);
         expr->flags |= EXPRESSION_HAS_TO_BE_EXTERNALLY_INFERRED | EXPRESSION_DECLARATION_IS_ALIAS | EXPRESSION_DECLARATION_IS_INFERRED_ALIAS;

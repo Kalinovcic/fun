@@ -895,6 +895,7 @@ struct Report
     inline Report& snippet(auto at, bool skinny = false, umm before = 2, umm after = 1) { return internal_snippet(convert(at), skinny, before, after); }
     inline Report& suggestion_insert(String left, auto at, String right, bool skinny = false, umm before = 2, umm after = 1) { return internal_suggestion_insert(left, convert(at), right, skinny, before, after); }
     inline Report& suggestion_replace(auto at, auto replace_with, bool skinny = false, umm before = 2, umm after = 1) { return internal_suggestion_replace(convert(at), convert(replace_with), skinny, before, after); }
+    inline Report& suggestion_remove(auto at, bool skinny = false, umm before = 2, umm after = 1) { return internal_suggestion_remove(convert(at), skinny, before, after); }
     inline Report& part(auto at, String msg, Severity severity = SEVERITY_ERROR)
     {
         first_part ? intro(severity, at) : continuation(at);
@@ -913,6 +914,7 @@ private:
     Report& internal_snippet(Token_Info info, bool skinny, umm before, umm after);
     Report& internal_suggestion_insert(String left, Token_Info info, String right, bool skinny, umm before, umm after);
     Report& internal_suggestion_replace(Token_Info info, Token_Info replace_with, bool skinny, umm before, umm after);
+    Report& internal_suggestion_remove(Token_Info info, bool skinny, umm before, umm after);
 
     inline Token_Info convert(Token_Info info)        const { return  info;                   }
     inline Token_Info convert(Token_Info const* info) const { return *info;                   }
