@@ -432,11 +432,10 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
             builder->expressions[*out_expression].flags |= EXPRESSION_IS_IN_PARENTHESES;
         }
     }
-    else if (maybe_take_atom(stream, ATOM_IMPORT) || maybe_take_atom(stream, ATOM_RUN) || maybe_take_atom(stream, ATOM_UNIT) || maybe_take_atom(stream, ATOM_STRUCT))
+    else if (maybe_take_atom(stream, ATOM_IMPORT) || maybe_take_atom(stream, ATOM_UNIT) || maybe_take_atom(stream, ATOM_STRUCT))
     {
         bool is_struct = (start->atom == ATOM_STRUCT);
         bool is_import = (start->atom == ATOM_IMPORT);
-        bool is_run    = (start->atom == ATOM_RUN);
 
         Block* block;
         if (is_import)
@@ -458,9 +457,21 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
         if (!block)
             return false;
 
-        Parsed_Expression* expr = add_expression(builder, is_run ? EXPRESSION_RUN : EXPRESSION_UNIT, start, stream->cursor - 1, out_expression);
+        Parsed_Expression* expr = add_expression(builder, EXPRESSION_UNIT, start, stream->cursor - 1, out_expression);
         if (is_import) expr->flags |= EXPRESSION_UNIT_IS_IMPORT;
         expr->parsed_block = block;
+    }
+    else if (maybe_take_atom(stream, ATOM_RUN))
+    {
+        if (lookahead_atom(stream, ATOM_LEFT_BRACE, 0))
+            return Report(stream->ctx)
+                .intro(SEVERITY_ERROR, stream->cursor)
+                .message("'run' expects a unit expression, not a block.\n"
+                         "Try passing a unit type instead."_s)
+                .suggestion_insert("unit "_s, stream->cursor, ""_s)
+                .done();
+
+        if (!make_unary(EXPRESSION_RUN, parse_flags)) return false;
     }
     else if (maybe_take_atom(stream, ATOM_BANG))        { if (!make_unary(EXPRESSION_NOT,         parse_flags))                                   return false; }
     else if (maybe_take_atom(stream, ATOM_MINUS))       { if (!make_unary(EXPRESSION_NEGATE,      parse_flags))                                   return false; }
@@ -949,7 +960,7 @@ static bool parse_statement(Token_Stream* stream, Block_Builder* builder)
                 .intro(SEVERITY_WARNING, expr)
                 .message("Block expression has no effect.\n"
                          "It looks like you're trying to call it, but in that case you have to place the block inside parentheses."_s)
-                .suggestion("("_s, expr, ")"_s)
+                .suggestion_insert("("_s, expr, ")"_s)
                 .done();
         else
             report_error(stream->ctx, expr, "Block expression has no effect."_s, SEVERITY_WARNING);

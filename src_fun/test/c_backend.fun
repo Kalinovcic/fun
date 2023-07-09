@@ -4,7 +4,7 @@ using Self     :: import "c_backend.fun";
 using System   :: import "system.fun";
 using Compiler :: import "compiler.fun";
 
-run {
+run unit {
     mem: Region;
 
     Big_Thing1 :: struct {
