@@ -41,6 +41,7 @@ static void lex_init(Compiler* ctx)
     AddKeyword(ATOM_F64,          "f64"_s);
     AddKeyword(ATOM_BOOL,         "bool"_s);
     AddKeyword(ATOM_STRUCT,       "struct"_s);
+    AddKeyword(ATOM_ENUM,         "enum"_s);
     AddKeyword(ATOM_STRING,       "string"_s);
     AddKeyword(ATOM_IMPORT,       "import"_s);
     AddKeyword(ATOM_USING,        "using"_s);

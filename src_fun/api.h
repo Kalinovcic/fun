@@ -69,6 +69,7 @@ enum Atom: u32
     ATOM_F64,                   // f64
     ATOM_BOOL,                  // bool
     ATOM_STRUCT,                // struct
+    ATOM_ENUM,                  // enum
     ATOM_STRING,                // string
 
     // keywords

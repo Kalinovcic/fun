@@ -3,6 +3,14 @@
 // debug a + b;
 
 run unit {
+    Enumeracija :: enum {
+        A :: 1;
+        B :: 2;
+        C :: 3;
+    }
+
+    debug Enumeracija.B;
+
     using System   :: import "system.fun";
     using Compiler :: import "compiler.fun";
 

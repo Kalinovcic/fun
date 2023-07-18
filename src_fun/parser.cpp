@@ -108,12 +108,48 @@ struct Block_Builder
     Dynamic_Array<Expression> imperative_order;
 };
 
+// IMPORTANT! Make sure to not use the returned pointer after calling add_expression() again!
+static Parsed_Expression* add_expression(Block_Builder* builder, Expression_Kind kind, Token* from, Token* to, Expression* out_id)
+{
+    *out_id = (Expression) builder->expressions.count;
+    Parsed_Expression* result = reserve_item(&builder->expressions);
+    result->kind  = kind;
+    result->flags = 0;
+    result->from  = *from;
+    result->to    = *to;
+    result->visibility_limit = (Visibility) builder->imperative_order.count;
+    return result;
+}
+
 static bool is_token_before(Compiler* ctx, Token* a, Token* b)
 {
     auto* a_info = get_token_info(ctx, a);
     auto* b_info = get_token_info(ctx, b);
     assert(a_info->source_index == b_info->source_index);
     return a_info->offset < b_info->offset;
+}
+
+static void add_comment_expressions_to_block(Token_Stream* stream, Block_Builder* builder)
+{
+    // The regular token stream cursor points to the next token to be parsed.
+    // We insert all comments in front of the cursor.
+    while (stream->comment_cursor < stream->comment_end)
+    {
+        auto* token = stream->comment_cursor;
+        if (stream->cursor < stream->end && is_token_before(stream->ctx, stream->cursor, token))
+            break;
+
+        Expression comment_expr_id;
+        auto* expr = add_expression(builder, EXPRESSION_COMMENT, token, token, &comment_expr_id);
+        expr->comment.token = *token;
+        // The comment's relation to neighboring expressions is determined when
+        // finishing building the block in finish_building.
+        expr->comment.relation = COMMENT_IS_ALONE;
+        expr->comment.relative_to = NO_EXPRESSION;
+        stream->comment_cursor++;
+
+        add_item(&builder->imperative_order, &comment_expr_id);
+    }
 }
 
 static void finish_building(Compiler* ctx, Block_Builder* builder)
@@ -206,19 +242,6 @@ static void finish_building(Compiler* ctx, Block_Builder* builder)
     free_heap_array(&builder->imperative_order);
 }
 
-// IMPORTANT! Make sure to not use the returned pointer after calling add_expression() again!
-static Parsed_Expression* add_expression(Block_Builder* builder, Expression_Kind kind, Token* from, Token* to, Expression* out_id)
-{
-    *out_id = (Expression) builder->expressions.count;
-    Parsed_Expression* result = reserve_item(&builder->expressions);
-    result->kind  = kind;
-    result->flags = 0;
-    result->from  = *from;
-    result->to    = *to;
-    result->visibility_limit = (Visibility) builder->imperative_order.count;
-    return result;
-}
-
 static Parsed_Expression* add_expression(Block_Builder* builder, Expression_Kind kind, Token* from, Expression to, Expression* out_id)
 {
     return add_expression(builder, kind, from, &builder->expressions[to].to, out_id);
@@ -297,6 +320,9 @@ enum: Parse_Flags
 };
 
 static bool parse_expression(Token_Stream* stream, Block_Builder* builder, Expression* out_expression, Parse_Flags parse_flags);
+
+// @Temporary
+static bool parse_statement(Token_Stream* stream, Block_Builder* builder);
 
 static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, Expression* out_expression, Parse_Flags parse_flags)
 {
@@ -552,6 +578,44 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
 
         Parsed_Expression* expr = add_expression(builder, EXPRESSION_UNIT, start, stream->cursor - 1, out_expression);
         if (is_import) expr->flags |= EXPRESSION_UNIT_IS_IMPORT;
+        expr->parsed_block = block;
+    }
+    else if (maybe_take_atom(stream, ATOM_ENUM))
+    {
+        auto block_start = stream->cursor;
+        if (!take_atom(stream, ATOM_LEFT_BRACE, "Expected '{' after 'enum'."_s))
+            return false;
+
+        // @Incomplete - reconsider what to do here... how do we mark enums,
+        // what expression is it, and
+        Block* block;
+        {
+            enum {} builder;  // don't use builder in this scope
+
+            block = PushValue(&stream->ctx->parser_memory, Block);
+            block->flags = BLOCK_IS_UNIT | BLOCK_HAS_STRUCTURE_PLACEMENT;
+            block->from = *block_start;
+
+            Block_Builder enum_builder = {};
+            enum_builder.block = block;
+            Defer(finish_building(stream->ctx, &enum_builder));
+
+            while (stream->cursor < stream->end && stream->cursor->atom != ATOM_RIGHT_BRACE)
+            {
+                add_comment_expressions_to_block(stream, &enum_builder);
+                // @Incomplete
+                if (!parse_statement(stream, &enum_builder)) return NULL;
+                if (!semicolon_after_statement(stream)) return NULL;
+                add_comment_expressions_to_block(stream, &enum_builder);
+            }
+            Token* block_end = stream->cursor;
+            if (!take_atom(stream, ATOM_RIGHT_BRACE, "Enum was not closed by '}'.\n"
+                                                     "(Check for mismatched braces.)"_s))
+                return NULL;
+            block->to = *block_end;
+        }
+
+        Parsed_Expression* expr = add_expression(builder, EXPRESSION_UNIT, start, stream->cursor - 1, out_expression);
         expr->parsed_block = block;
     }
     else if (maybe_take_atom(stream, ATOM_RUN))
@@ -1075,29 +1139,6 @@ static bool parse_statement(Token_Stream* stream, Block_Builder* builder)
     return true;
 }
 
-static void add_comment_expressions_to_block(Token_Stream* stream, Block_Builder* builder)
-{
-    // The regular token stream cursor points to the next token to be parsed.
-    // We insert all comments in front of the cursor.
-    while (stream->comment_cursor < stream->comment_end)
-    {
-        auto* token = stream->comment_cursor;
-        if (stream->cursor < stream->end && is_token_before(stream->ctx, stream->cursor, token))
-            break;
-
-        Expression comment_expr_id;
-        auto* expr = add_expression(builder, EXPRESSION_COMMENT, token, token, &comment_expr_id);
-        expr->comment.token = *token;
-        // The comment's relation to neighboring expressions is determined when
-        // finishing building the block in finish_building.
-        expr->comment.relation = COMMENT_IS_ALONE;
-        expr->comment.relative_to = NO_EXPRESSION;
-        stream->comment_cursor++;
-
-        add_item(&builder->imperative_order, &comment_expr_id);
-    }
-}
-
 static Block* parse_block(Token_Stream* stream, flags32 flags)
 {
     Compiler* ctx = stream->ctx;
@@ -1145,7 +1186,7 @@ static Block* parse_block(Token_Stream* stream, flags32 flags)
     }
     else
     {
-        return (Block*) ReportError(stream->ctx, next_token_or_eof(stream), "Expected '{' or 'do' to start a block."_s);
+        return (Block*) ReportError(stream->ctx, next_token_or_eof(stream), "Expected '{' or '=>' to start a block."_s);
     }
 }
 
