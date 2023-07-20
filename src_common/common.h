@@ -4301,12 +4301,20 @@ bool get_process_id(Process* process, u32* out_process_id);
 void terminate_process_without_waiting(Process* process);
 
 #if defined(OS_WINDOWS)
-constexpr double WAIT_FOR_PROCESS_FOREVER = -1234567890;
-u32 wait_for_process(Process* process, double seconds = WAIT_FOR_PROCESS_FOREVER);
-bool wait_for_process(Process* process, double seconds, u32* out_exit_code);
 u32 terminate_and_wait_for_process(Process* process);
 bool is_process_running(Process* process);
 #endif
+
+constexpr double WAIT_FOR_PROCESS_FOREVER = -1234567890;
+bool wait_for_process(Process* process, double seconds, u32* out_exit_code);
+
+inline u32 wait_for_process(Process* process, double seconds = WAIT_FOR_PROCESS_FOREVER)
+{
+    u32 exit_code;
+    if (!wait_for_process(process, seconds, &exit_code))
+        return -1;
+    return exit_code;
+}
 
 bool wait_for_process_by_id(u32 id);
 bool terminate_and_wait_for_process(u32 id);

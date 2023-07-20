@@ -18,6 +18,8 @@
 #include <sys/utsname.h>
 #include <sys/sendfile.h>
 #include <sys/prctl.h>
+#include <sys/wait.h>
+
 
 EnterApplicationNamespace
 
@@ -1282,6 +1284,57 @@ void terminate_process_without_waiting(Process* process)
 #if !defined(SYS_pidfd_open) && defined(__x86_64__) // just to be sure.
 #define SYS_pidfd_open 434
 #endif
+
+bool wait_for_process(struct Process* process, double seconds, u32* out_exit_code)
+{
+    if (process->pid == 0)
+    {
+        *out_exit_code = -1;
+        return false;
+    }
+
+    pid_t pid = process->pid;
+
+    if (seconds == WAIT_FOR_PROCESS_FOREVER)
+    {
+        int status;
+        if (waitpid(pid, &status, 0) > 0)
+        {
+            if (WIFEXITED(status))
+                *out_exit_code = WEXITSTATUS(status);
+            else
+                *out_exit_code = -1;
+
+            process->pid = 0;
+            return true;
+        }
+    }
+    else
+    {
+        int status;
+        QPC qpc_timeout = qpc_from_seconds(seconds);
+        QPC start_time  = current_qpc();
+        do
+        {
+            if (waitpid(pid, &status, WNOHANG) > 0)
+            {
+                if (WIFEXITED(status))
+                    *out_exit_code = WEXITSTATUS(status);
+                else
+                    *out_exit_code = -1;
+
+                process->pid = 0;
+                return true;
+            }
+
+            usleep(10000); // sleep for 10ms
+        }
+        while (current_qpc() - start_time <= qpc_timeout);
+    }
+
+    *out_exit_code = -1;
+    return false;
+}
 
 bool wait_for_process_by_id(u32 id)
 {
