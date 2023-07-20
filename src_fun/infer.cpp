@@ -188,6 +188,7 @@ static Find_Result find_declaration_internal(
         bool allow_alias_using_traversal,
         Dynamic_Array<Block*>* visited_scopes)
 {
+    Find_Result status = FIND_FAILURE;
     while (scope)
     {
         For (*visited_scopes)
@@ -199,17 +200,32 @@ static Find_Result find_declaration_internal(
         for (Expression id = {}; id < scope->parsed_expressions.count; id = (Expression)(id + 1))
         {
             auto* expr = &scope->parsed_expressions[id];
-            if (expr->kind != EXPRESSION_DECLARATION) continue;
-
-            if (expr->declaration.name.atom != name->atom) continue;
-            if ((expr->flags & EXPRESSION_DECLARATION_IS_ORDERED) &&
-                (expr->visibility_limit >= visibility_limit || visibility_limit == NO_VISIBILITY))
+            // if the name is deleted, forget it
+            if (expr->kind == EXPRESSION_DELETE &&
+                (expr->visibility_limit <= visibility_limit || visibility_limit == NO_VISIBILITY) &&
+                expr->deleted_name.atom == name->atom)
+            {
+                *out_decl_scope = scope;
+                *out_decl_expr = id;
+                status = FIND_DELETED;
                 continue;
-
+            }
+            // if we found a name and didn't delete it, no need to keep looking
+            else if (status != FIND_FAILURE && status != FIND_DELETED) continue;
+            // if it's not a declaration of the name we want, don't care
+            else if (expr->kind != EXPRESSION_DECLARATION ||
+                     expr->declaration.name.atom != name->atom) continue;
+            // if the declaration is not visible, don't care
+            else if ((expr->flags & EXPRESSION_DECLARATION_IS_ORDERED) &&
+                     (expr->visibility_limit >= visibility_limit ||
+                            visibility_limit == NO_VISIBILITY)) continue;
+            // we found the name, but keep looking since it might have been deleted
             *out_decl_scope = scope;
             *out_decl_expr = id;
-            return FIND_SUCCESS;
+            status = FIND_SUCCESS;
         }
+        if (status != FIND_FAILURE && status != FIND_DELETED)
+            return status;
 
         // 2: try to find declarations from a used scope
         if (out_use_chain)
@@ -217,15 +233,30 @@ static Find_Result find_declaration_internal(
             for (Expression id = {}; id < scope->parsed_expressions.count; id = (Expression)(id + 1))
             {
                 auto* expr = &scope->parsed_expressions[id];
-                if (expr->kind != EXPRESSION_DECLARATION) continue;
-                if (!(expr->flags & EXPRESSION_DECLARATION_IS_USING)) continue;
+
+                // if the name is deleted, forget it
+                if (expr->kind == EXPRESSION_DELETE &&
+                    (expr->visibility_limit <= visibility_limit || visibility_limit == NO_VISIBILITY) &&
+                    expr->deleted_name.atom == name->atom)
+                {
+                    *out_decl_scope = scope;
+                    *out_decl_expr = id;
+                    status = FIND_DELETED;
+                    continue;
+                }
+                // if we found a name and didn't delete it, no need to keep looking
+                else if (status != FIND_FAILURE && status != FIND_DELETED) continue;
+                // if it's not a using declaration, don't care
+                if (expr->kind != EXPRESSION_DECLARATION ||
+                    !(expr->flags & EXPRESSION_DECLARATION_IS_USING)) continue;
 
                 auto* infer = &scope->inferred_expressions[id];
                 if (infer->type == INVALID_TYPE)
                 {
                     *out_decl_scope = scope;
                     *out_decl_expr  = id;
-                    return FIND_WAIT;
+                    status = FIND_WAIT;
+                    continue;
                 }
 
                 Type user_type = infer->type;
@@ -237,7 +268,8 @@ static Find_Result find_declaration_internal(
                     {
                         *out_decl_scope = scope;
                         *out_decl_expr  = id;
-                        return FIND_WAIT;
+                        status = FIND_WAIT;
+                        continue;
                     }
                     user_type = *constant_type;
                     using_visibility = NO_VISIBILITY;
@@ -253,14 +285,23 @@ static Find_Result find_declaration_internal(
                                                                /* allow_alias_using_traversal */ false,
                                                                visited_scopes);
                 if (result == FIND_FAILURE) continue;
-                if (result == FIND_WAIT) return FIND_WAIT;
+                if (result == FIND_DELETED) continue;
+                if (result == FIND_WAIT)
+                {
+                    status = FIND_WAIT;
+                    continue;
+                }
                 assert(result == FIND_SUCCESS);
 
                 Resolved_Name::Use use = { scope, id };
                 insert_item(out_use_chain, &use, 0);
-                return FIND_SUCCESS;
+                status = FIND_SUCCESS;
             }
         }
+
+        // if deleted, found, or need to wait, don't recurse to the parent
+        if (status != FIND_FAILURE)
+            return status;
 
         // 3: try to recurse to parent scope
         if (!allow_parent_traversal)
@@ -953,6 +994,15 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
             Find_Result result = find_declaration(env, name, block, expr->visibility_limit, &resolved.scope, &resolved.declaration, &resolved.use_chain);
             if (result == FIND_WAIT)
                 Wait(WAITING_ON_USING_TYPE, resolved.declaration, resolved.scope);
+            if (result == FIND_DELETED)
+            {
+                Report(ctx)
+                    .intro(SEVERITY_ERROR, expr)
+                    .message(Format(temp, "Can't find '%'. The name was deleted here.", get_identifier(ctx, name)))
+                    .snippet(&resolved.scope->parsed_expressions[resolved.declaration])
+                    .done();
+                return YIELD_ERROR;
+            }
             if (result == FIND_FAILURE)
             {
                 String error = Format(temp, "Can't find '%'.", get_identifier(ctx, name));
@@ -2133,6 +2183,13 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
 
         Unit* new_unit = materialize_unit(env, data->unit->entry_block->materialized_from, block);
         new_unit->flags |= UNIT_IS_RUN;
+        InferenceComplete();
+    } break;
+
+    case EXPRESSION_DELETE:
+    {
+        infer->flags |= INFERRED_EXPRESSION_IS_NOT_EVALUATED_AT_RUNTIME;
+        InferType(TYPE_VOID);
         InferenceComplete();
     } break;
 

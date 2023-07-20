@@ -1048,10 +1048,14 @@ static bool parse_statement(Token_Stream* stream, Block_Builder* builder)
 {
     Token* start = stream->cursor;
     Expression expression;
-    if (maybe_take_atom(stream, ATOM_COMMENT))
+    if (maybe_take_atom(stream, ATOM_DELETE))
     {
-        Parsed_Expression* expr = add_expression(builder, EXPRESSION_COMMENT, start, start, &expression);
-        expr->literal = *start;
+        Token* name = stream->cursor;
+        if (!take_atom(stream, ATOM_FIRST_IDENTIFIER, "Expected an identifier after the 'delete' keyword."_s))
+            return false;
+
+        Parsed_Expression* expr = add_expression(builder, EXPRESSION_DELETE, start, stream->cursor - 1, &expression);
+        expr->deleted_name = *name;
     }
     else if (!parse_expression(stream, builder, &expression, PARSE_ALLOW_BLOCKS))
         return false;

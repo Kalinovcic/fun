@@ -88,6 +88,7 @@ enum Atom: u32
     ATOM_DEBUG,                 // debug
     ATOM_DEBUG_ALLOC,           // debug_alloc
     ATOM_DEBUG_FREE,            // debug_free
+    ATOM_DELETE,                // delete
     ATOM_IF,                    // if
     ATOM_ELSE,                  // else
     ATOM_ELIF,                  // elif
@@ -345,6 +346,7 @@ enum Expression_Kind: u16
     // other
     EXPRESSION_DECLARATION,
     EXPRESSION_RUN,
+    EXPRESSION_DELETE,
 };
 
 enum: flags16
@@ -390,6 +392,7 @@ struct Parsed_Expression
     union
     {
         Token         literal;
+        Token         deleted_name;
         Token         intrinsic_name;
         Expression    unary_operand;
         Type          parsed_type;
@@ -828,6 +831,7 @@ enum Find_Result
 {
     FIND_SUCCESS,
     FIND_FAILURE,
+    FIND_DELETED,
     FIND_WAIT,
 };
 
