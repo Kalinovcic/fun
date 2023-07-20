@@ -9,6 +9,9 @@
 EnterApplicationNamespace
 
 
+static const String TEST_DIRECTORY = "test"_s;
+
+
 extern "C" int main(int argc, char** argv)
 {
     /*add_log_handler([](String severity, String subsystem, String msg)
@@ -32,7 +35,7 @@ extern "C" int main(int argc, char** argv)
 
         Testing_Context context = {};
         Defer(free_test_suite(&context));
-        if (!initialize_test_suite(&context, "."_s)) return 1;
+        if (!initialize_test_suite(&context, TEST_DIRECTORY)) return 1;
         run_tests(&context, argv[0]);
 
         return 0;
@@ -42,7 +45,7 @@ extern "C" int main(int argc, char** argv)
     {
         Testing_Context context = {};
         Defer(free_test_suite(&context));
-        if (!initialize_test_suite(&context, "."_s)) return 1;
+        if (!initialize_test_suite(&context, TEST_DIRECTORY)) return 1;
 
         umm iteration = 0;
         while (true)

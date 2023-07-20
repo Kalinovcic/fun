@@ -197,14 +197,13 @@ bool parse_test_file(Testing_Context* context, String relative_path)
 
         // parse source until we get to a //# line
         String_Concatenator code_cat = {};
-        do
+        while (true)
         {
             add(&code_cat, line_preserved_whitespace);
             add(&code_cat, "\n"_s);
-            if (peek_test_line()) break;
+            if (!contents || peek_test_line()) break;
             consume_test_line();
         }
-        while (contents);
 
         test.code = resolve_to_string_and_free(&code_cat, &context->memory);
 
@@ -391,18 +390,16 @@ bool run_tests(Testing_Context* context, char* argv0, bool only_log_fails)
             if (!only_log_fails)
             {
                 String path_copy = it->path;
-                Print("Running test (% / %) %/%",
+                String test_name = Format(temp, "%/%", consume_until(&path_copy, ".test.fun"_s), it->id);
+
+                Print("Running test (% / %) %",
                       u64_format(test_index, digits),
                       u64_format(context->tests.count, digits),
-                      consume_until(&path_copy, ".test.fun"_s),
-                      it->id);
+                      test_name);
 
-                s64 pad = 32 - it->id.length;
+                s64 pad = 48 - test_name.length;
                 for (s64 i = 0; i < pad; i++) Print(".");
             }
-
-            //assert(get_process_id(&it->process, &it->pid));
-            //u32 exit_code = wait_for_process_by_id(it->pid);
 
             u32 exit_code = 1;
             bool timed_out = !wait_for_process(&it->process, 10.0, &exit_code); // wait for up to 10s
@@ -471,11 +468,8 @@ bool run_tests(Testing_Context* context, char* argv0, bool only_log_fails)
             Print("\n");
         }
 
-        Print("cmd to run '%'", it->id);
-        s64 pad = 32 - it->id.length;
-        for (s64 i = 0; i < pad; i++) Print(" ");
-
-        Print("% -test_runner -test_path:% -seed:%\n",
+        Print("cmd to run '%':\n", it->id);
+        Print("    % -test_runner -test_path:% -seed:%\n",
               argv0, get_test_bin_file_path(it), it->rng_seed);
     }
 
