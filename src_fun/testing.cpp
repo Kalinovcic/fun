@@ -226,6 +226,8 @@ bool parse_test_file(Testing_Context* context, String relative_path)
 static bool run_code_of_test(Test_Case* test)
 {
     String_Concatenator code_cat = {};
+    add(&code_cat, "test_assert :: (condition: bool) {} intrinsic \"test_assert\";");
+
     for (umm i = 1; i < test->first_line_of_code; i++)
         add(&code_cat, "\n"_s);
     add(&code_cat, test->code);

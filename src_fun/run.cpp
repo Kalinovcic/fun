@@ -276,6 +276,16 @@ static bool run_intrinsic(User* user, Unit* unit, byte* storage, Block* block, S
         child_env->puppeteer_event_is_actionable = false;
         child_env->puppeteer_event = { PIPELINE_TASK_RUN, unit };
     }
+    else if (intrinsic == "test_assert"_s)
+    {
+        bool* condition_ptr;
+        get_runtime_parameter("condition"_s, &condition_ptr);
+        if (!(*condition_ptr))
+        {
+            fprintf(stderr, "Assertion failure!\n");
+            exit(2);
+        }
+    }
     else
     {
         fprintf(stderr, "User is attempting to run an unknown intrinsic '%.*s'\nAborting...\n", StringArgs(intrinsic));
