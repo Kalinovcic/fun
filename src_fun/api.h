@@ -10,6 +10,7 @@ EnterApplicationNamespace
 bool int_get_abs_u64(u64* out, Integer const* i);
 
 String int_base10(Integer const* integer, Region* memory = temp, umm min_digits = 0);
+String int_base16(Integer const* integer, Region* memory = temp, umm min_digits = 0);
 
 // Always reduced, denominator always positive.
 struct Fraction
@@ -33,6 +34,11 @@ Fraction fract_mul        (Fraction const* a, Fraction const* b);
 bool     fract_div_fract  (Fraction* out, Fraction const* a, Fraction const* b);
 bool     fract_div_whole  (Fraction* out, Fraction const* a, Fraction const* b);
 String   fract_display    (Fraction const* f, Region* memory = temp);
+String   fract_display_hex(Fraction const* f, Region* memory = temp);
+
+// Returns true if the number fits losslessly.
+bool fract_scientific_abs(Fraction const* f, umm count_decimals,
+                          Integer* mantissa, smm* exponent, umm* mantissa_size, umm* msb);
 
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -843,6 +849,32 @@ Find_Result find_declaration(Environment* env, Token const* name,
 
 u64 get_type_size     (Unit* unit, Type type);
 u64 get_type_alignment(Unit* unit, Type type);
+
+struct Numeric_Description
+{
+    bool is_signed;
+    bool is_integer;
+    bool is_floating_point;
+
+    umm bits;
+    umm radix;
+
+    // floating-point only
+    bool supports_subnormal;
+    bool supports_infinity;
+    bool supports_nan;
+
+    umm mantissa_bits;
+    umm significand_bits;
+
+    umm exponent_bits;
+    umm exponent_bias;
+    smm min_exponent;
+    smm min_exponent_subnormal;
+    smm max_exponent;
+};
+
+bool get_numeric_description(Unit* unit, Numeric_Description* desc, Type type);
 
 Constant* get_constant(Block* block, Expression expr, Type type_assertion);
 void set_constant(Block* block, Expression expr, Type type_assertion, Constant* value);

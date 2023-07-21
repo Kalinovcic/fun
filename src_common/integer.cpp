@@ -242,6 +242,17 @@ umm int_log2_abs(Integer const* v)
     return result;
 }
 
+umm int_ctz_abs(Integer const* v)
+{
+    if (!v->size) return 0;
+    umm result = 0;
+    umm i = 0;
+    while (!v->digit[i]) result += DIGIT_BITS, i++;
+    u32 digit = v->digit[i];
+    while (!(digit & 1)) result++, digit >>= 1;
+    return result;
+}
+
 umm int_bytes(Integer const* v)
 {
     return (int_log2_abs(v) / 8) + 1;

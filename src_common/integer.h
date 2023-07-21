@@ -32,6 +32,7 @@ void int_abs(Integer* v);                                           // v = |v|
 void int_abs(Integer* v, Integer const* a);                         // v = |a|
 
 umm  int_log2_abs(Integer const* v);                                // floor(log2(v)), 0 if v = 0
+umm  int_ctz_abs(Integer const* v);                                 // count trailing zeroes, 0 if v = 0
 umm  int_bytes(Integer const* v);                                   // ceil(log256(v)), 1 if v = 0
 smm  int_sign(Integer const* a);                                    // <0 =0 >0
 smm  int_compare_abs(Integer const* a, Integer const* b);           // <0 =0 >0

@@ -705,6 +705,57 @@ static void patch_bytecode(Unit* unit)
                 if (fract->num.negative)
                     constant = -constant;
             }
+            else if (is_floating_point_type(constant_type))
+            {
+                Fraction const* fract = get_constant_number(block, constant_expression);
+                assert(fract);
+
+                Numeric_Description numeric;
+                bool numeric_ok = get_numeric_description(unit, &numeric, constant_type);
+                assert(numeric_ok);
+
+                Integer mantissa = {};
+                smm exponent;
+                umm mantissa_size, msb;
+                umm count_decimals = -numeric.min_exponent_subnormal;
+                bool exact = fract_scientific_abs(fract, count_decimals, &mantissa, &exponent, &mantissa_size, &msb);
+                Defer(int_free(&mantissa));
+
+                assert(numeric.bits <= 64);
+                assert(numeric.bits == numeric.exponent_bits + numeric.significand_bits + 1);
+
+                u64 float_sign = fract_is_negative(fract) ? 1 : 0;
+                u64 float_exponent;
+                u64 float_significand;
+                if (exponent > numeric.max_exponent)  // infinity
+                {
+                    float_exponent = (1ull << numeric.exponent_bits) - 1;
+                    float_significand = 0;
+                }
+                else if (int_is_zero(&mantissa))  // zero
+                {
+                    float_exponent = 0;
+                    float_significand = 0;
+                }
+                else
+                {
+                    if (exponent < numeric.min_exponent)
+                        float_exponent = 0;  // subnormal
+                    else
+                        float_exponent = exponent + numeric.exponent_bias;
+
+                    umm from = (msb > numeric.mantissa_bits) ? (msb - numeric.mantissa_bits) : 0;
+                    float_significand = 0;
+                    for (umm i = 0; i < numeric.significand_bits; i++)
+                        float_significand |= (u64) int_test_bit(&mantissa, from + i) << i;
+                }
+
+                assert(float_exponent    < (1ull << numeric.exponent_bits));
+                assert(float_significand < (1ull << numeric.significand_bits));
+                constant = (float_sign << (numeric.bits - 1))
+                         | (float_exponent << (numeric.significand_bits))
+                         | (float_significand);
+            }
             else if (is_bool_type(constant_type))
                 constant = (*get_constant_bool(block, constant_expression) ? 1 : 0);
             else if (constant_type == TYPE_TYPE)

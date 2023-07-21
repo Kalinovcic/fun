@@ -6,8 +6,10 @@ run unit {
     using System   :: import "system.fun";
     using Compiler :: import "compiler.fun";
 
-    a: u32 = /* zero; */
-    123;
+    // debug cast(f64, 4e308);
+    // debug cast(f64, 1e-1000);
+    // debug cast(f32, 1 %/ 3);
+    debug cast(f32, 0.25);
 
     x: u64 = 1;
     while true {
