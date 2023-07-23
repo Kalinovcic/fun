@@ -1,26 +1,12 @@
-#!/home/kalinovcic/fun/run_tree/fun
-// =($a: s64, $b: s64)
-// debug a + b;
+//# target0
+//#
+//# Random code doing random stuff.
 
 run unit {
-    using System   :: import "system.fun";
-    using Compiler :: import "compiler.fun";
+    // This sucks, these files need to go to a sensible place.
+    using System   :: import "modules/system.fun";
+    using Compiler :: import "modules/compiler.fun";
 
-    // debug cast(f64, 4e308);
-    // debug cast(f64, 1e-1000);
-    // debug cast(f32, 1 %/ 3);
-    debug cast(f32, 0.25);
-
-    x: u64 = 1;
-    while true {
-        if x > 100 {
-            debug x;
-            yield;
-        }
-        x = x + 1;
-    }
-
-/*
     puts(FD_STDOUT, "ello m8\n");
 
 
@@ -39,10 +25,10 @@ run unit {
 
 
 
-    /*asdf: string = "asdf";
-    consume(&lhs: string, &asdf, cast(umm, 1));
+    asdf: string = "asdf";
+    lhs := consume(&asdf, cast(umm, 1));
     debug lhs;
-    debug asdf;*/
+    debug asdf;
 
     foo :: unit
     {
@@ -91,7 +77,7 @@ run unit {
     j: junit;
     goto(codeof j, &j);
 
-    asdf: string = "asdf";
+    asdf = "asdf";
     debug asdf;
 
     asdf.length = cast(umm, 2);
@@ -338,5 +324,110 @@ run unit {
 
     proc_b();
     */
-*/
+
+    debug "end of test!";
+}
+
+
+
+//# c_backend
+
+using Self     :: import "modules/c_backend.fun";
+using System   :: import "modules/system.fun";
+using Compiler :: import "modules/compiler.fun";
+
+run unit {
+    mem: Region;
+
+    Big_Thing1 :: struct {
+        a: u64; b: u64; c: u64; d: u64;
+        e: u64; f: u64; g: u64; h: u64;
+        i: u64; j: u64; k: u64; l: u64;
+        m: u64; n: u64; o: u64; p: u64;
+    }
+
+    Big_Thing :: struct {
+        a: Big_Thing1; b: Big_Thing1; c: Big_Thing1; d: Big_Thing1;
+        e: Big_Thing1; f: Big_Thing1; g: Big_Thing1; h: Big_Thing1;
+        i: Big_Thing1; j: Big_Thing1; k: Big_Thing1; l: Big_Thing1;
+        m: Big_Thing1; n: Big_Thing1; o: Big_Thing1; p: Big_Thing1;
+    }
+
+    Big_Thing2 :: struct {
+        a: Big_Thing; b: Big_Thing; c: Big_Thing; d: Big_Thing;
+        e: Big_Thing; f: Big_Thing; g: Big_Thing; h: Big_Thing;
+        i: Big_Thing; j: Big_Thing; k: Big_Thing; l: Big_Thing;
+        m: Big_Thing; n: Big_Thing; o: Big_Thing; p: Big_Thing;
+    }
+
+    j: umm = 0;
+    while j < 4 {
+        i: umm = 0;
+        while i < 9 {
+            debug push(&mem, Big_Thing).base;
+            i = i + 1;
+        }
+        debug push(&mem, Big_Thing2).base;
+        j = j + 1;
+    }
+
+    cursor(&mem, &cur: Region.Cursor);
+
+    j = 0;
+    while j < 4 {
+        i: umm = 0;
+        while i < 9 {
+            debug push(&mem, Big_Thing).base;
+            i = i + 1;
+        }
+        debug push(&mem, Big_Thing2).base;
+        j = j + 1;
+    }
+
+    rewind(&mem, &cur);
+
+    drop(&mem);
+
+
+    puts(FD_STDOUT, "hello from userland\n");
+
+    settings: Environment_Settings;
+    settings.custom_backend    = false;
+    settings.pointer_size      = 8;
+    settings.pointer_alignment = 8;
+
+    make_environment(&env: &Environment, settings);
+    add_file(env, "src_fun/test/target1.fun");
+
+    more_events := true;
+    while more_events {
+        wait_event(env, &event: Event);
+
+        if event.kind == EVENT_FINISHED
+         => more_events = false;
+        elif event.kind == EVENT_UNIT_REQUIRES_PLACEMENT {
+            debug "need to place something";
+            confirm_place_unit(env, event.unit_ref, zero, zero);
+        }
+        elif event.kind == EVENT_UNIT_WAS_PLACED
+         => debug "a unit was placed, cool";
+        elif event.kind == EVENT_UNIT_REQUIRES_PATCHING {
+            debug "need to patch something";
+            confirm_patch_unit(env, event.unit_ref);
+        }
+        elif event.kind == EVENT_UNIT_WAS_PATCHED
+         => debug "a unit was patched, cool";
+        elif event.kind == EVENT_UNIT_REQUIRES_RUNNING {
+            debug "need to run something";
+            confirm_run_unit(env, event.unit_ref);
+        }
+        elif event.kind == EVENT_UNIT_WAS_RUN
+         => debug "a unit was run, cool";
+        elif event.kind == EVENT_ERROR
+         => debug "an error occured!";
+        else
+         => debug "unrecognized event";
+    }
+
+    puts(FD_STDOUT, "done compiling\n");
 }

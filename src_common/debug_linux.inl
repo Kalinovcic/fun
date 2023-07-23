@@ -45,7 +45,7 @@ void assertion_failure(const char* test, const char* file, int line)
 
     printf("Assertion %s failed!\n%s:%d\n", test, file, line);
     LogError("debug system"_s, "Assertion % failed!\n%:%\n", test, file, line);
-    // print_trace();
+    print_trace();
 
     if (after_crash_dump)
         after_crash_dump();

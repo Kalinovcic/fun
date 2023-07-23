@@ -2187,14 +2187,6 @@ bool get_process_id(Process* process, u32* out_process_id)
     return (process_id != 0);
 }
 
-u32 wait_for_process(Process* process, double seconds)
-{
-    u32 exit_code;
-    if (!wait_for_process(process, seconds, &exit_code))
-        return -1;
-    return exit_code;
-}
-
 bool wait_for_process(Process* process, double seconds, u32* out_exit_code)
 {
     if (!process->handle)
