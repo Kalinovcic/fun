@@ -71,7 +71,13 @@ static Test_Case deserialize_test(String contents)
     return t;
 }
 
-bool parse_test_file(Testing_Context* context, String relative_path)
+static String qualified_test_name(Test_Case* test)
+{
+    String path_copy = test->path;
+    return Format(temp, "%/%", consume_until(&path_copy, ".test.fun"_s), test->id);
+}
+
+bool parse_test_file(Testing_Context* context, String relative_path, Array<String>* tests_to_run_wildcards)
 {
     String full_path = concatenate_path(temp, context->root_directory, relative_path);
     String contents  = {};
@@ -210,8 +216,17 @@ bool parse_test_file(Testing_Context* context, String relative_path)
         if (trim(test.code).length == 0)
             Error("No code for test ID '%',", test.id);
 
-        add_item(&context->tests, &test);
         tests_parsed++;
+
+        String full_name = qualified_test_name(&test);
+        For (*tests_to_run_wildcards)
+        {
+            if (match_wildcard_string(*it, full_name))
+            {
+                add_item(&context->tests, &test);
+                break;
+            }
+        }
     }
 
     if (tests_parsed == 0)
@@ -222,11 +237,9 @@ bool parse_test_file(Testing_Context* context, String relative_path)
 #undef Error
 }
 
-static bool run_code_of_test(Test_Case* test)
+bool run_code_of_test(Test_Case* test)
 {
     String_Concatenator code_cat = {};
-    add(&code_cat, "test_assert :: (condition: bool) {} intrinsic \"test_assert\";");
-
     for (umm i = 1; i < test->first_line_of_code; i++)
         add(&code_cat, "\n"_s);
     add(&code_cat, test->code);
@@ -237,9 +250,26 @@ static bool run_code_of_test(Test_Case* test)
     Environment* env = make_environment(&compiler, NULL);
     assert(pump_pipeline(&compiler));  // force preload to complete
 
+    // @Incomplete - add location information
+    // @Incomplete - better way to import system (not a random relative path)
+
+    Unit* assert_having_unit = materialize_unit(env, parse_top_level_from_memory(&compiler, "<test preload>"_s, R"XXX(
+        using System :: import "modules/system.fun";
+
+        test_assert :: (condition: bool) {
+            if !condition {
+                puts(FD_STDERR, "Assertion failed!\n");
+                raise(SIGKILL);
+            }
+        }
+    )XXX"_s));
+    assert(pump_pipeline(&compiler));  // force assert preload to complete
+
     Block* main = parse_top_level_from_memory(&compiler, "<string>"_s, code);
     if (!main) return false;
-    materialize_unit(env, main);
+
+    main->flags &= ~BLOCK_IS_TOP_LEVEL; // assert block is top level
+    materialize_unit(env, main, assert_having_unit->entry_block);
 
     return pump_pipeline(&compiler);
 }
@@ -247,10 +277,9 @@ static bool run_code_of_test(Test_Case* test)
 
 int test_runner_entry()
 {
-    assert(get_command_line_bool("test_runner"_s));
     assert(get_command_line_integer("seed"_s) != 0);
 
-    String bin_path = get_command_line_string("test_path"_s);
+    String bin_path = get_command_line_string("test_process"_s);
     assert(bin_path);
 
     String bin_test = {};
@@ -265,7 +294,7 @@ int test_runner_entry()
 
 static String get_testing_temp_dir()
 {
-    return concatenate_path(temp, get_executable_directory(), "test_runner_temp"_s);
+    return concatenate_path(temp, get_executable_directory(), "test_env_temp"_s);
 }
 
 static String get_test_bin_file_path(Test_Case* test)
@@ -290,7 +319,7 @@ static String get_test_stderr_path(Test_Case* test)
 }
 
 
-bool initialize_test_suite(Testing_Context* context, String directory)
+bool initialize_test_suite(Testing_Context* context, String directory, Array<String>* tests_to_run_wildcards)
 {
     context->root_directory = allocate_string(&context->memory, directory);
 
@@ -301,8 +330,20 @@ bool initialize_test_suite(Testing_Context* context, String directory)
 
     assert(create_directory(temp_dir));
 
+    // @Temporary - copy the modules directory to not mess up relative import paths.
+    String original_modules_dir = concatenate_path(temp, get_executable_directory(), "../modules"_s);
+    String copied_modules_dir   = concatenate_path(temp, temp_dir, "modules"_s);
+    assert(create_directory_recursive(copied_modules_dir));
+
+    For (list_files(original_modules_dir))
+        assert(copy_file(
+            concatenate_path(temp, original_modules_dir, *it),
+            concatenate_path(temp, copied_modules_dir,   *it),
+            true /* error on overwrite - dir is fresh */
+        ));
+
     For (list_files(context->root_directory, "test.fun"_s))
-        if (!parse_test_file(context, *it)) return false;
+        if (!parse_test_file(context, *it, tests_to_run_wildcards)) return false;
 
     For (context->tests)
     {
@@ -333,7 +374,7 @@ static void batch_for(Array<T> array, umm batch_size, L&& it)
     }
 }
 
-bool run_tests(Testing_Context* context, char* argv0, bool only_log_fails)
+bool run_tests(Testing_Context* context, char* argv0, bool only_log_fails, bool show_explanations)
 {
 
 #define Print(fmt, ...) do {                       \
@@ -349,7 +390,7 @@ bool run_tests(Testing_Context* context, char* argv0, bool only_log_fails)
         get_testing_temp_dir(), /* delete_directory */ false,
         [](String parent, String name, bool is_file, void* userdata)
         {
-            return (!is_file || get_file_extension(name) != "bin-test"_s) ? DELETE_FILE_OR_DIRECTORY : DO_NOT_DELETE;
+            return (is_file && get_file_extension(name) != "bin-test"_s) ? DELETE_FILE_OR_DIRECTORY : DO_NOT_DELETE;
         }, NULL));
 
 
@@ -376,9 +417,8 @@ bool run_tests(Testing_Context* context, char* argv0, bool only_log_fails)
 
             Dynamic_Array<String> args = {};
             Defer(free_heap_array(&args));
-            *reserve_item(&args) = "-test_runner"_s;
-            *reserve_item(&args) = Format(temp, "-test_path:%", get_test_bin_file_path(it));
-            *reserve_item(&args) = Format(temp, "-seed:%",      it->rng_seed);
+            *reserve_item(&args) = Format(temp, "-test_process:%", get_test_bin_file_path(it));
+            *reserve_item(&args) = Format(temp, "-seed:%",         it->rng_seed);
             it->process.arguments = allocate_array(temp, &args);
 
             assert(run_process(&it->process));
@@ -386,22 +426,27 @@ bool run_tests(Testing_Context* context, char* argv0, bool only_log_fails)
 
         For (batch)
         {
+            auto get_stderr = [it]()
+            {
+                String stderr = {};
+                assert(read_entire_file(it->process.file_stderr, &stderr, temp));
+                return stderr;
+            };
+
             test_index++;
             if (!only_log_fails)
             {
-                String path_copy = it->path;
-                String test_name = Format(temp, "%/%", consume_until(&path_copy, ".test.fun"_s), it->id);
-
+                String name = qualified_test_name(it);
                 Print("Running test (% / %) %",
                       u64_format(test_index, digits),
                       u64_format(context->tests.count, digits),
-                      test_name);
+                      name);
 
-                s64 pad = 48 - test_name.length;
+                s64 pad = 48 - name.length;
                 for (s64 i = 0; i < pad; i++) Print(".");
             }
 
-            u32 exit_code = 1;
+            u32 exit_code = 12345;
             bool timed_out = !wait_for_process(&it->process, 10.0, &exit_code); // wait for up to 10s
 
             String fail_explanation = {};
@@ -415,13 +460,15 @@ bool run_tests(Testing_Context* context, char* argv0, bool only_log_fails)
                 if (!it->must_error_to_succeed)
                 {
                     it->passed = (exit_code == 0);
+                    if (!it->passed)
+                        fail_explanation = get_stderr();
                 }
                 else
                 {
                     if (exit_code == 0)
                     {
                         it->passed       = false;
-                        fail_explanation = Format(temp, "The test must error to succeed, but it didn't.");
+                        fail_explanation = Format(temp, "    The test must error to succeed, but it didn't.");
                     }
                     else
                     {
@@ -431,7 +478,7 @@ bool run_tests(Testing_Context* context, char* argv0, bool only_log_fails)
                         it->passed = match_wildcard_string(Format(temp, "*%*", it->error_wildcard), stderr);
                         if (!it->passed)
                             fail_explanation = Format(temp,
-                                "Errored (as it should), but the error does not match the wildcard '%':\n\n%",
+                                "    Errored (as it should), but the error does not match the wildcard '%':\n\n%",
                                 it->error_wildcard, stderr
                             );
                     }
@@ -447,8 +494,8 @@ bool run_tests(Testing_Context* context, char* argv0, bool only_log_fails)
             else
             {
                 Print(FailedLiteral "\n");
-                if (fail_explanation)
-                    Print("    %\n", fail_explanation);
+                if (fail_explanation && show_explanations)
+                    Print("%\n", fail_explanation);
             }
         }
     });
@@ -468,9 +515,9 @@ bool run_tests(Testing_Context* context, char* argv0, bool only_log_fails)
             Print("\n");
         }
 
-        Print("cmd to run '%':\n", it->id);
-        Print("    % -test_runner -test_path:% -seed:%\n",
-              argv0, get_test_bin_file_path(it), it->rng_seed);
+        Print("cmd to run failed test '%':\n", it->id);
+        Print("    % -test % -inline -seed:%\n",
+              argv0, qualified_test_name(it), it->rng_seed);
     }
 
 #undef Print

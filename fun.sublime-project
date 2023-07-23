@@ -4,6 +4,8 @@
 	"folders":
 	[
 		{ "path": "src_fun" },
-        { "path": "src_common" }
+        { "path": "src_common" },
+        { "path": "modules" },
+        { "path": "test" },
 	]
 }

@@ -3,8 +3,8 @@
 // debug a + b;
 
 run unit {
-    using System   :: import "system.fun";
-    using Compiler :: import "compiler.fun";
+    using System   :: import "../../modules/system.fun";
+    using Compiler :: import "../../modules/compiler.fun";
 
     x: u64 = 1;
     while true {

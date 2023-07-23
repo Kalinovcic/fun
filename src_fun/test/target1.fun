@@ -1,0 +1,3 @@
+run unit {
+    debug "hello";
+}

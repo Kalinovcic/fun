@@ -1314,6 +1314,7 @@ bool wait_for_process(struct Process* process, double seconds, u32* out_exit_cod
         int status;
         QPC qpc_timeout = qpc_from_seconds(seconds);
         QPC start_time  = current_qpc();
+        umm attempts = 0;
         do
         {
             if (waitpid(pid, &status, WNOHANG) > 0)
@@ -1327,7 +1328,9 @@ bool wait_for_process(struct Process* process, double seconds, u32* out_exit_cod
                 return true;
             }
 
-            usleep(10000); // sleep for 10ms
+            attempts++;
+            useconds_t wait_us = 1ull << (attempts < 15 ? attempts : 15);
+            usleep(wait_us);
         }
         while (current_qpc() - start_time <= qpc_timeout);
     }

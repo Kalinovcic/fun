@@ -20,6 +20,8 @@ struct Test_Case
     bool    passed;
 };
 
+bool run_code_of_test(Test_Case* test);
+
 struct Testing_Context
 {
     Region memory;
@@ -30,11 +32,11 @@ struct Testing_Context
 };
 
 
-bool initialize_test_suite(Testing_Context* context, String directory);
+bool initialize_test_suite(Testing_Context* context, String directory, Array<String>* tests_to_run_wildcards);
 void free_test_suite      (Testing_Context* context);
 
 // returns true if all tests pass
-bool run_tests(Testing_Context* context, char* argv0, bool only_log_fails = false);
+bool run_tests(Testing_Context* context, char* argv0, bool only_log_fails = false, bool show_explanations = true);
 
 int test_runner_entry();
 
