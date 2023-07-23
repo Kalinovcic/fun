@@ -70,7 +70,6 @@ static void int_base10(String_Concatenator* cat, Integer const* i, umm min_digit
     }
 }
 
-
 String int_base10(Integer const* integer, Region* memory, umm min_digits)
 {
     Integer i = int_clone(integer);
@@ -96,6 +95,33 @@ String int_base10(Integer const* integer, Region* memory, umm min_digits)
         str[str.length - i - 1] = temp;
     }
     return str;
+}
+
+String int_base16(Integer const* integer, Region* memory, umm min_digits)
+{
+    if (int_is_zero(integer))
+        return allocate_string(memory, "0"_s);
+
+    String_Concatenator cat = {};
+    CompileTimeAssert(DIGIT_BITS % 4 == 0);
+    FormatAdd(&cat, "%", hex_format(integer->digit[integer->size - 1]));
+    for (umm i = integer->size - 1; i; i--)
+        FormatAdd(&cat, "%", hex_format(integer->digit[i - 1], DIGIT_BITS / 4));
+
+    String_Concatenator cat2 = {};
+    if (integer->negative)
+    {
+        min_digits++;
+        add(&cat2, "-"_s);
+    }
+    umm zeroes_to_add = 0;
+    if (min_digits > cat.count)
+        zeroes_to_add = min_digits - cat.count;
+    while (zeroes_to_add--)
+        add(&cat2, "0"_s);
+    steal(&cat2, &cat);
+
+    return resolve_to_string_and_free(&cat2, memory);
 }
 
 
@@ -274,7 +300,7 @@ String fract_display(Fraction const* f, Region* memory)
         assert(!int_is_zero(&remainder));
         int_abs(&remainder);
 
-        umm count_digits = 10;
+        umm count_digits = 16;
         Integer digits = int_pow(10, count_digits);
         int_mul(&digits, &remainder);
         Defer(int_free(&digits));
@@ -297,11 +323,116 @@ String fract_display(Fraction const* f, Region* memory)
             }
         }
 
-        String result = concatenate(memory, int_base10(&int_part), "."_s, int_base10(&digits, temp, count_digits), is_exact ? ""_s : "..."_s);
+        String sign = fract_is_negative(f) ? "-"_s : ""_s;
+        String result = concatenate(memory, sign, int_base10(&int_part), "."_s, int_base10(&digits, temp, count_digits), is_exact ? ""_s : "..."_s);
         while (result[result.length - 1] == '0')
             result.length--;
         return result;
     }
+}
+
+
+String fract_display_hex(Fraction const* f, Region* memory)
+{
+    quick_asserts(f);
+    if (fract_is_integer(f))
+    {
+        String result = int_base16(&f->num);
+        if (result[0] == '-') consume(&result, 1);
+        String sign = fract_is_negative(f) ? "-"_s : ""_s;
+        return concatenate(memory, sign, "0x"_s, result);
+    }
+    else
+    {
+        Integer int_part = {};
+        Integer remainder = {};
+        Defer(int_free(&int_part));
+        Defer(int_free(&remainder));
+        bool ok = int_div(&int_part, &f->num, &f->den, &remainder);
+        assert(ok);
+        assert(!int_is_zero(&remainder));
+        int_abs(&remainder);
+
+        umm count_digits = 16;
+        int_shift_left(&remainder, 4 * count_digits);
+
+        Integer mod = {};
+        Defer(int_free(&mod));
+        ok = int_div(&remainder, &f->den, &mod);
+        assert(ok);
+        bool is_exact = int_is_zero(&mod);
+
+        if (!is_exact)  // rounding
+        {
+            int_shift_left(&mod, 1);
+            if (int_compare_abs(&mod, &f->den) >= 0)
+            {
+                Integer one = {};
+                int_set16(&one, 1);
+                int_add(&remainder, &one);
+                int_free(&one);
+            }
+        }
+
+        String sign = fract_is_negative(f) ? "-"_s : ""_s;
+        String result = concatenate(memory, sign, "0x"_s, int_base16(&int_part), "."_s, int_base16(&remainder, temp, count_digits), is_exact ? ""_s : "..."_s);
+        while (result[result.length - 1] == '0')
+            result.length--;
+        return result;
+    }
+}
+
+
+bool fract_scientific_abs(Fraction const* f, umm count_decimals,
+                          Integer* mantissa, smm* exponent, umm* mantissa_size, umm* msb)
+{
+    bool exact;
+    {
+        Integer num = int_clone(&f->num);
+
+        // Take one more bit for rounding purposes.
+        int_shift_left(&num, count_decimals + 1);
+
+        Integer mod = {};
+        bool div_ok = int_div(mantissa, &num, &f->den, &mod);
+        assert(div_ok);
+        int_free(&num);
+        int_abs(mantissa);
+
+        // The number is exact if there is no remainder and the rounding bit is 0.
+        exact = int_is_zero(&mod) && !int_test_bit(&mod, 0);
+
+        // Round the mantissa.
+        Integer one = {};
+        int_set16(&one, 1);
+        int_add_ignore_sign(mantissa, &one);
+        int_shift_right(mantissa, 1);
+        int_free(&one);
+
+        int_free(&mod);
+    }
+
+    // printf("cnd=%d\n", count_decimals);
+    // printf("man=%.*s\n", StringArgs(int_base16(mantissa)));
+
+    // To check if the mantissa fits in the type, first we find how long
+    // the representation is in bits. This is determined by the distance
+    // between the most and least significant bits.
+    umm most_significant_bit  = int_log2_abs(mantissa);
+    umm least_significant_bit = int_ctz_abs (mantissa);
+    // printf("msb=%d\n", most_significant_bit);
+    // printf("lsb=%d\n", least_significant_bit);
+    *msb = most_significant_bit;
+    *mantissa_size = most_significant_bit - least_significant_bit + 1;
+    // printf("msi=%d\n", *mantissa_size);
+
+    // Figure out the exponent. We know we added exactly count_decimals
+    // decimals at the end, so we check where the most_significant_bit
+    // is relative to that.
+    *exponent = (smm) most_significant_bit - (smm) count_decimals;
+    // printf("exp=%d\n", *exponent);
+
+    return exact;
 }
 
 

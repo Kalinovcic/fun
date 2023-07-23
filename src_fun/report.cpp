@@ -9,6 +9,13 @@ EnterApplicationNamespace
 
 
 
+u32 get_line(Compiler* ctx, Token* token)
+{
+    u32 line;
+    get_line(ctx, get_token_info(ctx, token), &line);
+    return line;
+}
+
 void get_line(Compiler* ctx, Token_Info const* info, u32* out_line, u32* out_column, String* out_source_name)
 {
     Source_Info* source = &ctx->sources[info->source_index];

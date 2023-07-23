@@ -10,6 +10,7 @@ EnterApplicationNamespace
 bool int_get_abs_u64(u64* out, Integer const* i);
 
 String int_base10(Integer const* integer, Region* memory = temp, umm min_digits = 0);
+String int_base16(Integer const* integer, Region* memory = temp, umm min_digits = 0);
 
 // Always reduced, denominator always positive.
 struct Fraction
@@ -33,6 +34,11 @@ Fraction fract_mul        (Fraction const* a, Fraction const* b);
 bool     fract_div_fract  (Fraction* out, Fraction const* a, Fraction const* b);
 bool     fract_div_whole  (Fraction* out, Fraction const* a, Fraction const* b);
 String   fract_display    (Fraction const* f, Region* memory = temp);
+String   fract_display_hex(Fraction const* f, Region* memory = temp);
+
+// Returns true if the number fits losslessly.
+bool fract_scientific_abs(Fraction const* f, umm count_decimals,
+                          Integer* mantissa, smm* exponent, umm* mantissa_size, umm* msb);
 
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -47,6 +53,7 @@ enum Atom: u32
     // literals
     ATOM_NUMBER_LITERAL,        // any numeric literal
     ATOM_STRING_LITERAL,        // any string literal
+    ATOM_COMMENT,               // any comment
     ATOM_ZERO,                  // zero
     ATOM_TRUE,                  // true
     ATOM_FALSE,                 // false
@@ -87,6 +94,7 @@ enum Atom: u32
     ATOM_DEBUG,                 // debug
     ATOM_DEBUG_ALLOC,           // debug_alloc
     ATOM_DEBUG_FREE,            // debug_free
+    ATOM_DELETE,                // delete
     ATOM_IF,                    // if
     ATOM_ELSE,                  // else
     ATOM_ELIF,                  // elif
@@ -296,6 +304,7 @@ enum Expression_Kind: u16
     EXPRESSION_NUMERIC_LITERAL,
     EXPRESSION_STRING_LITERAL,
     EXPRESSION_TYPE_LITERAL,
+    EXPRESSION_COMMENT,
     EXPRESSION_BLOCK,
     EXPRESSION_UNIT,
 
@@ -343,6 +352,7 @@ enum Expression_Kind: u16
     // other
     EXPRESSION_DECLARATION,
     EXPRESSION_RUN,
+    EXPRESSION_DELETE,
 };
 
 enum: flags16
@@ -364,6 +374,18 @@ enum: flags16
     EXPRESSION_HAS_TO_BE_EXTERNALLY_INFERRED = 0x4000,
 };
 
+enum Comment_Relation
+{
+    // The relations are defined based on separation from the nearest non-comment
+    // expressions on either side. If there's at least one blank row between
+    // an expression and a comment, then this comment and expression are separated.
+
+    COMMENT_IS_INSIDE,  // within an expression
+    COMMENT_IS_ALONE,   // separated on both sides
+    COMMENT_IS_AFTER,   // separated from below, or on the same line as the previous expr
+    COMMENT_IS_BEFORE,  // default case
+};
+
 struct Parsed_Expression
 {
     Expression_Kind kind;
@@ -376,12 +398,20 @@ struct Parsed_Expression
     union
     {
         Token         literal;
+        Token         deleted_name;
         Token         intrinsic_name;
         Expression    unary_operand;
         Type          parsed_type;
         struct Block* parsed_block;
 
         Expression_List const* yield_assignments;
+
+        struct
+        {
+            Token            token;
+            Comment_Relation relation;
+            Expression       relative_to;  // may be NO_EXPRESSION if relation == 'COMMENT_IS_ALONE'
+        } comment;
 
         struct
         {
@@ -753,8 +783,11 @@ bool pump_pipeline(Compiler* ctx);
 // Lexer
 
 // Your responsibility that code remains allocated as long as necessary!
-bool lex_from_memory(Compiler* ctx, String name, String code, Array<Token>* out_tokens);
-bool lex_file(Compiler* ctx, String path, Array<Token>* out_tokens);
+// As comments should be considered whitespace, they are not included in the resulting
+// tokens array, however we do keep track of their locations and return a
+// separate comments array.
+bool lex_from_memory(Compiler* ctx, String name, String code, Array<Token>* out_tokens, Array<Token>* out_comments);
+bool lex_file(Compiler* ctx, String path, Array<Token>* out_tokens, Array<Token>* out_comments);
 
 inline Token_Info* get_token_info(Compiler* ctx, Token const* token)
 {
@@ -804,6 +837,7 @@ enum Find_Result
 {
     FIND_SUCCESS,
     FIND_FAILURE,
+    FIND_DELETED,
     FIND_WAIT,
 };
 
@@ -815,6 +849,32 @@ Find_Result find_declaration(Environment* env, Token const* name,
 
 u64 get_type_size     (Unit* unit, Type type);
 u64 get_type_alignment(Unit* unit, Type type);
+
+struct Numeric_Description
+{
+    bool is_signed;
+    bool is_integer;
+    bool is_floating_point;
+
+    umm bits;
+    umm radix;
+
+    // floating-point only
+    bool supports_subnormal;
+    bool supports_infinity;
+    bool supports_nan;
+
+    umm mantissa_bits;
+    umm significand_bits;
+
+    umm exponent_bits;
+    umm exponent_bias;
+    smm min_exponent;
+    smm min_exponent_subnormal;
+    smm max_exponent;
+};
+
+bool get_numeric_description(Unit* unit, Numeric_Description* desc, Type type);
 
 Constant* get_constant(Block* block, Expression expr, Type type_assertion);
 void set_constant(Block* block, Expression expr, Type type_assertion, Constant* value);
@@ -938,6 +998,7 @@ inline bool report_error(Compiler* ctx, T at, String message, Severity severity 
     return Report(ctx).part(at, message, severity).done();
 }
 
+u32 get_line(Compiler* ctx, Token* token);
 void get_line(Compiler* ctx, Token_Info const* info, u32* out_line, u32* out_column = NULL, String* out_source_name = NULL);
 
 bool supports_colored_output();

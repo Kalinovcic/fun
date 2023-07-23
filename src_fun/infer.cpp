@@ -188,6 +188,7 @@ static Find_Result find_declaration_internal(
         bool allow_alias_using_traversal,
         Dynamic_Array<Block*>* visited_scopes)
 {
+    Find_Result status = FIND_FAILURE;
     while (scope)
     {
         For (*visited_scopes)
@@ -199,17 +200,32 @@ static Find_Result find_declaration_internal(
         for (Expression id = {}; id < scope->parsed_expressions.count; id = (Expression)(id + 1))
         {
             auto* expr = &scope->parsed_expressions[id];
-            if (expr->kind != EXPRESSION_DECLARATION) continue;
-
-            if (expr->declaration.name.atom != name->atom) continue;
-            if ((expr->flags & EXPRESSION_DECLARATION_IS_ORDERED) &&
-                (expr->visibility_limit >= visibility_limit || visibility_limit == NO_VISIBILITY))
+            // if the name is deleted, forget it
+            if (expr->kind == EXPRESSION_DELETE &&
+                (expr->visibility_limit <= visibility_limit || visibility_limit == NO_VISIBILITY) &&
+                expr->deleted_name.atom == name->atom)
+            {
+                *out_decl_scope = scope;
+                *out_decl_expr = id;
+                status = FIND_DELETED;
                 continue;
-
+            }
+            // if we found a name and didn't delete it, no need to keep looking
+            else if (status != FIND_FAILURE && status != FIND_DELETED) continue;
+            // if it's not a declaration of the name we want, don't care
+            else if (expr->kind != EXPRESSION_DECLARATION ||
+                     expr->declaration.name.atom != name->atom) continue;
+            // if the declaration is not visible, don't care
+            else if ((expr->flags & EXPRESSION_DECLARATION_IS_ORDERED) &&
+                     (expr->visibility_limit >= visibility_limit ||
+                            visibility_limit == NO_VISIBILITY)) continue;
+            // we found the name, but keep looking since it might have been deleted
             *out_decl_scope = scope;
             *out_decl_expr = id;
-            return FIND_SUCCESS;
+            status = FIND_SUCCESS;
         }
+        if (status != FIND_FAILURE && status != FIND_DELETED)
+            return status;
 
         // 2: try to find declarations from a used scope
         if (out_use_chain)
@@ -217,15 +233,30 @@ static Find_Result find_declaration_internal(
             for (Expression id = {}; id < scope->parsed_expressions.count; id = (Expression)(id + 1))
             {
                 auto* expr = &scope->parsed_expressions[id];
-                if (expr->kind != EXPRESSION_DECLARATION) continue;
-                if (!(expr->flags & EXPRESSION_DECLARATION_IS_USING)) continue;
+
+                // if the name is deleted, forget it
+                if (expr->kind == EXPRESSION_DELETE &&
+                    (expr->visibility_limit <= visibility_limit || visibility_limit == NO_VISIBILITY) &&
+                    expr->deleted_name.atom == name->atom)
+                {
+                    *out_decl_scope = scope;
+                    *out_decl_expr = id;
+                    status = FIND_DELETED;
+                    continue;
+                }
+                // if we found a name and didn't delete it, no need to keep looking
+                else if (status != FIND_FAILURE && status != FIND_DELETED) continue;
+                // if it's not a using declaration, don't care
+                if (expr->kind != EXPRESSION_DECLARATION ||
+                    !(expr->flags & EXPRESSION_DECLARATION_IS_USING)) continue;
 
                 auto* infer = &scope->inferred_expressions[id];
                 if (infer->type == INVALID_TYPE)
                 {
                     *out_decl_scope = scope;
                     *out_decl_expr  = id;
-                    return FIND_WAIT;
+                    status = FIND_WAIT;
+                    continue;
                 }
 
                 Type user_type = infer->type;
@@ -237,7 +268,8 @@ static Find_Result find_declaration_internal(
                     {
                         *out_decl_scope = scope;
                         *out_decl_expr  = id;
-                        return FIND_WAIT;
+                        status = FIND_WAIT;
+                        continue;
                     }
                     user_type = *constant_type;
                     using_visibility = NO_VISIBILITY;
@@ -253,14 +285,23 @@ static Find_Result find_declaration_internal(
                                                                /* allow_alias_using_traversal */ false,
                                                                visited_scopes);
                 if (result == FIND_FAILURE) continue;
-                if (result == FIND_WAIT) return FIND_WAIT;
+                if (result == FIND_DELETED) continue;
+                if (result == FIND_WAIT)
+                {
+                    status = FIND_WAIT;
+                    continue;
+                }
                 assert(result == FIND_SUCCESS);
 
                 Resolved_Name::Use use = { scope, id };
                 insert_item(out_use_chain, &use, 0);
-                return FIND_SUCCESS;
+                status = FIND_SUCCESS;
             }
         }
+
+        // if deleted, found, or need to wait, don't recurse to the parent
+        if (status != FIND_FAILURE)
+            return status;
 
         // 3: try to recurse to parent scope
         if (!allow_parent_traversal)
@@ -426,6 +467,49 @@ u64 get_type_alignment(Unit* unit, Type type)
     return size;
 }
 
+bool get_numeric_description(Unit* unit, Numeric_Description* desc, Type type)
+{
+    ZeroStruct(desc);
+    if (!is_numeric_type(type))
+        return false;
+
+    desc->is_signed         = !is_unsigned_integer_type(type);
+    desc->is_integer        =  is_integer_type(type);
+    desc->is_floating_point =  is_floating_point_type(type);
+
+    desc->bits = get_type_size(unit, type) * 8;
+    desc->radix = 2;
+
+    if (desc->is_floating_point)
+    {
+
+        smm exp_min;
+        smm exp_max;
+        umm exp_bits;
+        umm sig_bits;
+        switch (type)
+        {
+        case TYPE_F16: exp_min =   -14; exp_max =   15; exp_bits =  5; sig_bits = 10; break;
+        case TYPE_F32: exp_min =  -126; exp_max =  127; exp_bits =  8; sig_bits = 23; break;
+        case TYPE_F64: exp_min = -1022; exp_max = 1023; exp_bits = 11; sig_bits = 52; break;
+        IllegalDefaultCase;
+        }
+
+        desc->supports_subnormal     = true;
+        desc->supports_infinity      = true;
+        desc->supports_nan           = true;
+        desc->mantissa_bits          = sig_bits + 1;
+        desc->significand_bits       = sig_bits;
+        desc->exponent_bits          = exp_bits;
+        desc->exponent_bias          = exp_max;
+        desc->min_exponent           = exp_min;
+        desc->min_exponent_subnormal = exp_min - sig_bits;
+        desc->max_exponent           = exp_max;
+    }
+
+    return true;
+}
+
 
 static void complete_expression(Block* block, Expression id)
 {
@@ -527,16 +611,201 @@ static bool copy_constant(Environment* env, Block* to_block, Expression to_id, B
 
 static bool check_constant_fits_in_runtime_type(Unit* unit, Parsed_Expression const* expr, Fraction const* fraction, Type type)
 {
+#define Error(...) return (report_error(ctx, expr, Format(temp, ##__VA_ARGS__)), false)
+    if (fract_is_zero(fraction))
+        return true;
+
     Environment* env = unit->env;
     Compiler*    ctx = env->ctx;
     assert(!is_soft_type(type));
     assert(is_numeric_type(type));
     String name = exact_type_description(unit, type);
 
+    if (is_floating_point_type(type))
+    {
+        Numeric_Description numeric;
+        bool numeric_ok = get_numeric_description(unit, &numeric, type);
+        assert(numeric_ok);
+
+        Integer mantissa = {};
+        smm exponent;
+        umm mantissa_size, msb;
+        umm count_decimals = -numeric.min_exponent_subnormal;
+        bool exact = fract_scientific_abs(fraction, count_decimals, &mantissa, &exponent, &mantissa_size, &msb);
+        Defer(int_free(&mantissa));
+
+
+        bool fits = true;
+        bool next_is_infinity = false;
+        Fraction f_prev = {};
+        Fraction f_next = {};
+        Defer(fract_free(&f_prev));
+        Defer(fract_free(&f_next));
+
+        // Check if the number is too large.
+        if (exponent > numeric.max_exponent)
+        {
+            assert(numeric.max_exponent >= numeric.significand_bits);
+
+            Integer prev = {};
+            Defer(int_free(&prev));
+            for (umm i = 0; i <= numeric.significand_bits; i++)
+                int_set_bit(&prev, numeric.max_exponent - i);
+
+            Integer den = {};
+            int_set16(&den, 1);
+            f_prev = fract_make(&prev, &den);
+            int_free(&den);
+
+            next_is_infinity = true;
+            fits = false;
+        }
+        // Check if the number is too small.
+        else if (int_is_zero(&mantissa))
+        {
+            int_set16(&f_prev.num, 0);
+            int_set16(&f_prev.den, 1);
+            int_set16(&f_next.num, 1);
+            int_set_bit(&f_next.den, count_decimals);
+            fits = false;
+        }
+        // Check if the mantissa is inexact.
+        else if (!exact)
+        {
+            // To get the closest smaller value, we copy the first
+            // significand_bits+1 bits after the most significant bit.
+            Integer prev = {};
+            Defer(int_free(&prev));
+
+            for (smm bit = msb;
+                     bit >= 0 && bit >= msb - numeric.significand_bits;
+                     bit--)
+                if (int_test_bit(&mantissa, bit))
+                    int_set_bit(&prev, bit);
+
+            // To get the next largest value, we add one at the least significant
+            // available position.
+            Integer next = {};
+            Defer(int_free(&next));
+            {
+                smm bit = msb - numeric.significand_bits;
+                if (bit < 0) bit = 0;
+
+                Integer to_add = {};
+                int_set_bit(&to_add, bit);
+                int_add(&next, &prev, &to_add);
+                int_free(&to_add);
+            }
+
+            assert(exponent > -(smm)(msb));
+            Integer den = {};
+            int_set_bit(&den, msb - exponent);
+            f_prev = fract_make(&prev, &den);
+            f_next = fract_make(&next, &den);
+            int_free(&den);
+            fits = false;
+        }
+
+        if (fits)
+            return true;
+
+        bool negative = fract_is_negative(fraction);
+        if (negative)
+        {
+            if (!fract_is_zero(&f_prev)) f_prev.num.negative = true;
+            if (!fract_is_zero(&f_next)) f_next.num.negative = true;
+        }
+
+        String s_prev = fract_display(&f_prev);
+        String s_next = fract_display(&f_next);
+        String s_frac = fract_display(fraction);
+        String s_prev_hex = Format(temp, " (%)", fract_display_hex(&f_prev));
+        String s_next_hex = Format(temp, " (%)", fract_display_hex(&f_next));
+
+        // Pad the three numbers so '.' or ends align
+        auto numeric_pad = [](String* a, String* b, String* c)
+        {
+            auto pad = [](String* s, umm to_add)
+            {
+                if (!to_add) return;
+                String new_s = allocate_uninitialized_string(temp, s->length + to_add);
+                memset(new_s.data, ' ', to_add);
+                memcpy(new_s.data + to_add, s->data, s->length);
+                *s = new_s;
+            };
+
+            auto whole_length = [](String s)
+            {
+                umm l = find_first_occurance(s, '.');
+                return (l == NOT_FOUND) ? s.length : l;
+            };
+
+            umm a_len = whole_length(*a);
+            umm b_len = whole_length(*b);
+            umm c_len = whole_length(*c);
+
+            umm length = a_len;
+            if (length < b_len) length = b_len;
+            if (length < c_len) length = c_len;
+
+            pad(a, length - a_len);
+            pad(b, length - b_len);
+            pad(c, length - c_len);
+        };
+
+        auto highlight_first_difference = [](String* str, String cmp)
+        {
+            if (!supports_colored_output()) return;
+            umm length = str->length < cmp.length ? str->length : cmp.length;
+            umm i = 0;
+            for (; i < length; i++)
+            {
+                if (str->data[i] == cmp.data[i]) continue;
+            found:
+                *str = concatenate(temp,
+                    substring(*str, 0, i),
+                    "\x1b[41;1m"_s,
+                    substring(*str, i, 1),
+                    "\x1b[m"_s,
+                    substring(*str, i + 1, str->length - i - 1));
+                return;
+            }
+            if (i < str->length)
+            {
+                while (str->data[i] == '.' || str->data[i] == '0') i++;
+                if (i < str->length) goto found;
+            }
+            if (str->length < cmp.length)
+                *str = concatenate(temp, *str, "\x1b[41;1m \x1b[m"_s);
+        };
+
+        numeric_pad(&s_prev, &s_frac, &s_next);
+        highlight_first_difference(&s_prev, s_frac);
+        highlight_first_difference(&s_next, s_frac);
+
+        if (next_is_infinity)
+        {
+            s_next = negative ? "-infinity"_s : "+infinity"_s;
+            s_next_hex = {};
+        }
+
+        if (negative)
+        {
+            swap(&s_prev,     &s_next);
+            swap(&s_prev_hex, &s_next_hex);
+        }
+
+        Error("The number can't be represented exactly as a %.\n"
+              "     less: %~%\n"
+              "    value: % (%)\n"
+              "  greater: %~%\n",
+              name, s_prev, s_prev_hex, s_frac, fract_display_hex(fraction), s_next, s_next_hex);
+        return false;
+    }
+
     if (!is_integer_type(type))
         NotImplemented;
 
-#define Error(...) return (report_error(ctx, expr, Format(temp, ##__VA_ARGS__)), false)
     if (!fract_is_integer(fraction))
         Error("The number is fractional, it can't fit in %.\n"
               "    value: %",
@@ -573,9 +842,9 @@ static bool check_constant_fits_in_runtime_type(Unit* unit, Parsed_Expression co
                   "  maximum: % (greatest number that fits in %)",
                   name, fract_display(fraction), max_value, name);
     }
-#undef Error
 
     return true;
+#undef Error
 }
 
 static void harden(Unit* unit, Block* block, Expression expr, Type type)
@@ -889,9 +1158,15 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
     switch (expr->kind)
     {
 
-    case EXPRESSION_ZERO:   InferType(TYPE_SOFT_ZERO); InferenceComplete();
-    case EXPRESSION_TRUE:   InferType(TYPE_SOFT_BOOL); set_constant_bool(block, id, true);  InferenceComplete();
-    case EXPRESSION_FALSE:  InferType(TYPE_SOFT_BOOL); set_constant_bool(block, id, false); InferenceComplete();
+    case EXPRESSION_COMMENT:
+        infer->flags |= INFERRED_EXPRESSION_IS_NOT_EVALUATED_AT_RUNTIME;
+        infer->flags |= INFERRED_EXPRESSION_DOES_NOT_ALLOCATE_STORAGE;
+        InferType(TYPE_VOID);
+        InferenceComplete();
+
+    case EXPRESSION_ZERO:    InferType(TYPE_SOFT_ZERO); InferenceComplete();
+    case EXPRESSION_TRUE:    InferType(TYPE_SOFT_BOOL); set_constant_bool(block, id, true);  InferenceComplete();
+    case EXPRESSION_FALSE:   InferType(TYPE_SOFT_BOOL); set_constant_bool(block, id, false); InferenceComplete();
     case EXPRESSION_NUMERIC_LITERAL:
     {
         InferType(TYPE_SOFT_NUMBER);
@@ -947,6 +1222,15 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
             Find_Result result = find_declaration(env, name, block, expr->visibility_limit, &resolved.scope, &resolved.declaration, &resolved.use_chain);
             if (result == FIND_WAIT)
                 Wait(WAITING_ON_USING_TYPE, resolved.declaration, resolved.scope);
+            if (result == FIND_DELETED)
+            {
+                Report(ctx)
+                    .intro(SEVERITY_ERROR, expr)
+                    .message(Format(temp, "Can't find '%'. The name was deleted here.", get_identifier(ctx, name)))
+                    .snippet(&resolved.scope->parsed_expressions[resolved.declaration])
+                    .done();
+                return YIELD_ERROR;
+            }
             if (result == FIND_FAILURE)
             {
                 String error = Format(temp, "Can't find '%'.", get_identifier(ctx, name));
@@ -2127,6 +2411,13 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
 
         Unit* new_unit = materialize_unit(env, data->unit->entry_block->materialized_from, block);
         new_unit->flags |= UNIT_IS_RUN;
+        InferenceComplete();
+    } break;
+
+    case EXPRESSION_DELETE:
+    {
+        infer->flags |= INFERRED_EXPRESSION_IS_NOT_EVALUATED_AT_RUNTIME;
+        InferType(TYPE_VOID);
         InferenceComplete();
     } break;
 
