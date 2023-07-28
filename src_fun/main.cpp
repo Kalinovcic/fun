@@ -38,7 +38,7 @@ extern "C" int main(int argc, char** argv)
     {
         add_log_handler([](String severity, String subsystem, String msg)
         {
-            printf("%.*s\n", StringArgs(msg));
+            printf("%.*s", StringArgs(msg));
         });
 
         String directory = concatenate_path(temp, get_current_working_directory(), "test"_s);
@@ -50,7 +50,7 @@ extern "C" int main(int argc, char** argv)
         {
             if (!check_if_file_exists(non_flag_args[0]))
             {
-                printf("Test file '%.*s' doesn't exist.", StringArgs(non_flag_args[0]));
+                printf("Test file '%.*s' doesn't exist.\n", StringArgs(non_flag_args[0]));
                 return 1;
             }
 

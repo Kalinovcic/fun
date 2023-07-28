@@ -6,8 +6,19 @@
 #include "testing.h"
 #include "api.h"
 
+#if defined(OS_LINUX)
+#include <sys/ioctl.h>
+#include <unistd.h>
+#endif
+
 
 EnterApplicationNamespace
+
+
+#define Print(fmt, ...) do {                       \
+    String txt = Format(temp, fmt, ##__VA_ARGS__); \
+    printf("%.*s", StringArgs(txt));               \
+} while (0)
 
 
 static const String subsystem = "testing"_s;
@@ -237,6 +248,61 @@ bool parse_test_file(Testing_Context* context, String relative_path, Array<Strin
 #undef Error
 }
 
+struct Columns
+{
+    umm columns;
+    umm key_width;
+    umm value_width;
+    umm column_width;
+
+    Columns(umm key_width, umm value_width, umm columns = 0)
+    : key_width(key_width),
+      value_width(value_width),
+      column_width(2 + key_width + 1 + value_width)
+    {
+#if defined(OS_LINUX)
+        if (!columns)
+        {
+            winsize w = {};
+            ioctl(STDOUT_FILENO, TIOCGWINSZ, &w);
+            columns = w.ws_col / column_width;
+            if (columns > 8)
+                columns = 8;
+        }
+#endif
+        this->columns = columns ? columns : 4;
+    }
+
+    umm serial = 0;
+
+    void title(String title)
+    {
+        done(false);
+        title = Format(temp, " % ", title);
+        Print("\n\x1b[93;1m%\x1b[m\n",
+            string_format(title, columns * column_width, String_Format::CENTER, '-'));
+    }
+
+    void add(String key, auto value)
+    {
+        String value_string = Format(temp, " %", value);
+        if (!value) Print("\x1b[90;1m");
+        Print("  % %", string_format(key, key_width),
+                       string_format(value_string, value_width, String_Format::RIGHT, '.'));
+        if (!value) Print("\x1b[m");
+        if (++serial % columns == 0) Print("\n");
+    }
+
+    void done(bool final = true)
+    {
+        if (serial % columns != 0)
+            Print("\n");
+        serial = 0;
+        if (final)
+            Print("\n");
+    }
+};
+
 bool run_code_of_test(Test_Case* test)
 {
     String_Concatenator code_cat = {};
@@ -262,6 +328,24 @@ bool run_code_of_test(Test_Case* test)
                 raise(SIGKILL);
             }
         }
+
+        assert_eq :: (lhs: $T, rhs: T) {
+            if lhs != rhs {
+                debug lhs;
+                debug rhs;
+                puts(FD_STDERR, "Equality assertion failed!\n");
+                raise(SIGKILL);
+            }
+        }
+
+        assert_neq :: (lhs: $T, rhs: T) {
+            if lhs == rhs {
+                debug lhs;
+                debug rhs;
+                puts(FD_STDERR, "Inequality assertion failed!\n");
+                raise(SIGKILL);
+            }
+        }
     )XXX"_s;
 
     String imports_relative_to_directory = get_parent_directory_path(test->path);
@@ -270,6 +354,7 @@ bool run_code_of_test(Test_Case* test)
         env,
         parse_top_level_from_memory(&compiler, imports_relative_to_directory, "<test preload>"_s, assert_program)
     );
+
     assert(pump_pipeline(&compiler));  // force assert preload to complete
 
     String name = Format(temp, "<%>", qualified_test_name(test));
@@ -279,7 +364,52 @@ bool run_code_of_test(Test_Case* test)
     main->flags &= ~BLOCK_IS_TOP_LEVEL; // assert block is top level
     materialize_unit(env, main, assert_having_unit->entry_block);
 
-    return pump_pipeline(&compiler);
+    bool ok = pump_pipeline(&compiler);
+
+    if (get_command_line_bool("stat"_s) ||
+        get_command_line_bool("stats"_s) ||
+        get_command_line_bool("statistics"_s))
+    {
+        auto expression_stats = [&](Columns* cols, auto& array)
+        {
+            for (umm kind = 1; kind < COUNT_EXPRESSIONS; kind++)
+            {
+                String name = Format(temp, "%", expression_kind_name[kind]);
+                name = make_lowercase_copy(temp, name);
+                For (name) if (*it == '_') *it = ' ';
+                cols->add(name, array[kind]);
+            }
+        };
+
+        Columns col(20, 12);
+
+        col.title("Statistics"_s);
+        col.add("files"_s,         compiler.top_level_blocks.count);
+        col.add("lexer"_s,         to_string(size_format(compiler.lexer_memory.total_size)));
+        col.add("parser"_s,        to_string(size_format(compiler.parser_memory.total_size)));
+        col.add("pipeline"_s,      to_string(size_format(compiler.pipeline_memory.total_size)));
+        col.add("environments"_s,  compiler.environments.count);
+
+        col.title("Parsing counters"_s);
+        col.add("identifier"_s,   compiler.identifiers.count);
+        col.add("number token"_s, compiler.token_info_number.count);
+        col.add("string token"_s, compiler.token_info_string.count);
+        col.add("atom"_s,         compiler.atom_table.count);
+        col.add("block"_s,        compiler.count_parsed_blocks);
+        col.add("expressions"_s,  compiler.count_parsed_blocks);
+        expression_stats(&col,    compiler.count_parsed_expressions_by_kind);
+
+        col.title("Inference counters"_s);
+        col.add("unit"_s,         compiler.count_inferred_units);
+        col.add("block"_s,        compiler.count_inferred_blocks);
+        col.add("constant"_s,     compiler.count_inferred_constants);
+        col.add("expressions"_s,  compiler.count_inferred_expressions);
+        expression_stats(&col,    compiler.count_inferred_expressions_by_kind);
+
+        col.done();
+    }
+
+    return ok;
 }
 
 
@@ -384,12 +514,6 @@ static void batch_for(Array<T> array, umm batch_size, L&& it)
 
 bool run_tests(Testing_Context* context, char* argv0, bool only_log_fails, bool show_explanations)
 {
-
-#define Print(fmt, ...) do {                       \
-    String txt = Format(temp, fmt, ##__VA_ARGS__); \
-    printf("%.*s", StringArgs(txt));               \
-} while (0)
-
 #define PassedLiteral "\x1b[32;1mPASSED\x1b[m"
 #define FailedLiteral "\x1b[31;1mFAILED\x1b[m"
 
@@ -528,7 +652,6 @@ bool run_tests(Testing_Context* context, char* argv0, bool only_log_fails, bool 
               argv0, qualified_test_name(it), it->rng_seed);
     }
 
-#undef Print
 #undef PassedLiteral
 #undef FailedLiteral
 

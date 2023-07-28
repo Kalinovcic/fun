@@ -1160,7 +1160,7 @@ String get_parent_directory_path(String path)
     // or for any paths containing . and ..
 
     umm last_slash_index = find_last_occurance_of_any(path, slash_chars);
-    // @Incomplete if (last_slash_index == NOT_FOUND)
+    if (last_slash_index == NOT_FOUND) return {};
 
     String parent = substring(path, 0, last_slash_index);
     return parent;
@@ -3037,14 +3037,24 @@ umm format_item_length(String_Format v)
 
 void format_item(Output_Buffer* buffer, String_Format v)
 {
+    umm pad_left = 0;
+    umm pad_right = 0;
     if (v.desired_length > v.value.length)
     {
-        umm padding = v.desired_length - v.value.length;
-        for (umm i = 0; i < padding; i++)
-            write_u8(buffer, ' ');
+        umm pad = v.desired_length - v.value.length;
+        if (v.alignment == String_Format::LEFT)
+            pad_right = pad;
+        else if (v.alignment == String_Format::RIGHT)
+            pad_left = pad;
+        else
+            pad_left = pad / 2, pad_right = pad - pad / 2;
     }
 
+    for (umm i = 0; i < pad_left; i++)
+        write_u8(buffer, v.padding);
     write(buffer, v.value);
+    for (umm i = 0; i < pad_right; i++)
+        write_u8(buffer, v.padding);
 }
 
 
@@ -3090,6 +3100,19 @@ void format_item(Output_Buffer* buffer, Plural_Format v)
         write(buffer, v.singular_form);
         write_u8(buffer, 's');
     }
+}
+
+
+umm format_item_length(Ordinal_Format v)
+{
+    return format_item_length(v.ordinal)
+         + format_item_length(v.suffix);
+}
+
+void format_item(Output_Buffer* buffer, Ordinal_Format v)
+{
+    format_item(buffer, v.ordinal);
+    format_item(buffer, v.suffix);
 }
 
 

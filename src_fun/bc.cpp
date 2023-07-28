@@ -27,6 +27,10 @@ static u64 allocate_storage(Unit* unit, Type type)
 
 static void place_variables(Unit* unit, Block* block)
 {
+    if (block->flags & BLOCK_HAS_BEEN_PLACED)
+        return;
+    block->flags |= BLOCK_HAS_BEEN_PLACED;
+
     for (umm i = 0; i < block->inferred_expressions.count; i++)
     {
         auto* expr  = &block->parsed_expressions  [i];
@@ -651,6 +655,10 @@ static Location generate_expression(Bytecode_Builder* builder, Expression id)
 
 static void generate_block(Bytecode_Builder* builder, Block* block)
 {
+    if (block->flags & BLOCK_HAS_BEEN_GENERATED)
+        return;
+    block->flags |= BLOCK_HAS_BEEN_GENERATED;
+
     Unit* unit = builder->unit;
     builder->block = block;
     block->first_instruction = builder->bytecode.count;
@@ -744,7 +752,7 @@ static void patch_bytecode(Unit* unit)
                     else
                         float_exponent = exponent + numeric.exponent_bias;
 
-                    umm from = (msb > numeric.mantissa_bits) ? (msb - numeric.mantissa_bits) : 0;
+                    umm from = (msb > numeric.significand_bits) ? (msb - numeric.significand_bits) : 0;
                     float_significand = 0;
                     for (umm i = 0; i < numeric.significand_bits; i++)
                         float_significand |= (u64) int_test_bit(&mantissa, from + i) << i;

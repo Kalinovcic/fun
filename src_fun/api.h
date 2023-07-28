@@ -27,6 +27,7 @@ void     fract_reduce     (Fraction* f);
 bool     fract_is_zero    (Fraction const* f);
 bool     fract_is_negative(Fraction const* f);
 bool     fract_is_integer (Fraction const* f);
+bool     fract_equals     (Fraction const* a, Fraction const* b);
 Fraction fract_neg        (Fraction const* a);
 Fraction fract_add        (Fraction const* a, Fraction const* b);
 Fraction fract_sub        (Fraction const* a, Fraction const* b);
@@ -294,66 +295,80 @@ struct Expression_List
 
 CompileTimeAssert(sizeof(Expression_List) == 4);
 
+#define EXPRESSION_LIST             \
+                                    \
+    X(INVALID)                      \
+                                    \
+    /* literal expressions */       \
+    X(ZERO)                         \
+    X(TRUE)                         \
+    X(FALSE)                        \
+    X(NUMERIC_LITERAL)              \
+    X(STRING_LITERAL)               \
+    X(TYPE_LITERAL)                 \
+    X(COMMENT)                      \
+    X(BLOCK)                        \
+    X(UNIT)                         \
+                                    \
+    X(NAME)                         \
+    X(MEMBER)                       \
+                                    \
+    /* unary operators */           \
+    X(NOT)                          \
+    X(NEGATE)                       \
+    X(ADDRESS)                      \
+    X(DEREFERENCE)                  \
+    X(SIZEOF)                       \
+    X(ALIGNOF)                      \
+    X(CODEOF)                       \
+    X(DEBUG)                        \
+    X(DEBUG_ALLOC)                  \
+    X(DEBUG_FREE)                   \
+                                    \
+    /* binary operators */          \
+    X(ASSIGNMENT)                   \
+    X(ADD)                          \
+    X(SUBTRACT)                     \
+    X(MULTIPLY)                     \
+    X(DIVIDE_WHOLE)                 \
+    X(DIVIDE_FRACTIONAL)            \
+    X(POINTER_ADD)                  \
+    X(POINTER_SUBTRACT)             \
+    X(EQUAL)                        \
+    X(NOT_EQUAL)                    \
+    X(GREATER_THAN)                 \
+    X(GREATER_OR_EQUAL)             \
+    X(LESS_THAN)                    \
+    X(LESS_OR_EQUAL)                \
+    X(AND)                          \
+    X(OR)                           \
+    X(CAST)                         \
+    X(GOTO_UNIT)                    \
+                                    \
+    /* branching expressions */     \
+    X(BRANCH)                       \
+    X(CALL)                         \
+    X(INTRINSIC)                    \
+    X(YIELD)                        \
+                                    \
+    /* other */                     \
+    X(DECLARATION)                  \
+    X(RUN)                          \
+    X(DELETE)
+
 enum Expression_Kind: u16
 {
-    EXPRESSION_INVALID,
+#define X(name) EXPRESSION_##name,
+    EXPRESSION_LIST
+#undef X
+    COUNT_EXPRESSIONS
+};
 
-    // literal expressions
-    EXPRESSION_ZERO,
-    EXPRESSION_TRUE,
-    EXPRESSION_FALSE,
-    EXPRESSION_NUMERIC_LITERAL,
-    EXPRESSION_STRING_LITERAL,
-    EXPRESSION_TYPE_LITERAL,
-    EXPRESSION_COMMENT,
-    EXPRESSION_BLOCK,
-    EXPRESSION_UNIT,
-
-    EXPRESSION_NAME,
-    EXPRESSION_MEMBER,
-
-    // unary operators
-    EXPRESSION_NOT,
-    EXPRESSION_NEGATE,
-    EXPRESSION_ADDRESS,
-    EXPRESSION_DEREFERENCE,
-    EXPRESSION_SIZEOF,
-    EXPRESSION_ALIGNOF,
-    EXPRESSION_CODEOF,
-    EXPRESSION_DEBUG,
-    EXPRESSION_DEBUG_ALLOC,
-    EXPRESSION_DEBUG_FREE,
-
-    // binary operators
-    EXPRESSION_ASSIGNMENT,
-    EXPRESSION_ADD,
-    EXPRESSION_SUBTRACT,
-    EXPRESSION_MULTIPLY,
-    EXPRESSION_DIVIDE_WHOLE,
-    EXPRESSION_DIVIDE_FRACTIONAL,
-    EXPRESSION_POINTER_ADD,
-    EXPRESSION_POINTER_SUBTRACT,
-    EXPRESSION_EQUAL,
-    EXPRESSION_NOT_EQUAL,
-    EXPRESSION_GREATER_THAN,
-    EXPRESSION_GREATER_OR_EQUAL,
-    EXPRESSION_LESS_THAN,
-    EXPRESSION_LESS_OR_EQUAL,
-    EXPRESSION_AND,
-    EXPRESSION_OR,
-    EXPRESSION_CAST,
-    EXPRESSION_GOTO_UNIT,
-
-    // branching expressions
-    EXPRESSION_BRANCH,
-    EXPRESSION_CALL,
-    EXPRESSION_INTRINSIC,
-    EXPRESSION_YIELD,
-
-    // other
-    EXPRESSION_DECLARATION,
-    EXPRESSION_RUN,
-    EXPRESSION_DELETE,
+static inline constexpr char const* const expression_kind_name[COUNT_EXPRESSIONS] =
+{
+#define X(name) #name,
+    EXPRESSION_LIST
+#undef X
 };
 
 enum: flags16
@@ -368,11 +383,10 @@ enum: flags16
     EXPRESSION_DECLARATION_IS_USING          = 0x0080,
     EXPRESSION_ALLOW_PARENT_SCOPE_VISIBILITY = 0x0100,
     EXPRESSION_UNIT_IS_IMPORT                = 0x0200,
-    EXPRESSION_UNIT_IS_RUN                   = 0x0400,
-    EXPRESSION_BRANCH_IS_LOOP                = 0x0800,
-    EXPRESSION_BRANCH_IS_BAKED               = 0x1000,
-    EXPRESSION_HAS_CONDITIONAL_INFERENCE     = 0x2000,
-    EXPRESSION_HAS_TO_BE_EXTERNALLY_INFERRED = 0x4000,
+    EXPRESSION_BRANCH_IS_LOOP                = 0x0400,
+    EXPRESSION_BRANCH_IS_BAKED               = 0x0800,
+    EXPRESSION_HAS_CONDITIONAL_INFERENCE     = 0x1000,
+    EXPRESSION_HAS_TO_BE_EXTERNALLY_INFERRED = 0x2000,
 };
 
 enum Comment_Relation
@@ -489,6 +503,12 @@ struct Soft_Block
 
     bool          has_alias;
     Token         alias;
+
+    bool operator==(Soft_Block const& other) const
+    {
+        return materialized_parent == other.materialized_parent
+            && parsed_child        == other.parsed_child;
+    }
 };
 
 union Constant
@@ -498,6 +518,113 @@ union Constant
     Type       type;
     Soft_Block block;
 };
+
+
+struct Argument_Key
+{
+    Type     type;
+    Constant constant;  // zero where N/A, so this case can be ignored
+
+    inline bool operator==(Argument_Key const& other) const
+    {
+        if (type != other.type) return false;
+        if (!is_soft_type(type)) return true;
+
+        switch (type)
+        {
+        case TYPE_SOFT_NUMBER: return fract_equals(&constant.number, &other.constant.number);
+        case TYPE_SOFT_BOOL:   return constant.boolean == other.constant.boolean;
+        case TYPE_SOFT_TYPE:   return constant.type    == other.constant.type;
+        case TYPE_SOFT_BLOCK:  return constant.block   == other.constant.block;
+        IllegalDefaultCase;
+        }
+    }
+
+    static inline u64 hash(Argument_Key const& k)
+    {
+        // @Optimization - better hash function
+        u64 hash = hash_u64((u64) k.type);
+        if (!is_soft_type(k.type))
+            return hash;
+
+        Constant const& c = k.constant;
+        switch (k.type)
+        {
+        case TYPE_SOFT_NUMBER:
+
+
+            hash ^= hash_u64(c.number.num.negative);
+            hash ^= hash_u64(c.number.den.negative);
+            hash ^= hash64(c.number.num.digit, c.number.num.size * sizeof(*c.number.num.digit));
+            hash ^= hash64(c.number.den.digit, c.number.den.size * sizeof(*c.number.den.digit));
+            break;
+        case TYPE_SOFT_BOOL:   hash ^= hash_u64(c.boolean);    break;
+        case TYPE_SOFT_TYPE:   hash ^= hash_u64((u64) c.type); break;
+        case TYPE_SOFT_BLOCK:  hash ^= hash_pointer(c.block.materialized_parent);
+                               hash ^= hash_pointer(c.block.parsed_child);
+                               break;
+        IllegalDefaultCase;
+        }
+
+        return hash;
+    }
+};
+
+// What has to be equal for the calls to be equivalent:
+//  - the unit it occurs inside
+//  - the parsed block which is being called
+//    (this information is implicit since the table is inside the block)
+//  - the parent materialized block of the callee, but only if the callee
+//    can have multiple parents
+//  - set of argument types, in order of the parameter list, including implicit ones
+//  - set of soft constants which resolve alias arguments, in order same as above
+struct Call_Key
+{
+    struct Unit* unit;
+    struct Block* materialized_parent;
+    Array<Argument_Key> arguments;
+
+    inline bool operator==(Call_Key const& other) const
+    {
+        if (unit != other.unit) return false;
+        if (materialized_parent != other.materialized_parent) return false;
+        if (arguments.count != other.arguments.count) return false;
+        for (umm i = 0; i < arguments.count; i++)
+            if (arguments[i] != other.arguments[i])
+                return false;
+        return true;
+    }
+
+    u64 computed_hash;  // we store the computed the hash since it's fairly expensive
+
+    inline void recompute_hash()
+    {
+        computed_hash  = hash_pointer(unit);
+        computed_hash ^= hash_pointer(materialized_parent);
+        For (arguments)
+            computed_hash ^= Argument_Key::hash(*it);
+    }
+
+    static inline u64 hash(Call_Key const& k)
+    {
+        return k.computed_hash;
+    }
+};
+
+// The value identifies the specific call which started the inference.
+// This is so the call knows it's free to resume typechecking instead of
+// waiting on another call.
+struct Call_Value
+{
+    Block*     caller_block;
+    Expression call_expression;
+
+    inline operator bool()
+    {
+        return caller_block != NULL;
+    }
+};
+
 
 struct Resolved_Name
 {
@@ -523,6 +650,7 @@ enum Wait_Reason: u32
                                      // or an inferred type alias can wait for its surrounding expression to infer it
     WAITING_ON_CONDITION_INFERENCE,  // a call expression of a baked branch can wait for the condition to be inferred
     WAITING_ON_USING_TYPE,
+    WAITING_ON_ANOTHER_CALL,
 };
 
 struct Wait_Info
@@ -541,6 +669,8 @@ enum: flags32
     BLOCK_IS_UNIT                 = 0x0008,
     BLOCK_HAS_STRUCTURE_PLACEMENT = 0x0010,
     BLOCK_IS_TOP_LEVEL            = 0x0020,
+    BLOCK_HAS_BEEN_PLACED         = 0x0040,
+    BLOCK_HAS_BEEN_GENERATED      = 0x0080,
 };
 
 struct Block
@@ -552,6 +682,9 @@ struct Block
 
     Array<struct Parsed_Expression const> parsed_expressions;
     Array<Expression const> imperative_order;
+
+    // Filled out in inference, but stored on parsed block:
+    Table(Call_Key, Call_Value, Call_Key::hash) calls;
 
     // Filled out in inference:
     struct Unit* materialized_by_unit;
@@ -573,14 +706,13 @@ struct Block
 
 
 
-static constexpr umm MAX_BLOCKS_PER_UNIT = 10000;
+static constexpr umm MAX_BLOCKS_PER_UNIT = 1000;
 
 enum: flags32
 {
     UNIT_IS_STRUCT  = 0x0001,
-    UNIT_IS_RUN     = 0x0002,
-    UNIT_IS_PLACED  = 0x0004,
-    UNIT_IS_PATCHED = 0x0008,
+    UNIT_IS_PLACED  = 0x0002,
+    UNIT_IS_PATCHED = 0x0004,
 };
 
 struct Unit
@@ -667,6 +799,8 @@ enum Bytecode_Operation: u32
     OP_DEBUG_PRINT,             // r = operand                        s = type  (type options: any)
     OP_DEBUG_ALLOC,             // r = destination  a = size operand
     OP_DEBUG_FREE,              // r = operand
+
+    COUNT_OPS,
 };
 
 struct Bytecode
@@ -715,7 +849,10 @@ enum Pipeline_Task_Kind
     PIPELINE_TASK_INFER_BLOCK,
     PIPELINE_TASK_PLACE,
     PIPELINE_TASK_PATCH,
+    PIPELINE_TASK_AWAIT_RUN,
     PIPELINE_TASK_RUN,
+
+    COUNT_PIPELINE_TASKS,
 };
 
 struct Pipeline_Task
@@ -728,6 +865,8 @@ struct Pipeline_Task
     Bytecode_Continuation run_from;
 };
 
+static constexpr umm MAX_UNITS_PER_ENVIRONMENT = 1000;
+
 struct Environment
 {
     struct Compiler* ctx;
@@ -739,6 +878,8 @@ struct Environment
 
     Dynamic_Array<User_Type>    user_types;
     Table(u64, Unit*, hash_u64) top_level_units;
+    umm                         materialized_unit_count;
+    Unit*                       most_recent_materialized_unit;
 
     Dynamic_Array<Pipeline_Task> pipeline;
 
@@ -770,6 +911,17 @@ struct Compiler
     // Parser
     Region parser_memory;
     Table(String, Block*, hash_string) top_level_blocks;
+
+    umm count_parsed_blocks;
+    umm count_parsed_expressions;
+    umm count_parsed_expressions_by_kind[COUNT_EXPRESSIONS];
+
+    // Inference
+    umm count_inferred_units;
+    umm count_inferred_blocks;
+    umm count_inferred_constants;
+    umm count_inferred_expressions;
+    umm count_inferred_expressions_by_kind[COUNT_EXPRESSIONS];
 
     // Pipeline
     Region pipeline_memory;
@@ -882,12 +1034,12 @@ struct Numeric_Description
 bool get_numeric_description(Unit* unit, Numeric_Description* desc, Type type);
 
 Constant* get_constant(Block* block, Expression expr, Type type_assertion);
-void set_constant(Block* block, Expression expr, Type type_assertion, Constant* value);
+void set_constant(Compiler* ctx, Block* block, Expression expr, Type type_assertion, Constant* value);
 
-inline void set_constant_number(Block* block, Expression expr, Fraction   value) { Constant c = {}; c.number  = value; set_constant(block, expr, TYPE_SOFT_NUMBER, &c); }
-inline void set_constant_bool  (Block* block, Expression expr, bool       value) { Constant c = {}; c.boolean = value; set_constant(block, expr, TYPE_SOFT_BOOL,   &c); }
-inline void set_constant_type  (Block* block, Expression expr, Type       value) { Constant c = {}; c.type    = value; set_constant(block, expr, TYPE_SOFT_TYPE,   &c); }
-inline void set_constant_block (Block* block, Expression expr, Soft_Block value) { Constant c = {}; c.block   = value; set_constant(block, expr, TYPE_SOFT_BLOCK,  &c); }
+inline void set_constant_number(Compiler* ctx, Block* block, Expression expr, Fraction   value) { Constant c = {}; c.number  = value; set_constant(ctx, block, expr, TYPE_SOFT_NUMBER, &c); }
+inline void set_constant_bool  (Compiler* ctx, Block* block, Expression expr, bool       value) { Constant c = {}; c.boolean = value; set_constant(ctx, block, expr, TYPE_SOFT_BOOL,   &c); }
+inline void set_constant_type  (Compiler* ctx, Block* block, Expression expr, Type       value) { Constant c = {}; c.type    = value; set_constant(ctx, block, expr, TYPE_SOFT_TYPE,   &c); }
+inline void set_constant_block (Compiler* ctx, Block* block, Expression expr, Soft_Block value) { Constant c = {}; c.block   = value; set_constant(ctx, block, expr, TYPE_SOFT_BLOCK,  &c); }
 
 inline Fraction   const* get_constant_number(Block* block, Expression expr) { Constant* c = get_constant(block, expr, TYPE_SOFT_NUMBER); return c ? &c->number  : NULL; }
 inline bool       const* get_constant_bool  (Block* block, Expression expr) { Constant* c = get_constant(block, expr, TYPE_SOFT_BOOL);   return c ? &c->boolean : NULL; }
@@ -983,9 +1135,10 @@ private:
     Report& internal_suggestion_replace(Token_Info info, String replace_with, bool skinny, umm before, umm after);
     Report& internal_suggestion_remove(Token_Info info, bool skinny, umm before, umm after);
 
-    inline Token_Info convert(Token_Info info)        const { return  info;                   }
+    inline Token_Info convert(Token_Info        info) const { return  info;                   }
     inline Token_Info convert(Token_Info const* info) const { return *info;                   }
-    inline Token_Info convert(Token const* t)         const { return *get_token_info(ctx, t); }
+    inline Token_Info convert(Token        t)         const { return *get_token_info(ctx, &t); }
+    inline Token_Info convert(Token const* t)         const { return *get_token_info(ctx,  t); }
     inline Token_Info convert(Parsed_Expression const* expr) const
     {
         Token_Info* from_info = get_token_info(ctx, &expr->from);

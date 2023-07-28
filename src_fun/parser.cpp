@@ -152,6 +152,7 @@ static bool lookahead_atom(Token_Stream* stream, Atom atom, umm lookahead)
 
 struct Block_Builder
 {
+    Compiler* ctx;
     Block* block;
     Dynamic_Array<Parsed_Expression> expressions;
     Dynamic_Array<Expression> imperative_order;
@@ -265,6 +266,8 @@ static Parsed_Expression* add_expression(Block_Builder* builder, Expression_Kind
     result->from  = *from;
     result->to    = *to;
     result->visibility_limit = (Visibility) builder->imperative_order.count;
+    builder->ctx->count_parsed_expressions++;
+    builder->ctx->count_parsed_expressions_by_kind[kind]++;
     return result;
 }
 
@@ -281,6 +284,13 @@ static Parsed_Expression* add_expression(Block_Builder* builder, Expression_Kind
 static Parsed_Expression* add_expression(Block_Builder* builder, Expression_Kind kind, Expression from, Expression to, Expression* out_id)
 {
     return add_expression(builder, kind, &builder->expressions[from].from, &builder->expressions[to].to, out_id);
+}
+
+static Block* allocate_block(Compiler* ctx, Region* memory)
+{
+    Block* block = alloc<Block>(memory);
+    ctx->count_parsed_blocks++;
+    return block;
 }
 
 static Block* parse_block(Token_Stream* stream, flags32 flags = 0);
@@ -402,11 +412,12 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
             {
                 enum {} builder;  // don't use builder in this scope
 
-                parameter_block = PushValue(&stream->ctx->parser_memory, Block);
+                parameter_block = allocate_block(stream->ctx, &stream->ctx->parser_memory);
                 parameter_block->flags = BLOCK_IS_PARAMETER_BLOCK;
                 parameter_block->from = *start;
 
                 Block_Builder parameter_builder = {};
+                parameter_builder.ctx = stream->ctx;
                 parameter_builder.block = parameter_block;
                 Defer(finish_building(stream->ctx, &parameter_builder));
 
@@ -465,13 +476,14 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
                     if (!take_atom(stream, ATOM_LEFT_PARENTHESIS, "Expected 'void' or '(' after '->' to begin the return type."_s))
                         return false;
 
-                    return_block = PushValue(&stream->ctx->parser_memory, Block);
+                    return_block = allocate_block(stream->ctx, &stream->ctx->parser_memory);
                     return_block->flags = BLOCK_IS_UNIT | BLOCK_HAS_STRUCTURE_PLACEMENT;
                     return_block->from = *return_from;
 
                     enum {} parameter_builder;  // don't use parameter_builder in this scope
 
                     Block_Builder return_builder = {};
+                    return_builder.ctx = stream->ctx;
                     return_builder.block = return_block;
                     Defer(finish_building(stream->ctx, &return_builder));
 
@@ -1220,11 +1232,12 @@ static Block* parse_block(Token_Stream* stream, flags32 flags)
     Token* block_start = stream->cursor;
     if (maybe_take_atom(stream, ATOM_LEFT_BRACE))
     {
-        Block* block = PushValue(&ctx->parser_memory, Block);
+        Block* block = allocate_block(ctx, &ctx->parser_memory);
         block->flags = flags;
         block->from = *block_start;
 
         Block_Builder builder = {};
+        builder.ctx = stream->ctx;
         builder.block = block;
         Defer(finish_building(ctx, &builder));
 
@@ -1245,11 +1258,12 @@ static Block* parse_block(Token_Stream* stream, flags32 flags)
     }
     else if (maybe_take_atom(stream, ATOM_EQUAL_GREATER))
     {
-        Block* block = PushValue(&ctx->parser_memory, Block);
+        Block* block = allocate_block(stream->ctx, &ctx->parser_memory);
         block->flags = flags;
         block->from = *block_start;
 
         Block_Builder builder = {};
+        builder.ctx = stream->ctx;
         builder.block = block;
         Defer(finish_building(ctx, &builder));
 
@@ -1270,7 +1284,7 @@ Block* parse_top_level(Compiler* ctx, String canonical_name, String imports_rela
     Block* block = get(&ctx->top_level_blocks, &canonical_name);
     if (block) return block;
 
-    block = PushValue(&ctx->parser_memory, Block);
+    block = allocate_block(ctx, &ctx->parser_memory);
     block->flags |= BLOCK_IS_TOP_LEVEL | BLOCK_IS_UNIT | BLOCK_HAS_STRUCTURE_PLACEMENT;
 
     if (canonical_name)
@@ -1280,6 +1294,7 @@ Block* parse_top_level(Compiler* ctx, String canonical_name, String imports_rela
     }
 
     Block_Builder builder = {};
+    builder.ctx = ctx;
     builder.block = block;
     Defer(finish_building(ctx, &builder));
 
@@ -1317,6 +1332,7 @@ Block* parse_top_level_from_file(Compiler* ctx, String path)
         return NULL;
 
     String import_path = get_parent_directory_path(path);
+    if (!import_path) import_path = "."_s;
     return parse_top_level(ctx, path, import_path, tokens, comments);
 }
 

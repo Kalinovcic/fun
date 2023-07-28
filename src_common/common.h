@@ -1208,7 +1208,7 @@ struct Array
     umm count;
     T* address;
 
-    inline T& operator[](umm index)
+    inline T& operator[](umm index) const
     {
         assert(index < count);
         return address[index];
@@ -1681,6 +1681,21 @@ String hex_from_bytes(Region* memory, String bytes);
 
 // for input "616b70", output is "akp". on error, output is empty string
 String bytes_from_hex(Region* memory, String hex);
+
+
+// This junk is here just so we can use the ranged for syntax on Strings.
+// Ughh...
+
+inline Array<u8> array_from_string(String string)
+{
+    Array<u8> result;
+    result.count = string.length;
+    result.address = string.data;
+    return result;
+}
+
+inline auto begin(String str) { return begin(array_from_string(str)); }
+inline auto end  (String str) { return end  (array_from_string(str)); }
 
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -3250,13 +3265,22 @@ inline F64_Format f64_format(f64 value, umm precision = 6)
 
 struct String_Format
 {
-    String value;
-    umm    desired_length;
+    enum Alignment
+    {
+        LEFT,
+        RIGHT,
+        CENTER,
+    };
+
+    String    value;
+    umm       desired_length;
+    Alignment alignment;
+    u8        padding;
 };
 
-inline String_Format string_format(String value, umm desired_length)
+inline String_Format string_format(String value, umm desired_length, String_Format::Alignment alignment = String_Format::RIGHT, u8 padding = ' ')
 {
-    return { value, desired_length };
+    return { value, desired_length, alignment, padding };
 }
 
 
@@ -3306,6 +3330,22 @@ inline Plural_Format plural(s64 quantity, String singular_form, String plural_fo
 }
 
 
+struct Ordinal_Format
+{
+    u64    ordinal;
+    String suffix;
+};
+
+inline Ordinal_Format english_ordinal(u64 ordinal)
+{
+    String suffix = "th"_s;
+    if (ordinal % 10 == 1 && ordinal != 11) suffix = "st"_s;
+    if (ordinal % 10 == 2 && ordinal != 12) suffix = "nd"_s;
+    if (ordinal % 10 == 3 && ordinal != 13) suffix = "rd"_s;
+    return { ordinal, suffix };
+}
+
+
 // In order to reduce code bloat, most format item functions are not defined in the header.
 #define FormatItemFunctionDeclarations(T) \
     umm format_item_length(T v);          \
@@ -3337,6 +3377,7 @@ FormatItemFunctionDeclarations(F64_Format)
 FormatItemFunctionDeclarations(String_Format)
 FormatItemFunctionDeclarations(Size_Format)
 FormatItemFunctionDeclarations(Plural_Format)
+FormatItemFunctionDeclarations(Ordinal_Format)
 
 #undef FormatItemFunctionDeclarations
 
@@ -3482,6 +3523,13 @@ void format_write(Output_Buffer* destination, const char* string, umm literal_le
     u8* read_cursor = (u8*) string;
     umm remaining_literal = literal_length;
     format_next_item(destination, &read_cursor, &remaining_literal, args...);
+}
+
+
+template <typename T>
+inline String to_string(T value, Region* memory = temp)
+{
+    return Format(memory, "%", value);
 }
 
 

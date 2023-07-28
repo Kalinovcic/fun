@@ -57,6 +57,9 @@ static Block* materialize_block(Unit* unit, Block* materialize_from,
     unit->materialized_block_count++;
     unit->most_recent_materialized_block = block;
 
+    Compiler* ctx = unit->env->ctx;
+    ctx->count_inferred_blocks++;
+
     Pipeline_Task task = {};
     task.kind  = PIPELINE_TASK_INFER_BLOCK;
     task.unit  = unit;
@@ -564,7 +567,7 @@ Constant* get_constant(Block* block, Expression expr, Type type_assertion)
     return &block->constants[infer->constant];
 }
 
-void set_constant(Block* block, Expression expr, Type type_assertion, Constant* value)
+void set_constant(Compiler* ctx, Block* block, Expression expr, Type type_assertion, Constant* value)
 {
     auto* infer = &block->inferred_expressions[expr];
     assert(!(infer->flags & INFERRED_EXPRESSION_COMPLETED_INFERENCE));
@@ -572,6 +575,7 @@ void set_constant(Block* block, Expression expr, Type type_assertion, Constant* 
     assert(infer->constant == INVALID_CONSTANT);
     infer->constant = block->constants.count;
     add_item(&block->constants, value);
+    ctx->count_inferred_constants++;
 }
 
 
@@ -615,7 +619,7 @@ static bool copy_constant(Environment* env, Block* to_block, Expression to_id, B
     IllegalDefaultCase;
     }
 
-    set_constant(to_block, to_id, type_assertion, &constant);
+    set_constant(env->ctx, to_block, to_id, type_assertion, &constant);
     return true;
 }
 
@@ -662,16 +666,18 @@ static bool check_constant_fits_in_runtime_type(Unit* unit, Parsed_Expression co
             for (umm i = 0; i <= numeric.significand_bits; i++)
                 int_set_bit(&prev, numeric.max_exponent - i);
 
-            Integer den = {};
-            int_set16(&den, 1);
-            f_prev = fract_make(&prev, &den);
-            int_free(&den);
+            Integer zero = {};
+            Integer one = {};
+            int_set16(&one, 1);
+            f_prev = fract_make(&prev, &one);
+            f_next = fract_make(&zero, &one);
+            int_free(&one);
 
             next_is_infinity = true;
             fits = false;
         }
         // Check if the number is too small.
-        else if (int_is_zero(&mantissa))
+        else if (int_is_zero(&mantissa) || exponent < numeric.min_exponent_subnormal)
         {
             int_set16(&f_prev.num, 0);
             int_set16(&f_prev.den, 1);
@@ -680,7 +686,7 @@ static bool check_constant_fits_in_runtime_type(Unit* unit, Parsed_Expression co
             fits = false;
         }
         // Check if the mantissa is inexact.
-        else if (!exact)
+        else if (!exact || mantissa_size > numeric.mantissa_bits)
         {
             // To get the closest smaller value, we copy the first
             // significand_bits+1 bits after the most significant bit.
@@ -707,12 +713,28 @@ static bool check_constant_fits_in_runtime_type(Unit* unit, Parsed_Expression co
                 int_free(&to_add);
             }
 
-            assert(exponent > -(smm)(msb));
-            Integer den = {};
-            int_set_bit(&den, msb - exponent);
-            f_prev = fract_make(&prev, &den);
-            f_next = fract_make(&next, &den);
-            int_free(&den);
+            if (exponent == numeric.max_exponent && int_log2_abs(&next) > msb)
+                next_is_infinity = true;
+
+            smm exponent_fixup = exponent - (smm)(msb);
+            if (exponent_fixup <= 0)
+            {
+                Integer den = {};
+                int_set_bit(&den, -exponent_fixup);
+                f_prev = fract_make(&prev, &den);
+                f_next = fract_make(&next, &den);
+                int_free(&den);
+            }
+            else
+            {
+                Integer den = {};
+                int_set16(&den, 1);
+                int_shift_left(&prev, exponent_fixup);
+                int_shift_left(&next, exponent_fixup);
+                f_prev = fract_make(&prev, &den);
+                f_next = fract_make(&next, &den);
+                int_free(&den);
+            }
             fits = false;
         }
 
@@ -725,6 +747,9 @@ static bool check_constant_fits_in_runtime_type(Unit* unit, Parsed_Expression co
             if (!fract_is_zero(&f_prev)) f_prev.num.negative = true;
             if (!fract_is_zero(&f_next)) f_next.num.negative = true;
         }
+
+        fract_reduce(&f_prev);
+        fract_reduce(&f_next);
 
         String s_prev = fract_display(&f_prev);
         String s_next = fract_display(&f_next);
@@ -885,10 +910,8 @@ static bool pattern_matching_inference(Unit* unit, Block* block, Expression id, 
     assert(type != INVALID_TYPE);
     assert(!is_soft_type(type));
 
-    auto* expr  = &block->parsed_expressions[id];
-    auto* infer = &block->inferred_expressions[id];
+    auto* expr = &block->parsed_expressions[id];
     assert(expr->flags & EXPRESSION_HAS_TO_BE_EXTERNALLY_INFERRED);
-    assert(infer->type == INVALID_TYPE);
 
     switch (expr->kind)
     {
@@ -900,7 +923,7 @@ static bool pattern_matching_inference(Unit* unit, Block* block, Expression id, 
             assert(expr->declaration.type  == NO_EXPRESSION);
             assert(expr->declaration.value == NO_EXPRESSION);
             set_inferred_type(block, id, TYPE_SOFT_TYPE);
-            set_constant_type(block, id, type);
+            set_constant_type(ctx, block, id, type);
             complete_expression(block, id);
         }
         else if (expr->flags & EXPRESSION_DECLARATION_IS_ALIAS)
@@ -910,7 +933,7 @@ static bool pattern_matching_inference(Unit* unit, Block* block, Expression id, 
             if (!pattern_matching_inference(unit, block, expr->declaration.value, type, inferred_from, full_inferred_type))
                 return false;
             set_inferred_type(block, id, TYPE_SOFT_TYPE);
-            set_constant_type(block, id, type);
+            set_constant_type(ctx, block, id, type);
             complete_expression(block, id);
         }
         else Unreachable;
@@ -930,8 +953,9 @@ static bool pattern_matching_inference(Unit* unit, Block* block, Expression id, 
         Type reduced = set_indirection(type, get_indirection(type) - 1);
         if (!pattern_matching_inference(unit, block, expr->unary_operand, reduced, inferred_from, full_inferred_type))
             return false;
+
         set_inferred_type(block, id, TYPE_SOFT_TYPE);
-        set_constant_type(block, id, type);
+        set_constant_type(ctx, block, id, type);
         complete_expression(block, id);
     } break;
 
@@ -949,8 +973,9 @@ static bool pattern_matching_inference(Unit* unit, Block* block, Expression id, 
         Type indirected = set_indirection(type, indirection);
         if (!pattern_matching_inference(unit, block, expr->unary_operand, indirected, inferred_from, full_inferred_type))
             return false;
+
         set_inferred_type(block, id, TYPE_SOFT_TYPE);
-        set_constant_type(block, id, type);
+        set_constant_type(ctx, block, id, type);
         complete_expression(block, id);
     } break;
 
@@ -1129,7 +1154,11 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
     #define Error(...) return (report_error(ctx, expr, Format(temp, ##__VA_ARGS__)), YIELD_ERROR)
 
     #define InferType(type) { if (set_inferred_type(block, id, type)) override_made_progress = true; }
-    #define InferenceComplete() return (complete_expression(block, id), YIELD_COMPLETED)
+    #define InferenceComplete() \
+        return (complete_expression(block, id), \
+                ctx->count_inferred_expressions++, \
+                ctx->count_inferred_expressions_by_kind[expr->kind]++, \
+                YIELD_COMPLETED)
 
 
     if (expr->flags & EXPRESSION_HAS_CONDITIONAL_INFERENCE)
@@ -1175,13 +1204,13 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
         InferenceComplete();
 
     case EXPRESSION_ZERO:    InferType(TYPE_SOFT_ZERO); InferenceComplete();
-    case EXPRESSION_TRUE:    InferType(TYPE_SOFT_BOOL); set_constant_bool(block, id, true);  InferenceComplete();
-    case EXPRESSION_FALSE:   InferType(TYPE_SOFT_BOOL); set_constant_bool(block, id, false); InferenceComplete();
+    case EXPRESSION_TRUE:    InferType(TYPE_SOFT_BOOL); set_constant_bool(ctx, block, id, true);  InferenceComplete();
+    case EXPRESSION_FALSE:   InferType(TYPE_SOFT_BOOL); set_constant_bool(ctx, block, id, false); InferenceComplete();
     case EXPRESSION_NUMERIC_LITERAL:
     {
         InferType(TYPE_SOFT_NUMBER);
         Token_Info_Number* token_info = (Token_Info_Number*) get_token_info(ctx, &expr->literal);
-        set_constant_number(block, id, fract_clone(&token_info->value));
+        set_constant_number(ctx, block, id, fract_clone(&token_info->value));
         InferenceComplete();
     } break;
 
@@ -1196,7 +1225,7 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
     {
         InferType(TYPE_SOFT_TYPE);
         assert(is_primitive_type(expr->parsed_type) || expr->parsed_type == TYPE_STRING);
-        set_constant_type(block, id, expr->parsed_type);
+        set_constant_type(ctx, block, id, expr->parsed_type);
         InferenceComplete();
     } break;
 
@@ -1206,7 +1235,7 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
         Soft_Block soft = {};
         soft.materialized_parent = block;
         soft.parsed_child = expr->parsed_block;
-        set_constant_block(block, id, soft);
+        set_constant_block(ctx, block, id, soft);
         InferenceComplete();
     } break;
 
@@ -1218,7 +1247,7 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
         Unit* new_unit = materialize_unit(env, expr->parsed_block, parent);
         if (expr->parsed_block->flags & BLOCK_HAS_STRUCTURE_PLACEMENT)
             new_unit->flags |= UNIT_IS_STRUCT;
-        set_constant_type(block, id, new_unit->type_id);
+        set_constant_type(ctx, block, id, new_unit->type_id);
         InferenceComplete();
     } break;
 
@@ -1341,7 +1370,7 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
         {
             bool const* value = get_constant_bool(block, expr->unary_operand);
             if (!value) WaitOperand(expr->unary_operand);
-            set_constant_bool(block, id, !value);
+            set_constant_bool(ctx, block, id, !value);
         }
 
         InferenceComplete();
@@ -1361,7 +1390,7 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
         {
             Fraction const* value = get_constant_number(block, expr->unary_operand);
             if (!value) WaitOperand(expr->unary_operand);
-            set_constant_number(block, id, fract_neg(value));
+            set_constant_number(ctx, block, id, fract_neg(value));
         }
 
         InferenceComplete();
@@ -1384,7 +1413,7 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
             u32 indirection = get_indirection(*type) + 1;
             if (indirection > TYPE_MAX_INDIRECTION)
                 Error("The operand to '&' is already at maximum indirection %!", TYPE_MAX_INDIRECTION);
-            set_constant_type(block, id, set_indirection(*type, indirection));
+            set_constant_type(ctx, block, id, set_indirection(*type, indirection));
         }
         else if (is_soft_type(op_infer->type))
         {
@@ -1420,7 +1449,7 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
             u32 indirection = get_indirection(*type);
             if (!indirection)
                 Error("Expected a pointer as operand to '*', but got %.", exact_type_description(unit, *type));
-            set_constant_type(block, id, set_indirection(*type, indirection - 1));
+            set_constant_type(ctx, block, id, set_indirection(*type, indirection - 1));
         }
         else if (is_soft_type(op_infer->type))
         {
@@ -1455,7 +1484,7 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
 
         if (is_user_defined_type(*type) && !is_user_type_sizeable(env, *type))
             WaitOperand(expr->unary_operand);
-        set_constant_number(block, id, fract_make_u64(get_type_size(unit, *type)));
+        set_constant_number(ctx, block, id, fract_make_u64(get_type_size(unit, *type)));
 
         InferenceComplete();
     } break;
@@ -1477,7 +1506,7 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
 
         if (is_user_defined_type(*type) && !is_user_type_sizeable(env, *type))
             WaitOperand(expr->unary_operand);
-        set_constant_number(block, id, fract_make_u64(get_type_alignment(unit, *type)));
+        set_constant_number(ctx, block, id, fract_make_u64(get_type_alignment(unit, *type)));
 
         InferenceComplete();
     } break;
@@ -1657,7 +1686,7 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
             }
 
             assert(infer->type == TYPE_SOFT_NUMBER);
-            set_constant_number(block, id, result);
+            set_constant_number(ctx, block, id, result);
         }
 
         InferenceComplete();
@@ -1775,7 +1804,7 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
             else if (expr->kind == EXPRESSION_LESS_THAN)        result =  negative;
             else if (expr->kind == EXPRESSION_LESS_OR_EQUAL)    result =  zero || negative;
             else Unreachable;
-            set_constant_bool(block, id, result);
+            set_constant_bool(ctx, block, id, result);
         }
 
         InferenceComplete();
@@ -1835,7 +1864,7 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
             else Unreachable;
 
             assert(infer->type == TYPE_SOFT_BOOL);
-            set_constant_bool(block, id, result);
+            set_constant_bool(ctx, block, id, result);
         }
 
         InferenceComplete();
@@ -2003,7 +2032,7 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
 
     case EXPRESSION_CALL:
     {
-        // Make sure everything on our side is inferred.
+        // Wait for the callee to infer.
         auto* lhs_infer = &block->inferred_expressions[expr->call.lhs];
         if (lhs_infer->type == INVALID_TYPE) WaitOperand(expr->call.lhs);
         if (lhs_infer->type != TYPE_SOFT_BLOCK)
@@ -2015,55 +2044,230 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
         if (soft_callee->parsed_child->flags & BLOCK_IS_UNIT)
             Error("The block on the left-hand side of the call expression is a unit. Units can't be called.");
 
-        Expression_List const* args = expr->call.arguments;
-        for (umm arg = 0; arg < args->count; arg++)
-            if (block->inferred_expressions[args->expressions[arg]].type == INVALID_TYPE)
-                WaitOperand(args->expressions[arg]);
+        Block* lhs_parent = soft_callee->materialized_parent;
+        Block* lhs_block  = soft_callee->parsed_child;
+        assert(lhs_block);
 
-        String callee_name = "Callee"_s;
+        String callee_name = "anonymous callee"_s;
         if (soft_callee->has_alias)
             callee_name = get_identifier(ctx, &soft_callee->alias);
 
-        // First stage: materializing the callee
+        Expression_List const* args = expr->call.arguments;
+        umm count_ordered_arguments = args->count;
+        umm count_named_arguments   = 0;  // @Incomplete
+
+        struct Found_Argument
+        {
+            umm                      index;  // 1-indexed printable index
+            Expression               expr_id;
+            Parsed_Expression const* expr;
+            Inferred_Expression*     infer;
+            bool                     is_named;
+        };
+
+        auto get_argument_index_for_parameter_index = [&](umm index, Found_Argument* out)
+        {
+            // @Incomplete - when we merge in named and default parameters,
+            // this will be incomplete
+            if (index >= count_ordered_arguments)
+                return false;
+
+            out->index     = index + 1;
+            out->expr_id   = args->expressions[index];
+            out->expr      = &block->parsed_expressions[out->expr_id];
+            out->infer     = &block->inferred_expressions[out->expr_id];
+            out->is_named  = false;  // @Incomplete
+            return true;
+        };
+
+        // If we haven't found the materialized callee yet, here we go...
         if (!infer->called_block)
         {
-            // First check against the parsed block that the argument count is correct.
-            Block* lhs_parent = soft_callee->materialized_parent;
-            Block* lhs_block  = soft_callee->parsed_child;
-            assert(lhs_block);
+            Dynamic_Array<Argument_Key> argument_keys = {};
+            Defer(free_heap_array(&argument_keys));  // :ClearArgumentKeysOnMaterialization
 
-            umm parameter_count = 0;
+            // Go over all parameters that the callee expects:
+            //  - check that they are passed correctly
+            //  - wait for argument types or constants we need to infer
+            //  - collect argument keys which identify equivalent calls
+            umm param_index = 0;
             For (lhs_block->imperative_order)
-                if (lhs_block->parsed_expressions[*it].flags & EXPRESSION_DECLARATION_IS_PARAMETER)
-                    parameter_count++;
-            if (parameter_count != args->count)
-                Error("% expects % %, but you provided %.",
-                    callee_name, parameter_count, plural(parameter_count, "argument"_s, "arguments"_s),
-                    args->count);
+            {
+                Expression param_id = *it;
+                auto* param_expr = &lhs_block->parsed_expressions[param_id];
+                if (!(param_expr->flags & EXPRESSION_DECLARATION_IS_PARAMETER)) continue;
+                Defer(param_index++);
 
-            // Now materialize the callee
+                String param_name = get_identifier(ctx, &param_expr->declaration.name);
+
+                bool has_default_value = false;  // @Incomplete
+                bool must_be_named     = false;  // @Incomplete
+
+                auto* param_type_expr = &lhs_block->parsed_expressions[param_expr->declaration.type];
+                bool param_type_is_incomplete =
+                    (param_type_expr->flags & EXPRESSION_HAS_TO_BE_EXTERNALLY_INFERRED);
+                bool param_value_is_incomplete =
+                    (param_expr->flags & EXPRESSION_DECLARATION_IS_ALIAS);
+                assert(!(param_type_is_incomplete && param_value_is_incomplete));
+
+                Argument_Key* equivalence_key = reserve_item(&argument_keys);
+
+                Found_Argument arg;
+                if (!get_argument_index_for_parameter_index(param_index, &arg))
+                {
+                    if (has_default_value)
+                    {
+                        NotImplemented;
+                    }
+
+                    Error("Missing % required parameter (%) in this call to %.",
+                        english_ordinal(param_index + 1), param_name, callee_name);
+                }
+                else if (must_be_named && !arg.is_named)
+                {
+                    NotImplemented;
+                }
+                else
+                {
+                    if (param_type_is_incomplete)
+                    {
+                        // If the parameter type is incomplete, the type will be equal
+                        // to the argument type, and call equivalence depends on it.
+                        Type arg_type = arg.infer->type;
+                        if (arg_type == INVALID_TYPE)
+                            WaitOperand(arg.expr_id);
+
+                        assert(!param_value_is_incomplete);
+                        if (is_soft_type(arg_type))
+                        {
+                            // @ErrorReporting - print the incomplete type (&$T for instance)
+                            Report(ctx)
+                                .part(arg.expr, Format(temp,
+                                    "% parameter (%) in call to % has an incomplete type which can't be resolved from %.",
+                                    english_ordinal(param_index + 1), param_name, callee_name, vague_type_description_in_compile_time_context(unit, arg_type)))
+                               .part(param_type_expr, "You are required to pass a runtime value for this parameter because of it's type."_s)
+                               .done();
+                            return YIELD_ERROR;
+                        }
+
+                        equivalence_key->type = arg_type;
+                    }
+
+                    if (param_value_is_incomplete)
+                    {
+                        // If the parameter is an alias, the constant will be equal
+                        // to the argument constant, and call equivalence depends on it.
+
+                        Type arg_type = arg.infer->type;
+                        if (arg_type == INVALID_TYPE)
+                            WaitOperand(arg.expr_id);
+
+                        assert(!param_type_is_incomplete);
+                        if (!is_soft_type(arg_type))
+                        {
+                            Report(ctx)
+                                .part(arg.expr, Format(temp,
+                                    "% parameter (%) in call to % is an incomplete alias which can't be resolved from %.",
+                                    english_ordinal(param_index + 1), param_name, callee_name, vague_type_description_in_compile_time_context(unit, arg_type)))
+                               .part(param_type_expr, "You are required to pass a compile-time value for this parameter."_s)
+                               .done();
+                            return YIELD_ERROR;
+                        }
+
+                        Constant* constant = get_constant(block, arg.expr_id, arg_type);
+                        if (!constant)
+                            WaitOperand(arg.expr_id);
+
+                        equivalence_key->type     =  arg_type;
+                        equivalence_key->constant = *constant;
+                    }
+                }
+            }
+
+            // Check if an equivalent call is already being inferred.
+            Call_Key call_key            = {};
+            call_key.unit                = unit;
+            call_key.materialized_parent = lhs_parent;
+            call_key.arguments           = argument_keys;
+            call_key.recompute_hash();
+
             Visibility visibility = (expr->flags & EXPRESSION_ALLOW_PARENT_SCOPE_VISIBILITY)
                                   ? expr->visibility_limit
                                   : NO_VISIBILITY;
-            Block* callee = materialize_block(unit, lhs_block, lhs_parent, visibility);
-            infer->called_block = callee;
 
-            override_made_progress = true;  // We made progress by materializing the callee.
+            if (Call_Value call_value = get(&lhs_block->calls, &call_key))
+            {
+                // We found an equivalent call, so just steal its materialized callee.
+                Block* caller = call_value.caller_block;
+                Expression call = call_value.call_expression;
+
+                Block* called_block = caller->inferred_expressions[call].called_block;
+                assert(called_block);
+                infer->called_block = called_block;
+
+#if 0
+                printf("found an existing call of %.*s! %p %d\n", StringArgs(callee_name), block, id);
+                printf(" unit = %p\n", call_key.unit);
+                printf(" args = [\n");
+                For (call_key.arguments)
+                {
+                    printf("  type = %d", it->type);
+                    if (it->type == TYPE_SOFT_NUMBER)
+                        printf("  number = %.*s", StringArgs(fract_display(&it->constant.number)));
+                    printf("\n");
+                }
+                printf(" ]\n");
+#endif
+            }
+            else
+            {
+                // We didn't find an equivalent call, so we're the first here.
+
+                For (argument_keys)
+                    if (it->type == TYPE_SOFT_NUMBER)
+                        it->constant.number = fract_clone(&it->constant.number);
+                argument_keys = {};  // :ClearArgumentKeysOnMaterialization
+
+                call_value.caller_block    = block;
+                call_value.call_expression = id;
+                set(&lhs_block->calls, &call_key, &call_value);
+
+                // Materialize the callee
+                Block* callee = materialize_block(unit, lhs_block, lhs_parent, visibility);
+                infer->called_block = callee;
+
+#if 0
+                printf("found a new unique call of %.*s! %p %d\n", StringArgs(callee_name), block, id);
+                printf(" unit = %p\n", call_key.unit);
+                printf(" args = [\n");
+                For (call_key.arguments)
+                {
+                    printf("  type = %d", it->type);
+                    if (it->type == TYPE_SOFT_NUMBER)
+                        printf("  number = %.*s", StringArgs(fract_display(&it->constant.number)));
+                    printf("\n");
+                }
+                printf(" ]\n");
+#endif
+            }
+
+            assert(infer->called_block);
+            assert(infer->called_block->parent_scope_visibility_limit == visibility);
+            override_made_progress = true;  // We made progress by finding the callee.
         }
 
         Expression waiting_on_return      = NO_EXPRESSION;
         Expression waiting_on_a_parameter = NO_EXPRESSION;
         Expression waiting_on_an_argument = NO_EXPRESSION;
 
-        // Second stage: checking the parameter types and inferring the return type
+        // Checking the parameter types and inferring the return type
         Block* callee = infer->called_block;
-        umm parameter_index = 0;
+        umm param_index = 0;
         For (callee->imperative_order)
         {
             Expression param_id = *it;
             auto* param_expr  = &callee->parsed_expressions  [param_id];
             auto* param_infer = &callee->inferred_expressions[param_id];
-            if (param_expr->kind != EXPRESSION_DECLARATION) continue;
 
             if (param_expr->flags & EXPRESSION_DECLARATION_IS_RETURN)
             {
@@ -2075,167 +2279,189 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
             }
 
             if (!(param_expr->flags & EXPRESSION_DECLARATION_IS_PARAMETER)) continue;
-            Defer(parameter_index++);
-            assert(param_expr->declaration.type != NO_EXPRESSION);
-            assert(param_expr->declaration.value == NO_EXPRESSION);
+            Defer(param_index++);
 
             String param_name = get_identifier(ctx, &param_expr->declaration.name);
 
-            auto* param_type_expr = &callee->parsed_expressions[param_expr->declaration.type];
-            if ((param_type_expr->flags & EXPRESSION_HAS_TO_BE_EXTERNALLY_INFERRED) &&
-                param_infer->type == INVALID_TYPE)
+            bool has_default_value = false;  // @Incomplete
+            bool must_be_named     = false;  // @Incomplete
+
+            auto  param_type_id    = param_expr->declaration.type;
+            auto* param_type_expr  = &callee->parsed_expressions  [param_type_id];
+            auto* param_type_infer = &callee->inferred_expressions[param_type_id];
+            bool param_type_is_incomplete =
+                (param_type_expr->flags & EXPRESSION_HAS_TO_BE_EXTERNALLY_INFERRED);
+            bool param_value_is_incomplete =
+                (param_expr->flags & EXPRESSION_DECLARATION_IS_ALIAS);
+            assert(!(param_type_is_incomplete && param_value_is_incomplete));
+
+            Found_Argument arg;
+            bool arg_found = get_argument_index_for_parameter_index(param_index, &arg);
+            assert(arg_found || has_default_value);
+            assert(!arg_found || !(must_be_named && !arg.is_named));
+
+            if (!arg_found) NotImplemented;
+            Type arg_type = arg.infer->type;
+
+            if (param_type_is_incomplete && param_infer->type == INVALID_TYPE)
             {
-                assert(!(param_expr->flags & EXPRESSION_DECLARATION_IS_ALIAS));
-                assert(parameter_index < args->count);
+                // If the parameter type is incomplete, the type will be equal
+                // to the argument type.
+                assert(arg_type != INVALID_TYPE);  // waited for this in callee inference
+                assert(!is_soft_type(arg_type));   // checked in call inference
+                assert(!param_value_is_incomplete);
 
-                auto* arg_expr = &block->parsed_expressions  [args->expressions[parameter_index]];
-                Type  arg_type =  block->inferred_expressions[args->expressions[parameter_index]].type;
-                assert(arg_type != INVALID_TYPE);
-
-                if (is_soft_type(arg_type))
-                {
-                    Report(ctx).part(arg_expr, Format(temp, "A runtime value is required for parameter #% ('%'), but the argument is %.",
-                                                      parameter_index + 1, param_name,
-                                                      vague_type_description_in_compile_time_context(unit, arg_type)))
-                               .part(param_type_expr, "This is required because the parameter infers its type from the caller."_s)
-                               .done();
-                    return YIELD_ERROR;
-                }
-
-                if (!pattern_matching_inference(unit, callee, param_expr->declaration.type, arg_type, arg_expr, arg_type))
+                if (!pattern_matching_inference(unit, callee, param_type_id, arg_type, arg.expr, arg_type))
                     return YIELD_ERROR;
 
                 param_infer->flags |= INFERRED_EXPRESSION_IS_NOT_EVALUATED_AT_RUNTIME;
                 if (set_inferred_type(callee, param_id, arg_type))
-                    override_made_progress = true;  // We made progress by inferring the callee's param type.
+                    override_made_progress = true;  // we made progress by inferring the callee's param type.
                 complete_expression(callee, param_id);
             }
 
-            auto* type_infer = &callee->inferred_expressions[param_expr->declaration.type];
-            Type const* param_type_ptr = NULL;
-            if (type_infer->type == INVALID_TYPE || type_infer->type != TYPE_SOFT_TYPE ||
-                !(param_type_ptr = get_constant_type(callee, param_expr->declaration.type)))
+            // We need to wait for the callee to infer its parameter types,
+            // but we need to allow them to infer out of order, so we wait at the
+            // end of the loop.
+            Type const* param_type_constant = NULL;
+            if (param_type_infer->type == INVALID_TYPE ||
+                param_type_infer->type != TYPE_SOFT_TYPE ||
+                !(param_type_constant = get_constant_type(callee, param_type_id)))
             {
-                // We don't immediately Wait(), to enable out of order parameter inference.
-                waiting_on_a_parameter = param_expr->declaration.type;
+                waiting_on_a_parameter = param_type_id;
                 continue;
             }
+            Type param_type = *param_type_constant;
 
-            assert(param_type_ptr);
-            Type param_type = *param_type_ptr;
-
-            assert(args->count > parameter_index);
-            auto  arg_id    = args->expressions[parameter_index];
-            auto* arg_expr  = &block->parsed_expressions  [arg_id];
-            auto* arg_infer = &block->inferred_expressions[arg_id];
-            Type  arg_type  = arg_infer->type;
-            if (param_expr->flags & EXPRESSION_DECLARATION_IS_ALIAS)
+            if (param_value_is_incomplete)
             {
-                if (param_infer->type != INVALID_TYPE) continue;  // already inferred
+                if (param_infer->type != INVALID_TYPE)
+                    continue;  // already inferred
+                assert(arg_type != INVALID_TYPE);  // waited for this in callee inference
+                assert(is_soft_type(arg_type));    // checked in callee inference
 
                 if (is_numeric_type(param_type))
                 {
-                    if (is_floating_point_type(param_type))
-                        NotImplemented;
-
                     if (arg_type != TYPE_SOFT_NUMBER)
-                        Error("Argument #% ('%') is expected to be a compile-time integer, but is %.",
-                            parameter_index + 1, param_name,
-                            vague_type_description_in_compile_time_context(unit, arg_type));
-
-                    Fraction const* fraction = get_constant_number(block, arg_id);
-                    if (!fraction)
                     {
-                        waiting_on_an_argument = arg_id;
-                        continue;
+                        Report(ctx)
+                        .part(arg.expr, Format(temp,
+                            "% argument in this call to % is expected to be a compile-time number, but is %.",
+                            english_ordinal(arg.index), callee_name, vague_type_description_in_compile_time_context(unit, arg_type)))
+                        .part(param_type_expr, Format(temp,
+                            "This is because it matches the % parameter '%' which is an incomplete % alias.",
+                            english_ordinal(param_index + 1), param_name, exact_type_description(unit, param_type)))
+                        .done();
+                        return YIELD_ERROR;
                     }
-                    if (!fract_is_integer(fraction))
-                        Error("Argument #% ('%') is expected to be a compile-time integer, but is fractional.\n"
-                              "Value is %.", parameter_index + 1, param_name, fract_display(fraction));
 
-                    if (!check_constant_fits_in_runtime_type(unit, arg_expr, fraction, param_type))
+                    Fraction const* fraction = get_constant_number(block, arg.expr_id);
+                    assert(fraction);  // waited for this in callee inference
+                    if (!check_constant_fits_in_runtime_type(unit, arg.expr, fraction, param_type))
                         return YIELD_ERROR;
 
                     if (set_inferred_type(callee, param_id, TYPE_SOFT_NUMBER))
-                        override_made_progress = true;  // We made progress by inferring the callee's param type.
-                    set_constant_number(callee, param_id, fract_clone(fraction));
+                        override_made_progress = true;  // we made progress by inferring the callee's param type.
+                    set_constant_number(ctx, callee, param_id, fract_clone(fraction));
                     complete_expression(callee, param_id);
                 }
                 else if (is_bool_type(param_type))
                 {
                     if (arg_type != TYPE_SOFT_BOOL)
-                        Error("Argument #% ('%') is expected to be a compile-time boolean, but is %.",
-                            parameter_index + 1, param_name,
-                            vague_type_description_in_compile_time_context(unit, arg_type));
-                    bool const* constant = get_constant_bool(block, arg_id);
-                    if (!constant)
                     {
-                        waiting_on_an_argument = arg_id;
-                        continue;
+                        Report(ctx)
+                        .part(arg.expr, Format(temp,
+                            "% argument in this call to % is expected to be a compile-time boolean, but is %.",
+                            english_ordinal(arg.index), callee_name, vague_type_description_in_compile_time_context(unit, arg_type)))
+                        .part(param_type_expr, Format(temp,
+                            "This is because it matches the % parameter '%' which is an incomplete % alias.",
+                            english_ordinal(param_index + 1), param_name, exact_type_description(unit, param_type)))
+                        .done();
+                        return YIELD_ERROR;
                     }
+                    bool const* constant = get_constant_bool(block, arg.expr_id);
+                    assert(constant);  // waited for this in callee inference
                     if (set_inferred_type(callee, param_id, TYPE_SOFT_BOOL))
-                        override_made_progress = true;  // We made progress by inferring the callee's param type.
-                    set_constant_bool(callee, param_id, *constant);
+                        override_made_progress = true;  // we made progress by inferring the callee's param type.
+                    set_constant_bool(ctx, callee, param_id, *constant);
                     complete_expression(callee, param_id);
                 }
                 else if (param_type == TYPE_TYPE)
                 {
                     if (arg_type != TYPE_SOFT_TYPE)
-                        Error("Argument #% ('%') is expected to be a compile-time type, but is %.",
-                            parameter_index + 1, param_name,
-                            vague_type_description_in_compile_time_context(unit, arg_type));
-                    Type const* constant = get_constant_type(block, arg_id);
-                    if (!constant)
                     {
-                        waiting_on_an_argument = arg_id;
-                        continue;
+                        Report(ctx)
+                        .part(arg.expr, Format(temp,
+                            "% argument in this call to % is expected to be a compile-time type, but is %.",
+                            english_ordinal(arg.index), callee_name, vague_type_description_in_compile_time_context(unit, arg_type)))
+                        .part(param_type_expr, Format(temp,
+                            "This is because it matches the % parameter '%' which is an incomplete % alias.",
+                            english_ordinal(param_index + 1), param_name, exact_type_description(unit, param_type)))
+                        .done();
+                        return YIELD_ERROR;
                     }
+                    Type const* constant = get_constant_type(block, arg.expr_id);
+                    assert(constant);  // waited for this in callee inference
                     if (set_inferred_type(callee, param_id, TYPE_SOFT_TYPE))
-                        override_made_progress = true;  // We made progress by inferring the callee's param type.
-                    set_constant_type(callee, param_id, *constant);
+                        override_made_progress = true;  // we made progress by inferring the callee's param type.
+                    set_constant_type(ctx, callee, param_id, *constant);
                     complete_expression(callee, param_id);
                 }
                 else if (param_type == TYPE_SOFT_BLOCK)
                 {
                     if (arg_type != TYPE_SOFT_BLOCK)
-                        Error("Argument #% ('%') is expected to be a block, but is %.",
-                            parameter_index + 1, param_name,
-                            vague_type_description_in_compile_time_context(unit, arg_type));
-
-                    Soft_Block const* soft = get_constant_block(block, arg_id);
-                    if (!soft)
                     {
-                        waiting_on_an_argument = arg_id;
-                        continue;
+                        Report(ctx)
+                        .part(arg.expr, Format(temp,
+                            "% argument in this call to % is expected to be a block, but is %.",
+                            english_ordinal(arg.index), callee_name, vague_type_description_in_compile_time_context(unit, arg_type)))
+                        .part(param_type_expr, Format(temp,
+                            "This is because it matches the % parameter '%' which is an incomplete % alias.",
+                            english_ordinal(param_index + 1), param_name, exact_type_description(unit, param_type)))
+                        .done();
+                        return YIELD_ERROR;
                     }
 
+                    Soft_Block const* soft = get_constant_block(block, arg.expr_id);
+                    assert(soft);  // waited for this in callee inference
                     if (set_inferred_type(callee, param_id, TYPE_SOFT_BLOCK))
-                        override_made_progress = true;  // We made progress by inferring the callee's param type.
-                    set_constant_block(callee, param_id, *soft);
+                        override_made_progress = true;  // we made progress by inferring the callee's param type.
+                    set_constant_block(ctx, callee, param_id, *soft);
                     complete_expression(callee, param_id);
                 }
                 else Unreachable;
+                continue;
             }
-            else
+
+            // We may need to wait for the argument type still.
+            if (arg_type == INVALID_TYPE)
             {
-                switch (harden_assignment(unit, expr, block, param_type, arg_id,
-                                          Format(temp, "Argument #% ('%') doesn't match the parameter type.",
-                                                      parameter_index + 1, param_name)))
-                {
-                IllegalDefaultCase;
-                case YIELD_COMPLETED:   break;
-                case YIELD_ERROR:       return YIELD_ERROR;
-                case YIELD_NO_PROGRESS: waiting_on_an_argument = arg_id; break;
-                }
+                assert(!param_type_is_incomplete);   // ... but not for these cases, they
+                assert(!param_value_is_incomplete);  // are checked in callee inference
+                waiting_on_an_argument = arg.expr_id;
+                continue;
+            }
+
+            // Check the assignment is valid.
+            switch (harden_assignment(unit, expr, block, param_type, arg.expr_id, Format(temp,
+                    "% argument in this call to % doesn't match the % parameter (%) type %.",
+                    english_ordinal(arg.index), callee_name,
+                    english_ordinal(param_index + 1), param_name,
+                    exact_type_description(unit, param_type))))
+            {
+            IllegalDefaultCase;
+            case YIELD_COMPLETED:   break;
+            case YIELD_ERROR:       return YIELD_ERROR;
+            case YIELD_NO_PROGRESS: waiting_on_an_argument = arg.expr_id; break;
             }
         }
 
-        if (waiting_on_return != NO_EXPRESSION)
-            Wait(WAITING_ON_RETURN_TYPE_INFERENCE, waiting_on_return, callee);
-        if (waiting_on_a_parameter != NO_EXPRESSION)
-            Wait(WAITING_ON_PARAMETER_INFERENCE, waiting_on_a_parameter, callee);
         if (waiting_on_an_argument != NO_EXPRESSION)
             WaitOperand(waiting_on_an_argument);
+        if (waiting_on_a_parameter != NO_EXPRESSION)
+            Wait(WAITING_ON_PARAMETER_INFERENCE, waiting_on_a_parameter, callee);
+        if (waiting_on_return != NO_EXPRESSION)
+            Wait(WAITING_ON_RETURN_TYPE_INFERENCE, waiting_on_return, callee);
 
         if (infer->type == INVALID_TYPE)
             InferType(TYPE_VOID);
@@ -2382,7 +2608,6 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
             if (!data) return NULL;
             assert(data->unit);
             if (data->unit->flags & UNIT_IS_STRUCT) return NULL;
-            if (data->unit->flags & UNIT_IS_RUN)    return NULL;
             return data;
         };
 
@@ -2423,8 +2648,10 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
         assert(data->unit->entry_block);
         assert(data->unit->entry_block->flags & BLOCK_IS_MATERIALIZED);
 
-        Unit* new_unit = materialize_unit(env, data->unit->entry_block->materialized_from, block);
-        new_unit->flags |= UNIT_IS_RUN;
+        Pipeline_Task* await_task = reserve_item(&env->pipeline);
+        await_task->kind = PIPELINE_TASK_AWAIT_RUN;
+        await_task->unit = data->unit;
+
         InferenceComplete();
     } break;
 
@@ -2583,6 +2810,10 @@ Unit* materialize_unit(Environment* env, Block* initiator, Block* materialized_p
 
     unit->entry_block = materialize_block(unit, initiator, materialized_parent, NO_VISIBILITY);
 
+    env->materialized_unit_count++;
+    env->most_recent_materialized_unit = unit;
+
+    env->ctx->count_inferred_units++;
     return unit;
 }
 
@@ -2600,26 +2831,6 @@ void confirm_unit_placed(Unit* unit, u64 size, u64 alignment)
 void confirm_unit_patched(Unit* unit)
 {
     unit->flags |= UNIT_IS_PATCHED;
-
-    if (unit->flags & UNIT_IS_RUN)
-    {
-        Environment* env = unit->env;
-        byte* storage = user_alloc(env->user, unit->storage_size, unit->storage_alignment);
-        memset(storage, 0, 3 * sizeof(void*));
-
-        Pipeline_Task* run_task = reserve_item(&env->pipeline);
-        run_task->kind = PIPELINE_TASK_RUN;
-        if (env->puppeteer && env->puppeteer_has_custom_backend)
-        {
-            run_task->unit = unit;
-        }
-        else
-        {
-            assert(unit->compiled_bytecode);
-            run_task->run_environment = env;
-            run_task->run_from = { unit, unit->entry_block->first_instruction, storage };
-        }
-    }
 }
 
 
@@ -2627,6 +2838,7 @@ void confirm_unit_patched(Unit* unit)
 Environment* make_environment(Compiler* ctx, Environment* puppeteer)
 {
     Environment* env = alloc<Environment>(&ctx->pipeline_memory);
+
     env->ctx = ctx;
     env->user = create_user();
 
@@ -2732,6 +2944,14 @@ continue_pipeline:
             case YIELD_NO_PROGRESS:     break;
             case YIELD_ERROR:           return YIELD_ERROR;
             IllegalDefaultCase;
+            }
+
+            if (env->materialized_unit_count >= MAX_UNITS_PER_ENVIRONMENT)
+            {
+                Report(ctx).part(&unit->initiator_from, Format(temp, "Too many units instantiated in this environment. Maximum is %.", MAX_UNITS_PER_ENVIRONMENT))
+                           .part(&unit->entry_block->from, "The most recent instantiated unit is here. It may or may not be part of the problem."_s)
+                           .done();
+                return YIELD_ERROR;
             }
 
             if (unit->materialized_block_count >= MAX_BLOCKS_PER_UNIT)
@@ -2854,30 +3074,51 @@ continue_pipeline:
     if (had_patching_to_do)
         goto continue_pipeline;
 
-    if (env->pipeline.count)
+    Pipeline_Task task = env->pipeline[0];
+
+    if (task.kind == PIPELINE_TASK_AWAIT_RUN)
     {
-        Pipeline_Task task = env->pipeline[0];
-        env->pipeline[0] = env->pipeline[env->pipeline.count - 1];
-        env->pipeline.count--;
-        made_progress = true;
+        Unit* unit = task.unit;
+        if (!(unit->flags & UNIT_IS_PATCHED))
+            goto continue_pipeline;
 
-        assert(task.kind == PIPELINE_TASK_RUN);
+        Environment* env = unit->env;
+        byte* storage = user_alloc(env->user, unit->storage_size, unit->storage_alignment);
+        memset(storage, 0, 3 * sizeof(void*));
 
+        task.kind = PIPELINE_TASK_RUN;
         if (env->puppeteer && env->puppeteer_has_custom_backend)
         {
-            wake_puppeteer(env, task, /* actionable */ true);
-            goto continue_pipeline;
+            task.unit = unit;
         }
-
-        enter_lockdown(task.run_environment->user);
-        run_bytecode(task.run_environment->user, task.run_from);
-        exit_lockdown(task.run_environment->user);
-
-        if (env->puppeteer)
+        else
         {
-            wake_puppeteer(env, task, /* actionable */ false);
-            goto continue_pipeline;
+            assert(unit->compiled_bytecode);
+            task.run_environment = env;
+            task.run_from = { unit, unit->entry_block->first_instruction, storage };
         }
+    }
+
+    env->pipeline[0] = env->pipeline[env->pipeline.count - 1];
+    env->pipeline.count--;
+    made_progress = true;
+
+    assert(task.kind == PIPELINE_TASK_RUN);
+
+    if (env->puppeteer && env->puppeteer_has_custom_backend)
+    {
+        wake_puppeteer(env, task, /* actionable */ true);
+        goto continue_pipeline;
+    }
+
+    enter_lockdown(task.run_environment->user);
+    run_bytecode(task.run_environment->user, task.run_from);
+    exit_lockdown(task.run_environment->user);
+
+    if (env->puppeteer)
+    {
+        wake_puppeteer(env, task, /* actionable */ false);
+        goto continue_pipeline;
     }
 
     goto continue_pipeline;

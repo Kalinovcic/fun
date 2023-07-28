@@ -202,11 +202,20 @@ bool fract_is_integer(Fraction const* f)
     return f->den.size == 1 && f->den.digit[0] == 1;
 }
 
+bool fract_equals(Fraction const* a, Fraction const* b)
+{
+    quick_asserts(a);
+    quick_asserts(b);
+    return int_compare(&a->num, &b->num) == 0
+        && int_compare(&a->den, &b->den) == 0;
+}
+
 Fraction fract_neg(Fraction const* a)
 {
     quick_asserts(a);
     Fraction result = fract_clone(a);
-    int_negate(&result.num);
+    if (!int_is_zero(&result.num))
+        int_negate(&result.num);
     return result;
 }
 
@@ -400,7 +409,7 @@ bool fract_scientific_abs(Fraction const* f, umm count_decimals,
         int_abs(mantissa);
 
         // The number is exact if there is no remainder and the rounding bit is 0.
-        exact = int_is_zero(&mod) && !int_test_bit(&mod, 0);
+        exact = int_is_zero(&mod) && !int_test_bit(mantissa, 0);
 
         // Round the mantissa.
         Integer one = {};
