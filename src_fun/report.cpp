@@ -264,8 +264,13 @@ Report& Report::internal_suggestion_insert(String left, Token_Info info, String 
 Report& Report::internal_suggestion_replace(Token_Info info, Token_Info replace_with, bool skinny, umm before, umm after)
 {
     String replacement = string_from_token_info(ctx, replace_with);
+    return internal_suggestion_replace(info, replacement, skinny, before, after);
+}
+
+Report& Report::internal_suggestion_replace(Token_Info info, String replace_with, bool skinny, umm before, umm after)
+{
     if (colored)
-        replacement = apply_ansi_escape_sequence(temp, replacement, ANSI_HIGHLIGHT_GREEN);
+        replace_with = apply_ansi_escape_sequence(temp, replace_with, ANSI_HIGHLIGHT_GREEN);
 
     if (skinny) before = after = 0;
     String source;
@@ -274,7 +279,7 @@ Report& Report::internal_suggestion_replace(Token_Info info, Token_Info replace_
 
     String code_before, code_inside, code_after;
     split_source_around_token_info(&info, source_offset, source, &code_before, &code_inside, &code_after);
-    source = concatenate(temp, code_before, replacement, code_after);
+    source = concatenate(temp, code_before, replace_with, code_after);
 
     String file = skinny ? get_file_name(ctx->sources[info.source_index].name) : ""_s;
     FormatAdd(&cat, "%~%", skinny ? ""_s : "\n"_s, format_line_numbers(colored, source, source_line, file));

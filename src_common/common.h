@@ -4271,7 +4271,7 @@ void terminate_current_process(u32 exit_code = 0);
 String get_executable_path();
 String get_executable_name();
 String get_executable_directory();
-
+String get_current_working_directory();
 
 struct Process
 {

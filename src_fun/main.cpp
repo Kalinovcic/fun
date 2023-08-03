@@ -9,6 +9,7 @@
 EnterApplicationNamespace
 
 
+
 extern "C" int main(int argc, char** argv)
 {
     /*add_log_handler([](String severity, String subsystem, String msg)
@@ -40,7 +41,7 @@ extern "C" int main(int argc, char** argv)
             printf("%.*s\n", StringArgs(msg));
         });
 
-        String directory = "test"_s;
+        String directory = concatenate_path(temp, get_current_working_directory(), "test"_s);
 
         Dynamic_Array<String> tests_to_run_wildcards = {};
         Defer(free_heap_array(&tests_to_run_wildcards));
@@ -122,11 +123,12 @@ extern "C" int main(int argc, char** argv)
         String code = resolve_to_string_and_free(&code_cat, temp);
 
         Compiler compiler = {};
+        add_default_import_path_patterns(&compiler);
         Environment* env = make_environment(&compiler, NULL);
 
         assert(pump_pipeline(&compiler));  // force preload to complete
 
-        Block* main = parse_top_level_from_memory(&compiler, "<string>"_s, code);
+        Block* main = parse_top_level_from_memory(&compiler, get_current_working_directory(), "<string>"_s, code);
         if (!main) return 1;
 
         materialize_unit(env, main);
@@ -142,11 +144,25 @@ extern "C" int main(int argc, char** argv)
     }
 
     Compiler compiler = {};
+    add_default_import_path_patterns(&compiler);
     Environment* env = make_environment(&compiler, NULL);
 
     assert(pump_pipeline(&compiler));  // force preload to complete
 
-    Block* main = parse_top_level_from_file(&compiler, wrap_string(argv[1]));
+    String path_to_file = wrap_string(argv[1]);
+    if (is_path_relative(path_to_file))
+    {
+        String cwd = get_current_working_directory();
+        path_to_file = concatenate_path(temp, cwd, path_to_file);
+    }
+
+    if (!is_path_absolute(path_to_file))
+    {
+        fprintf(stderr, "Error: Can't resolve the path of '%s'\n", argv[1]);
+        return 1;
+    }
+
+    Block* main = parse_top_level_from_file(&compiler, path_to_file);
     if (!main) return 1;
 
     materialize_unit(env, main);

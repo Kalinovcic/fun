@@ -755,6 +755,8 @@ struct Compiler
     bool lexer_initialized;
     Region lexer_memory;
 
+    Dynamic_Array<String> import_path_patterns;
+
     Dynamic_Array<Source_Info,       false> sources;
     Dynamic_Array<Token_Info,        false> token_info_other;
     Dynamic_Array<Token_Info_Number, false> token_info_number;
@@ -773,6 +775,7 @@ struct Compiler
     Dynamic_Array<Environment*> environments;
 };
 
+void add_default_import_path_patterns(Compiler* ctx);
 
 Environment* make_environment(Compiler* ctx, Environment* puppeteer);
 
@@ -819,9 +822,10 @@ inline String get_identifier(Compiler* ctx, Token const* token)
 // Parser
 
 Block* parse_top_level(Compiler* ctx, String canonical_name, String imports_relative_to_path, Array<Token> tokens);
+// `path` must be an absolute path.
 Block* parse_top_level_from_file(Compiler* ctx, String path);
-// Your responsibility that code remains allocated as long as necessary!
-Block* parse_top_level_from_memory(Compiler* ctx, String name, String code);
+// Your responsibility that code (and all other strings that are passed as arguments) remains allocated as long as necessary!
+Block* parse_top_level_from_memory(Compiler* ctx, String imports_relative_to_directory, String name, String code);
 
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -955,6 +959,7 @@ struct Report
     inline Report& snippet(auto at, bool skinny = false, umm before = 2, umm after = 1) { return internal_snippet(convert(at), skinny, before, after); }
     inline Report& suggestion_insert(String left, auto at, String right, bool skinny = false, umm before = 2, umm after = 1) { return internal_suggestion_insert(left, convert(at), right, skinny, before, after); }
     inline Report& suggestion_replace(auto at, auto replace_with, bool skinny = false, umm before = 2, umm after = 1) { return internal_suggestion_replace(convert(at), convert(replace_with), skinny, before, after); }
+    inline Report& suggestion_replace(auto at, String replace_with, bool skinny = false, umm before = 2, umm after = 1) { return internal_suggestion_replace(convert(at), replace_with, skinny, before, after); }
     inline Report& suggestion_remove(auto at, bool skinny = false, umm before = 2, umm after = 1) { return internal_suggestion_remove(convert(at), skinny, before, after); }
     inline Report& part(auto at, String msg, Severity severity = SEVERITY_ERROR)
     {
@@ -974,6 +979,7 @@ private:
     Report& internal_snippet(Token_Info info, bool skinny, umm before, umm after);
     Report& internal_suggestion_insert(String left, Token_Info info, String right, bool skinny, umm before, umm after);
     Report& internal_suggestion_replace(Token_Info info, Token_Info replace_with, bool skinny, umm before, umm after);
+    Report& internal_suggestion_replace(Token_Info info, String replace_with, bool skinny, umm before, umm after);
     Report& internal_suggestion_remove(Token_Info info, bool skinny, umm before, umm after);
 
     inline Token_Info convert(Token_Info info)        const { return  info;                   }

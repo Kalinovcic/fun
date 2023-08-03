@@ -1162,6 +1162,27 @@ String get_executable_path()
     return make_string(path);
 }
 
+String get_current_working_directory()
+{
+    umm buffer_size = 1024;
+    while (buffer_size < Kilobyte(10))
+    {
+        LK_Region_Cursor cursor = {};
+        lk_region_cursor(temp, &cursor);
+
+        char* buffer = alloc<char>(temp, buffer_size);
+        if (getcwd(buffer, buffer_size))
+            return wrap_string(buffer);
+
+        if (errno != ERANGE) break; // report error immediately
+
+        lk_region_rewind(temp, &cursor);
+        buffer_size += 1024;
+    }
+
+    ReportLastErrno(subsystem_files, "While trying to get the current working directory.");
+    return {};
+}
 
 Array<String> command_line_arguments()
 {

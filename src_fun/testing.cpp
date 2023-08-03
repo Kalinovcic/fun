@@ -73,8 +73,8 @@ static Test_Case deserialize_test(String contents)
 
 static String qualified_test_name(Test_Case* test)
 {
-    String path_copy = test->path;
-    return Format(temp, "%/%", consume_until(&path_copy, ".test.fun"_s), test->id);
+    String filename = get_file_name(test->path);
+    return Format(temp, "%/%", consume_until(&filename, ".test.fun"_s), test->id);
 }
 
 bool parse_test_file(Testing_Context* context, String relative_path, Array<String>* tests_to_run_wildcards)
@@ -121,7 +121,7 @@ bool parse_test_file(Testing_Context* context, String relative_path, Array<Strin
         if (!consume_test_line()) continue;
 
         Test_Case test = {};
-        test.path = allocate_string(&context->memory, relative_path);
+        test.path = allocate_string(&context->memory, full_path);
         test.id   = allocate_string(&context->memory, line);
         test.rng_seed = U64_MAX;
         if (!test.id) Error("Expected the test's ID.");
@@ -247,14 +247,14 @@ bool run_code_of_test(Test_Case* test)
     String code = resolve_to_string_and_free(&code_cat, temp);
 
     Compiler compiler = {};
+    add_default_import_path_patterns(&compiler);
     Environment* env = make_environment(&compiler, NULL);
     assert(pump_pipeline(&compiler));  // force preload to complete
 
     // @Incomplete - add location information
-    // @Incomplete - better way to import system (not a random relative path)
 
-    Unit* assert_having_unit = materialize_unit(env, parse_top_level_from_memory(&compiler, "<test preload>"_s, R"XXX(
-        using System :: import "modules/system.fun";
+    String assert_program = R"XXX(
+        using System :: import "system";
 
         test_assert :: (condition: bool) {
             if !condition {
@@ -262,10 +262,18 @@ bool run_code_of_test(Test_Case* test)
                 raise(SIGKILL);
             }
         }
-    )XXX"_s));
+    )XXX"_s;
+
+    String imports_relative_to_directory = get_parent_directory_path(test->path);
+
+    Unit* assert_having_unit = materialize_unit(
+        env,
+        parse_top_level_from_memory(&compiler, imports_relative_to_directory, "<test preload>"_s, assert_program)
+    );
     assert(pump_pipeline(&compiler));  // force assert preload to complete
 
-    Block* main = parse_top_level_from_memory(&compiler, "<string>"_s, code);
+    String name = Format(temp, "<%>", qualified_test_name(test));
+    Block* main = parse_top_level_from_memory(&compiler, imports_relative_to_directory, name, code);
     if (!main) return false;
 
     main->flags &= ~BLOCK_IS_TOP_LEVEL; // assert block is top level

@@ -2624,13 +2624,16 @@ Environment* make_environment(Compiler* ctx, Environment* puppeteer)
 
     add_item(&ctx->environments, &env);
 
-    materialize_unit(env, parse_top_level_from_memory(ctx, "<preload>"_s, R"XXX(
-        `string`@ :: struct
-        {
-            length: umm;
-            base: &u8;
-        }
-    )XXX"_s));
+    String imports_relative_to_directory = "."_s; // not important, preload doesn't import
+    materialize_unit(env, parse_top_level_from_memory(
+        ctx, imports_relative_to_directory, "<preload>"_s,
+        R"XXX(
+            `string`@ :: struct
+            {
+                length: umm;
+                base: &u8;
+            }
+        )XXX"_s));
     return env;
 }
 

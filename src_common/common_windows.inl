@@ -1988,6 +1988,24 @@ String get_executable_path()
     return path;
 }
 
+String get_current_working_directory()
+{
+    DWORD required_buffer_size = GetCurrentDirectory(0, NULL);
+    if (!required_buffer_size)
+    {
+        ReportLastWin32("While getting the current working directory.");
+        return {};
+    }
+
+    String cwd = allocate_uninitialized_string(temp, required_buffer_size);
+    if (GetCurrentDirectory(!cwd.length, (LPTSTR) cwd.data))
+    {
+        ReportLastWin32("While getting the current working directory.");
+        return {};
+    }
+
+    return cwd;
+}
 
 
 static HANDLE the_job_object;
