@@ -161,6 +161,7 @@ inline bool is_identifier(Atom atom)
 
 struct Source_Info
 {
+    String path; // optional, for error reporting
     String name;
     String code;
     Array<u32> line_offsets;
@@ -789,7 +790,7 @@ bool pump_pipeline(Compiler* ctx);
 // As comments should be considered whitespace, they are not included in the resulting
 // tokens array, however we do keep track of their locations and return a
 // separate comments array.
-bool lex_from_memory(Compiler* ctx, String name, String code, Array<Token>* out_tokens, Array<Token>* out_comments);
+bool lex_from_memory(Compiler* ctx, String name, String code, Array<Token>* out_tokens, Array<Token>* out_comments, Source_Info** out_source_info = NULL);
 bool lex_file(Compiler* ctx, String path, Array<Token>* out_tokens, Array<Token>* out_comments);
 
 inline Token_Info* get_token_info(Compiler* ctx, Token const* token)
@@ -989,9 +990,19 @@ private:
     {
         Token_Info* from_info = get_token_info(ctx, &expr->from);
         Token_Info* to_info   = get_token_info(ctx, &expr->to);
+        return merge_from_to(from_info, to_info);
+    }
+    inline Token_Info convert(Block const* block) const
+    {
+        Token_Info* from_info = get_token_info(ctx, &block->from);
+        Token_Info* to_info   = get_token_info(ctx, &block->to);
+        return merge_from_to(from_info, to_info);
+    }
 
-        Token_Info result = *from_info;
-        u32 length = to_info->offset + to_info->length - from_info->offset;
+    inline Token_Info merge_from_to(Token_Info const* from, Token_Info const* to) const
+    {
+        Token_Info result = *from;
+        u32 length = to->offset + to->length - from->offset;
         if (length > U16_MAX) length = U16_MAX;
         result.length = length;
         return result;

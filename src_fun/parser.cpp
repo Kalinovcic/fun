@@ -697,9 +697,13 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
         {
             bool is_using;
             if (false) parse_using:
+            {
                 is_using = true;
+            }
             else
+            {
                 is_using = false;
+            }
 
             Token* name = start + (is_using ? 1 : 0);
 
@@ -736,7 +740,7 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
                 flags |=  EXPRESSION_DECLARATION_IS_ALIAS;
 
                 if (maybe_take_atom(stream, ATOM_UNDERSCORE))
-                    return ReportError(stream->ctx, stream->cursor - 1, "Can't have an uninitialized alias declaration."_s);
+                    return ReportError(stream->ctx, stream->cursor - 1, "Export declarations can only appear at the top level."_s);
 
                 if (!parse_expression(stream, builder, &value, InheritFlags(PARSE_ALLOW_BLOCKS | PARSE_ALLOW_INFERRED_TYPE_ALIAS)))
                     return false;

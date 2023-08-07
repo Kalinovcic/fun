@@ -1,8 +1,8 @@
 #!/home/kalinovcic/schedulebot/run_tree/fun
 
-using Self     :: import "c_backend.fun";
-using System   :: import "system.fun";
-using Compiler :: import "compiler.fun";
+using Self     :: import "c_backend";
+using System   :: import "system";
+using Compiler :: import "compiler";
 
 run unit {
     mem: Region;

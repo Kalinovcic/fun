@@ -4,8 +4,8 @@
 
 run unit {
     // This sucks, these files need to go to a sensible place.
-    using System   :: import "modules/system.fun";
-    using Compiler :: import "modules/compiler.fun";
+    using System   :: import "system";
+    using Compiler :: import "compiler";
 
     puts(FD_STDOUT, "ello m8\n");
 
@@ -332,9 +332,9 @@ run unit {
 
 //# c_backend
 
-using Self     :: import "modules/c_backend.fun";
-using System   :: import "modules/system.fun";
-using Compiler :: import "modules/compiler.fun";
+using Self     :: import "c_backend";
+using System   :: import "system";
+using Compiler :: import "compiler";
 
 run unit {
     mem: Region;

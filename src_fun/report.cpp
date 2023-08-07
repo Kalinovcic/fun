@@ -179,10 +179,14 @@ Report& Report::internal_intro(Severity severity, Token_Info info)
     String lowlight = colored ? "\x1b[30;1m"_s : ""_s;
     String reset    = colored ? "\x1b[m"_s     : ""_s;
 
+    String path = ctx->sources[info.source_index].path;
+    if (path) path = get_parent_directory_path(path);
+
     String file;
     u32 line, column;
     get_line(ctx, &info, &line, &column, &file);
-    FormatAdd(&cat, "\n% % %(%:%)%\n", get_severity_label(colored, severity), file, lowlight, line, column, reset);
+
+    FormatAdd(&cat, "\n% % %(%:%) %~%\n", get_severity_label(colored, severity), file, lowlight, line, column, path, reset);
     return *this;
 }
 
@@ -197,10 +201,13 @@ Report& Report::internal_continuation(Token_Info info, bool skinny)
     String lowlight = colored ? "\x1b[30;1m"_s : ""_s;
     String reset    = colored ? "\x1b[m"_s     : ""_s;
 
+    String path = ctx->sources[info.source_index].path;
+    if (path) path = get_parent_directory_path(path);
+
     String file;
     u32 line, column;
     get_line(ctx, &info, &line, &column, &file);
-    FormatAdd(&cat, "%~%~% %(%:%)%\n", skinny ? ""_s : "\n"_s, indentation, file, lowlight, line, column, reset);
+    FormatAdd(&cat, "%~%~% %(%:%) %~%\n", skinny ? ""_s : "\n"_s, indentation, file, lowlight, line, column, path, reset);
     return *this;
 }
 
