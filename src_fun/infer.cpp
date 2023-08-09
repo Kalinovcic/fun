@@ -189,7 +189,6 @@ static Find_Result find_declaration_internal(
         Dynamic_Array<Block*>* visited_scopes)
 {
     Find_Result status = FIND_FAILURE;
-
     while (scope)
     {
         For (*visited_scopes)
@@ -201,7 +200,6 @@ static Find_Result find_declaration_internal(
         for (Expression id = {}; id < scope->parsed_expressions.count; id = (Expression)(id + 1))
         {
             auto* expr = &scope->parsed_expressions[id];
-
             // if the name is deleted, forget it
             if (expr->kind == EXPRESSION_DELETE &&
                 (expr->visibility_limit <= visibility_limit || visibility_limit == NO_VISIBILITY) &&
@@ -308,9 +306,8 @@ static Find_Result find_declaration_internal(
         // 3: try to recurse to parent scope
         if (!allow_parent_traversal)
             break;
-
-        visibility_limit  = scope->parent_scope_visibility_limit;
-        scope             = scope->parent_scope;
+        visibility_limit = scope->parent_scope_visibility_limit;
+        scope            = scope->parent_scope;
     }
     return FIND_FAILURE;
 }

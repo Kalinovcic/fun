@@ -1164,20 +1164,38 @@ String get_executable_path()
 
 String get_current_working_directory()
 {
-    umm buffer_size = 1024;
-    while (buffer_size < Kilobyte(10))
+    auto check_path = [](char* buffer)
     {
-        LK_Region_Cursor cursor = {};
-        lk_region_cursor(temp, &cursor);
+        if (errno)
+            ReportLastErrno(subsystem_files, "While trying to get the current working directory.");
 
-        char* buffer = alloc<char>(temp, buffer_size);
-        if (getcwd(buffer, buffer_size))
-            return wrap_string(buffer);
+        String wrapped = wrap_string(buffer);
+        if (prefix_equals(wrapped, "(unreachable)"_s))
+        {
+            consume(&wrapped, "(unreachable)"_s.length);
+            LogError(subsystem_files,
+                "The current working directory is unreachable."
+                "The path '%' it is not below the root directory of the current process", wrapped);
+        }
+        return allocate_string(temp, wrapped);
+    };
 
-        if (errno != ERANGE) break; // report error immediately
+    char buffer[PATH_MAX] = {};
+    if (getcwd(buffer, PATH_MAX))
+        return check_path(buffer);
 
-        lk_region_rewind(temp, &cursor);
-        buffer_size += 1024;
+    if (errno != ERANGE)
+    {
+        ReportLastErrno(subsystem_files, "While trying to get the current working directory.");
+        return {};
+    }
+
+    char* heap_buffer = getcwd(NULL, 0);
+    if (heap_buffer)
+    {
+        String result = check_path(heap_buffer);
+        free(heap_buffer);
+        return result;
     }
 
     ReportLastErrno(subsystem_files, "While trying to get the current working directory.");

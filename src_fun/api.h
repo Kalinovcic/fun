@@ -756,7 +756,7 @@ struct Compiler
     bool lexer_initialized;
     Region lexer_memory;
 
-    Dynamic_Array<String> import_path_patterns;
+    Array<String> import_path_patterns;
 
     Dynamic_Array<Source_Info,       false> sources;
     Dynamic_Array<Token_Info,        false> token_info_other;
