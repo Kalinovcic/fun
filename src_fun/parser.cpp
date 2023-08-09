@@ -28,6 +28,55 @@ struct Token_Stream
     Token* comment_end;
 };
 
+static String resolve_import_path(Token_Stream* stream, String path, Dynamic_Array<String>* out_looked_in_before_resolving = NULL, bool* out_is_path = NULL)
+{
+    if (out_looked_in_before_resolving)
+        *out_looked_in_before_resolving = {};
+
+    if (out_is_path) *out_is_path = true;
+
+    if (prefix_equals(path, "/"_s)) // absolute path
+        return check_if_file_exists(path) ? path : ""_s;
+
+    if (prefix_equals(path, "./"_s)) // relative path
+    {
+        consume(&path, 2);
+        String abs_path = concatenate_path(temp, stream->imports_relative_to_path, path);
+        return check_if_file_exists(abs_path) ? abs_path : ""_s;
+    }
+
+    if (out_is_path) *out_is_path = false;
+
+    // Module path. Resolved using module import patterns.
+    For (stream->ctx->import_path_patterns)
+    {
+        String pattern = *it;
+
+        String resolved_path = {};
+        while (pattern)
+        {
+            umm remaining = pattern.length;
+            String copy = consume_until_preserve_whitespace(&pattern, '%');
+
+            bool double_percent = (pattern && pattern[0] == '%');
+            if (double_percent) copy.length++;
+
+            append(&resolved_path, temp, copy);
+            if (!double_percent && copy.length < remaining)
+                append(&resolved_path, temp, path);
+        }
+
+        if (check_if_file_exists(resolved_path))
+            return resolved_path;
+
+        if (out_looked_in_before_resolving)
+            add_item(out_looked_in_before_resolving, &resolved_path);
+    }
+
+    return {};
+}
+
+
 static void set_nonempty_token_stream(Token_Stream* stream, Compiler* ctx, Array<Token> tokens)
 {
     assert(tokens.count > 0);
@@ -538,8 +587,73 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
                 return false;
 
             Token_Info_String* info = (Token_Info_String*) get_token_info(stream->ctx, name);
+            if (!info->value)
+                return ReportError(stream->ctx, name, "Expected a non-empty string literal as the import path."_s);
+
             // @Reconsider - check if path seems malicious
-            String path = concatenate_path(temp, stream->imports_relative_to_path, info->value);
+
+            Dynamic_Array<String> paths_looked_in = {};
+            Defer(free_heap_array(&paths_looked_in));
+            bool is_path = false;
+            String path = resolve_import_path(stream, info->value, &paths_looked_in, &is_path);
+
+            if (!path)
+            {
+                bool reported_ws_error = false;
+                bool probably_is_path  = false;
+                bool sussy_whitespace  = false;
+                {
+                    String trimmed_paths[] = { trim_front(info->value), trim_back(info->value), trim(info->value) };
+                    String trim_types[]    = { "leading"_s,             "trailing"_s,           "sorrounding"_s   };
+
+                    for (umm i = 0; i < ArrayCount(trimmed_paths); i++)
+                    {
+                        if (trimmed_paths[i] == info->value) continue;
+                        sussy_whitespace = true;
+
+                        String resolved = resolve_import_path(stream, trimmed_paths[i], NULL, &probably_is_path);
+                        if (resolved)
+                        {
+                            reported_ws_error = true;
+                            Report(stream->ctx)
+                                .intro(SEVERITY_WARNING, name)
+                                .message(Format(temp, "Can't resolve the module import path, "
+                                                      "but the path resolves without % whitespace.\n"
+                                                      "Try removing the % whitespace.", trim_types[i], trim_types[i]))
+                                .suggestion_replace(name, trimmed_paths[i])
+                                .done();
+                            break;
+                        }
+                    }
+                }
+
+                String_Concatenator cat = {};
+                For (paths_looked_in)
+                    FormatAdd(&cat, "  '%'\n", *it);
+                String path_list = resolve_to_string_and_free(&cat, temp);
+
+                Report report = Report(stream->ctx);
+                report.intro(SEVERITY_ERROR, name)
+                      .message("Can't resolve the module import path."_s);
+
+                if (!reported_ws_error && sussy_whitespace)
+                    report.message("Did you mean to put the leading and/or trailing whitespace?"_s);
+
+                report.snippet(name)
+                      .continuation()
+                      .message(Format(temp, "Looked for:\n%", path_list));
+
+                if (!reported_ws_error && !is_path && !probably_is_path)
+                {
+                    // @Incomplete - give spell checking suggestions here
+                    String replacement = Format(temp, "\"./%\"", info->value);
+                    report.message("Double check if the name matches a standard module name,\n"
+                                   "or specify the module as a path to the file:"_s);
+                    report.suggestion_replace(name, replacement);
+                }
+
+                return report.done();
+            }
 
             block = parse_top_level_from_file(stream->ctx, path);
         }
@@ -620,10 +734,8 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
         if (maybe_take_atom(stream, ATOM_COLON))
         {
             bool is_using;
-            if (false) parse_using:
-                is_using = true;
-            else
-                is_using = false;
+            if (false) { parse_using: is_using = true;  }
+            else       {              is_using = false; }
 
             Token* name = start + (is_using ? 1 : 0);
 
@@ -660,7 +772,7 @@ static bool parse_expression_leaf(Token_Stream* stream, Block_Builder* builder, 
                 flags |=  EXPRESSION_DECLARATION_IS_ALIAS;
 
                 if (maybe_take_atom(stream, ATOM_UNDERSCORE))
-                    return ReportError(stream->ctx, stream->cursor - 1, "Can't have an uninitialized alias declaration."_s);
+                    return ReportError(stream->ctx, stream->cursor - 1, "Export declarations can only appear at the top level."_s);
 
                 if (!parse_expression(stream, builder, &value, InheritFlags(PARSE_ALLOW_BLOCKS | PARSE_ALLOW_INFERRED_TYPE_ALIAS)))
                     return false;
@@ -1204,18 +1316,28 @@ Block* parse_top_level_from_file(Compiler* ctx, String path)
     if (!ok)
         return NULL;
 
-    // @Incomplete - normalize path and all that stuff
     String import_path = get_parent_directory_path(path);
     return parse_top_level(ctx, path, import_path, tokens, comments);
 }
 
-Block* parse_top_level_from_memory(Compiler* ctx, String name, String code)
+Block* parse_top_level_from_memory(Compiler* ctx, String imports_relative_to_directory, String name, String code)
 {
     Array<Token> tokens = {};
     Array<Token> comments = {};
     bool ok = lex_from_memory(ctx, name, code, &tokens, &comments);
     if (!ok) return NULL;
-    return parse_top_level(ctx, {}, "."_s, tokens, comments);
+    return parse_top_level(ctx, {}, imports_relative_to_directory, tokens, comments);
+}
+
+
+void add_default_import_path_patterns(Compiler* ctx)
+{
+    String exe = get_executable_directory();
+    String patterns[] = {
+        concatenate_path(temp, exe, "../modules/%.fun"_s),
+        concatenate_path(temp, exe, "../modules/%/module.fun"_s),
+    };
+    ctx->import_path_patterns = allocate_array<String>(NULL, patterns);
 }
 
 

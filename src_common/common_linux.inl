@@ -1162,6 +1162,45 @@ String get_executable_path()
     return make_string(path);
 }
 
+String get_current_working_directory()
+{
+    auto check_path = [](char* buffer)
+    {
+        if (errno)
+            ReportLastErrno(subsystem_files, "While trying to get the current working directory.");
+
+        String wrapped = wrap_string(buffer);
+        if (prefix_equals(wrapped, "(unreachable)"_s))
+        {
+            consume(&wrapped, "(unreachable)"_s.length);
+            LogError(subsystem_files,
+                "The current working directory is unreachable."
+                "The path '%' it is not below the root directory of the current process", wrapped);
+        }
+        return allocate_string(temp, wrapped);
+    };
+
+    char buffer[PATH_MAX] = {};
+    if (getcwd(buffer, PATH_MAX))
+        return check_path(buffer);
+
+    if (errno != ERANGE)
+    {
+        ReportLastErrno(subsystem_files, "While trying to get the current working directory.");
+        return {};
+    }
+
+    char* heap_buffer = getcwd(NULL, 0);
+    if (heap_buffer)
+    {
+        String result = check_path(heap_buffer);
+        free(heap_buffer);
+        return result;
+    }
+
+    ReportLastErrno(subsystem_files, "While trying to get the current working directory.");
+    return {};
+}
 
 Array<String> command_line_arguments()
 {

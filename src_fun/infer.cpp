@@ -282,7 +282,7 @@ static Find_Result find_declaration_internal(
                 Find_Result result = find_declaration_internal(env, name, data->unit->entry_block, using_visibility,
                                                                out_decl_scope, out_decl_expr, out_use_chain,
                                                                /* allow_parent_traversal */ false,
-                                                               /* allow_alias_using_traversal */ false,
+                                                               /* allow_alias_using_traversal */ true, // @Reconsider when implementing private
                                                                visited_scopes);
                 if (result == FIND_FAILURE) continue;
                 if (result == FIND_DELETED) continue;
@@ -349,7 +349,8 @@ static umm edit_distance(String a, String b)
     return prev[b.length];
 }
 
-static void helpful_error_for_missing_name(Compiler* ctx, String base_error, Token const* name,
+static void helpful_error_for_missing_name(Compiler* ctx, String base_error,
+                                           Token const* name, Type lhs_type,
                                            Block* scope, Visibility visibility_limit,
                                            bool allow_parent_traversal)
 {
@@ -370,9 +371,18 @@ static void helpful_error_for_missing_name(Compiler* ctx, String base_error, Tok
             {
                 String hint = "Maybe you are referring to this, but you don't have visibility because of imperative order."_s;
                 if (visibility_limit == NO_VISIBILITY)
+                {
                     hint = "Maybe you are referring to this, but you don't have visibility because it's in an outer scope."_s;
+                    if (lhs_type == TYPE_SOFT_TYPE)
+                    {
+                        assert(!(expr->flags & EXPRESSION_DECLARATION_IS_ALIAS));
+                        hint = "Maybe you are referring to this, but you can only refer to type members which are aliases,\n"
+                               "while this declares a runtime variable."_s;
+                    }
+                }
+
                 Report(ctx).part(name, base_error)
-                           .part(name, Format(temp, "Can't find name '%'.", identifier)).part(decl_name, hint)
+                           .part(decl_name, hint)
                            .done();
                 return;
             }
@@ -1234,12 +1244,13 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
             if (result == FIND_FAILURE)
             {
                 String error = Format(temp, "Can't find '%'.", get_identifier(ctx, name));
-                helpful_error_for_missing_name(ctx, error, &expr->declaration.name,
+                helpful_error_for_missing_name(ctx, error, &expr->declaration.name, INVALID_TYPE,
                                                block, expr->visibility_limit, /* allow_parent_traversal */ true);
                 return YIELD_ERROR;
             }
             assert(result == FIND_SUCCESS);
             assert(!(unit->flags & UNIT_IS_PLACED));
+
             set(&block->resolved_names, &id, &resolved);
         }
 
@@ -1271,6 +1282,7 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
             if (!constant_type) WaitOperand(expr->member.lhs);
             user_type = *constant_type;
         }
+
         if (is_pointer_type(user_type))
             user_type = get_element_type(user_type);
         if (!is_user_defined_type(user_type))
@@ -1289,14 +1301,16 @@ static Yield_Result infer_expression(Pipeline_Task* task, Expression id)
                 Wait(WAITING_ON_USING_TYPE, resolved.declaration, resolved.scope);
             if (result == FIND_FAILURE)
             {
+                String compile_time = (lhs_type == TYPE_SOFT_TYPE) ? "compile-time "_s : ""_s;
                 String identifier = get_identifier(ctx, &expr->member.name);
-                String error = Format(temp, "Can't find member '%' in %.", identifier, exact_type_description(unit, user_type));
-                helpful_error_for_missing_name(ctx, error, &expr->member.name,
+                String error = Format(temp, "Can't find %member '%' in %.", compile_time, identifier, exact_type_description(unit, user_type));
+                helpful_error_for_missing_name(ctx, error, &expr->member.name, lhs_type,
                                                member_block, member_visibility, /* allow_parent_traversal */ false);
                 return YIELD_ERROR;
             }
             assert(result == FIND_SUCCESS);
             assert(!(unit->flags & UNIT_IS_PLACED));
+
             set(&block->resolved_names, &id, &resolved);
         }
 
@@ -2624,13 +2638,16 @@ Environment* make_environment(Compiler* ctx, Environment* puppeteer)
 
     add_item(&ctx->environments, &env);
 
-    materialize_unit(env, parse_top_level_from_memory(ctx, "<preload>"_s, R"XXX(
-        `string`@ :: struct
-        {
-            length: umm;
-            base: &u8;
-        }
-    )XXX"_s));
+    String imports_relative_to_directory = "."_s; // not important, preload doesn't import
+    materialize_unit(env, parse_top_level_from_memory(
+        ctx, imports_relative_to_directory, "<preload>"_s,
+        R"XXX(
+            `string`@ :: struct
+            {
+                length: umm;
+                base: &u8;
+            }
+        )XXX"_s));
     return env;
 }
 

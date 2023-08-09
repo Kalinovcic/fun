@@ -161,6 +161,7 @@ inline bool is_identifier(Atom atom)
 
 struct Source_Info
 {
+    String path; // optional, for error reporting
     String name;
     String code;
     Array<u32> line_offsets;
@@ -755,6 +756,8 @@ struct Compiler
     bool lexer_initialized;
     Region lexer_memory;
 
+    Array<String> import_path_patterns;
+
     Dynamic_Array<Source_Info,       false> sources;
     Dynamic_Array<Token_Info,        false> token_info_other;
     Dynamic_Array<Token_Info_Number, false> token_info_number;
@@ -773,6 +776,7 @@ struct Compiler
     Dynamic_Array<Environment*> environments;
 };
 
+void add_default_import_path_patterns(Compiler* ctx);
 
 Environment* make_environment(Compiler* ctx, Environment* puppeteer);
 
@@ -786,7 +790,7 @@ bool pump_pipeline(Compiler* ctx);
 // As comments should be considered whitespace, they are not included in the resulting
 // tokens array, however we do keep track of their locations and return a
 // separate comments array.
-bool lex_from_memory(Compiler* ctx, String name, String code, Array<Token>* out_tokens, Array<Token>* out_comments);
+bool lex_from_memory(Compiler* ctx, String name, String code, Array<Token>* out_tokens, Array<Token>* out_comments, Source_Info** out_source_info = NULL);
 bool lex_file(Compiler* ctx, String path, Array<Token>* out_tokens, Array<Token>* out_comments);
 
 inline Token_Info* get_token_info(Compiler* ctx, Token const* token)
@@ -819,9 +823,10 @@ inline String get_identifier(Compiler* ctx, Token const* token)
 // Parser
 
 Block* parse_top_level(Compiler* ctx, String canonical_name, String imports_relative_to_path, Array<Token> tokens);
+// `path` must be an absolute path.
 Block* parse_top_level_from_file(Compiler* ctx, String path);
-// Your responsibility that code remains allocated as long as necessary!
-Block* parse_top_level_from_memory(Compiler* ctx, String name, String code);
+// Your responsibility that code (and all other strings that are passed as arguments) remains allocated as long as necessary!
+Block* parse_top_level_from_memory(Compiler* ctx, String imports_relative_to_directory, String name, String code);
 
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -955,6 +960,7 @@ struct Report
     inline Report& snippet(auto at, bool skinny = false, umm before = 2, umm after = 1) { return internal_snippet(convert(at), skinny, before, after); }
     inline Report& suggestion_insert(String left, auto at, String right, bool skinny = false, umm before = 2, umm after = 1) { return internal_suggestion_insert(left, convert(at), right, skinny, before, after); }
     inline Report& suggestion_replace(auto at, auto replace_with, bool skinny = false, umm before = 2, umm after = 1) { return internal_suggestion_replace(convert(at), convert(replace_with), skinny, before, after); }
+    inline Report& suggestion_replace(auto at, String replace_with, bool skinny = false, umm before = 2, umm after = 1) { return internal_suggestion_replace(convert(at), replace_with, skinny, before, after); }
     inline Report& suggestion_remove(auto at, bool skinny = false, umm before = 2, umm after = 1) { return internal_suggestion_remove(convert(at), skinny, before, after); }
     inline Report& part(auto at, String msg, Severity severity = SEVERITY_ERROR)
     {
@@ -974,6 +980,7 @@ private:
     Report& internal_snippet(Token_Info info, bool skinny, umm before, umm after);
     Report& internal_suggestion_insert(String left, Token_Info info, String right, bool skinny, umm before, umm after);
     Report& internal_suggestion_replace(Token_Info info, Token_Info replace_with, bool skinny, umm before, umm after);
+    Report& internal_suggestion_replace(Token_Info info, String replace_with, bool skinny, umm before, umm after);
     Report& internal_suggestion_remove(Token_Info info, bool skinny, umm before, umm after);
 
     inline Token_Info convert(Token_Info info)        const { return  info;                   }
@@ -983,9 +990,19 @@ private:
     {
         Token_Info* from_info = get_token_info(ctx, &expr->from);
         Token_Info* to_info   = get_token_info(ctx, &expr->to);
+        return merge_from_to(from_info, to_info);
+    }
+    inline Token_Info convert(Block const* block) const
+    {
+        Token_Info* from_info = get_token_info(ctx, &block->from);
+        Token_Info* to_info   = get_token_info(ctx, &block->to);
+        return merge_from_to(from_info, to_info);
+    }
 
-        Token_Info result = *from_info;
-        u32 length = to_info->offset + to_info->length - from_info->offset;
+    inline Token_Info merge_from_to(Token_Info const* from, Token_Info const* to) const
+    {
+        Token_Info result = *from;
+        u32 length = to->offset + to->length - from->offset;
         if (length > U16_MAX) length = U16_MAX;
         result.length = length;
         return result;

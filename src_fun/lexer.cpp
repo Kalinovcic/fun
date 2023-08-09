@@ -76,7 +76,7 @@ static void lex_init(Compiler* ctx)
 #undef AddKeyword
 }
 
-bool lex_from_memory(Compiler* ctx, String name, String code, Array<Token>* out_tokens, Array<Token>* out_comments)
+bool lex_from_memory(Compiler* ctx, String name, String code, Array<Token>* out_tokens, Array<Token>* out_comments, Source_Info** out_source_info)
 {
     lex_init(ctx);
 
@@ -127,6 +127,9 @@ bool lex_from_memory(Compiler* ctx, String name, String code, Array<Token>* out_
     Source_Info* source = reserve_item(&ctx->sources);
     source->name = allocate_string(&ctx->lexer_memory, name);
     source->code = code;
+
+    if (out_source_info)
+        *out_source_info = source;
 
     Concatenator<u32> line_offsets = {};
     ensure_space(&line_offsets, 4096);
@@ -723,7 +726,12 @@ bool lex_file(Compiler* ctx, String path, Array<Token>* out_tokens, Array<Token>
         return false;
     }
 
-    return lex_from_memory(ctx, get_file_name(path), code, out_tokens, out_comments);
+    Source_Info* source;
+    if (!lex_from_memory(ctx, get_file_name(path), code, out_tokens, out_comments, &source))
+        return false;
+
+    source->path = path;
+    return true;
 }
 
 
